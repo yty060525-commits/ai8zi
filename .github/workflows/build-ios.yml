@@ -67,7 +67,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mingli-ios-simulator
-          path: ios-artifacts/
+          path: client/ios-artifacts/
 
       - name: 构建真机 ipa(需 Secrets 证书)
         if: env.APPLE_CERT_B64 != ''
@@ -90,4 +90,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mingli-ios-device
-          path: ios-artifacts-device/
+          path: client/ios-artifacts-device/
