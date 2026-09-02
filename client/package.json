@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "test": "vitest",
     "tauri:dev": "tauri dev",
+    "tauri": "tauri",
     "tauri:build": "tauri build"
   },
   "dependencies": {
