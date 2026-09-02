@@ -44,7 +44,7 @@ jobs:
         run: |
           set -e
           mkdir -p ios-artifacts
-          APP=$(find client/src-tauri/gen/apple/build -name "*.app" | head -1)
+          APP=$(find src-tauri/gen/apple/build -name "*.app" | head -1)
           echo "app=$APP"
           if [ -n "$APP" ]; then
             cp -R "$APP" ios-artifacts/mingli.app
