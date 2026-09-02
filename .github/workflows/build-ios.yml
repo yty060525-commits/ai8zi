@@ -36,7 +36,7 @@ jobs:
         run: npx tauri ios init || echo "already initialized"
 
       - name: 构建模拟器 App(未签名,无证书)
-        run: npx tauri ios build --target aarch64-apple-ios-sim --no-sign
+        run: npx tauri ios build --target aarch64-sim --no-sign
         continue-on-error: false
 
       - name: 收拢产物并截图(自动验证“可启动”)
