@@ -12,19 +12,31 @@ export interface AiProviderStatus {
 const defaultStatus = (): AiProviderStatus => ({ selectedProvider: 'deepseek', deepseek: 'not_configured', kimi: 'not_configured' });
 let memoryStatus = defaultStatus();
 
+const inTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+const credKey = (provider: AiProvider) => 'mingli.cred.' + provider;
+const isProdBrowser = () => !inTauri() && import.meta.env.MODE !== 'test';
+export function getBrowserCredential(provider: AiProvider): string | undefined {
+  try { return localStorage.getItem(credKey(provider)) ?? undefined; } catch { return undefined; }
+}
 export async function saveAiCredential(provider: AiProvider, secret: string): Promise<CredentialStatus> {
+  if (isProdBrowser()) { localStorage.setItem(credKey(provider), secret); return 'configured'; }
   return invoke<CredentialStatus>('save_ai_credential', { provider, secret });
 }
 
 export async function clearAiCredential(provider: AiProvider): Promise<CredentialStatus> {
+  if (isProdBrowser()) { localStorage.removeItem(credKey(provider)); return 'not_configured'; }
   return invoke<CredentialStatus>('clear_ai_credential', { provider });
 }
 
 export async function getAiProviderStatus(): Promise<AiProviderStatus> {
+  if (isProdBrowser()) {
+    return { selectedProvider: (localStorage.getItem('mingli.provider') as AiProvider) ?? 'deepseek', deepseek: getBrowserCredential('deepseek') ? 'configured' : 'not_configured', kimi: getBrowserCredential('kimi') ? 'configured' : 'not_configured' };
+  }
   return invoke<AiProviderStatus>('get_ai_provider_status');
 }
 
 export async function setAiProvider(provider: AiProvider): Promise<AiProvider> {
+  if (isProdBrowser()) { localStorage.setItem('mingli.provider', provider); return provider; }
   return invoke<AiProvider>('set_ai_provider', { provider });
 }
 

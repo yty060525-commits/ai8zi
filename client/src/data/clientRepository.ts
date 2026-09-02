@@ -4,6 +4,10 @@ import { invoke } from '@tauri-apps/api/core';
 let sessionPeople: Person[] = [];
 let sessionDetails: PersonDetailData[] = [];
 let baziRecords: BaziRecord[] = [];
+const CAN_PERSIST = typeof localStorage !== 'undefined' && typeof window !== 'undefined' && !('__TAURI_INTERNALS__' in window) && import.meta.env.MODE !== 'test';
+const LS_KEY = 'mingli.pwa.records';
+const persistLocal = () => { if (CAN_PERSIST) { try { localStorage.setItem(LS_KEY, JSON.stringify(baziRecords)); } catch { /* 满/隐私模式忽略 */ } } };
+const loadLocal = () => { if (CAN_PERSIST) { try { const raw = localStorage.getItem(LS_KEY); if (raw) { const list = JSON.parse(raw); if (Array.isArray(list)) baziRecords = list; } } catch { /* 忽略 */ } } };
 
 export const clientRepository: ClientRepository = {
   listPersons(): Person[] {
@@ -53,11 +57,12 @@ export const memoryBaziRepository: BaziRepositoryPort = {
     const index = baziRecords.findIndex((existing) => existing.id === saved.id);
     if (index >= 0) baziRecords[index] = structuredClone(saved);
     else baziRecords.push(structuredClone(saved));
+    persistLocal();
     return structuredClone(saved);
   },
   async listBaziRecords() { return structuredClone(baziRecords); },
   async getBaziRecord(id) { const found = baziRecords.find((record) => record.id === id); return found ? structuredClone(found) : undefined; },
-  async deleteBaziRecord(id) { baziRecords = baziRecords.filter((record) => record.id !== id); sessionDetails = sessionDetails.filter((detail) => detail.record.id !== id && detail.person.id !== id); sessionPeople = sessionPeople.filter((person) => person.id !== id); },
+  async deleteBaziRecord(id) { baziRecords = baziRecords.filter((record) => record.id !== id); sessionDetails = sessionDetails.filter((detail) => detail.record.id !== id && detail.person.id !== id); sessionPeople = sessionPeople.filter((person) => person.id !== id); persistLocal(); },
 };
 
 let baziRepository: BaziRepositoryPort = memoryBaziRepository;
@@ -117,3 +122,4 @@ const tauriBaziRepository: BaziRepositoryPort = {
 };
 
 if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) baziRepository = tauriBaziRepository;
+else loadLocal();

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { getServiceStatus, clearServiceCredential, saveServiceCredential, setSelectedService, type ServiceId } from '../../data/aiSettings';
 import { compactRecords, getStorageStats, runAiSelfTest, type AiSelfTest } from '../../data/storageInfo';
+import { listBaziRecords } from '../../data/clientRepository';
+import { exportRecordsSQLite } from '../../data/sqliteExport';
 
 type DisplayStatus = '已配置' | '未配置' | '保存中' | '保存失败';
 
@@ -18,6 +20,7 @@ export function SettingsPage() {
   const [compacting, setCompacting] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<AiSelfTest | null>(null);
+  const [exportNote, setExportNote] = useState<string>();
 
   useEffect(() => {
     let active = true;
@@ -41,6 +44,34 @@ export function SettingsPage() {
     setCompacting(true);
     try { await compactRecords(); await refreshStorage(); } catch { /* 保留原值 */ }
     finally { setCompacting(false); }
+  }
+  const downloadBlob = (blob: Blob, name: string) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = name;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+  async function exportSQLite() {
+    try {
+      const records = await listBaziRecords();
+      const bytes = await exportRecordsSQLite(records);
+      const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+      downloadBlob(new Blob([ab], { type: 'application/x-sqlite3' }), 'mingli-data-' + new Date().toISOString().slice(0, 10) + '.sqlite');
+      setExportNote('已导出真 SQLite(.sqlite)，共 ' + records.length + ' 条记录——可与桌面版 data\\bazi_records.sqlite3 同构打开。');
+    } catch (error) {
+      setExportNote('导出失败：' + (error instanceof Error ? error.message : String(error)));
+    }
+  }
+  async function exportJson() {
+    try {
+      const records = await listBaziRecords();
+      downloadBlob(new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), records }, null, 2)], { type: 'application/json' }), 'mingli-data-' + new Date().toISOString().slice(0, 10) + '.json');
+      setExportNote('已导出 JSON 备份，共 ' + records.length + ' 条记录。');
+    } catch (error) {
+      setExportNote('导出失败：' + (error instanceof Error ? error.message : String(error)));
+    }
   }
   async function selfTest() {
     setTesting(true); setTestResult(null);
@@ -79,7 +110,8 @@ export function SettingsPage() {
       <div className="button-group"><button className="primary-button" type="submit">保存</button><button className="text-button" type="button" onClick={() => void clear()}>清除</button></div>
     </form>
     <p className="ai-status" role="status">配置状态：{status}　·　数据库：{storage ? `${storage.records} 条记录 / 缓存 ${storage.cache} 条 / ${(storage.bytes / 1024).toFixed(0)} KB` : '读取中…'}</p>
-    <div className="button-group"><button className="text-button" type="button" disabled={compacting || !storage} onClick={() => void compress()}>{compacting ? '压缩中…' : '压缩旧记录（缩小数据库）'}</button><button className="text-button" type="button" disabled={testing} onClick={() => void selfTest()}>{testing ? '自检中…' : 'AI 连通自检（微小消耗）'}</button></div>
+    <div className="button-group"><button className="text-button" type="button" disabled={compacting || !storage} onClick={() => void compress()}>{compacting ? '压缩中…' : '压缩旧记录（缩小数据库）'}</button><button className="text-button" type="button" disabled={testing} onClick={() => void selfTest()}>{testing ? '自检中…' : 'AI 连通自检（微小消耗）'}</button><button className="text-button" type="button" onClick={() => void exportSQLite()}>导出数据库(.sqlite)</button><button className="text-button" type="button" onClick={() => void exportJson()}>导出JSON备份</button></div>
+    {exportNote && <p role="status">{exportNote}</p>}
     {testResult && <p role="status">{testResult.ok ? `自检通过：${testResult.provider} · ${testResult.model} · ${testResult.latencyMs ?? ''}ms · 回复“${testResult.reply ?? ''}”` : `自检失败：${testResult.message ?? '未知错误'}`}</p>}
     {testResult && <button className="text-button" type="button" onClick={() => setTestResult(null)}>关闭自检结果</button>}
   </main>;

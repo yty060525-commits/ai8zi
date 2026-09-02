@@ -16,7 +16,8 @@
     "@vitejs/plugin-react": "latest",
     "lunar-javascript": "^1.7.7",
     "react": "latest",
-    "react-dom": "latest"
+    "react-dom": "latest",
+    "sql.js": "^1.14.2"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0",
