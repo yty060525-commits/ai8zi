@@ -1,0 +1,17 @@
+# 依赖/构建
+node_modules/
+dist/
+client/dist/
+client/src-tauri/target/
+*.tsbuildinfo
+# 数据/缓存/日志(绝不外传)
+**/data/
+*.sqlite3
+*.db
+.playwright-cli/
+**/.playwright-cli/
+*.log
+.DS_Store
+Thumbs.db
+# 构建成品(CI 会重建)
+release/

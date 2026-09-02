@@ -1,0 +1,97 @@
+name: build-ios-ipad
+
+on:
+  workflow_dispatch: {}   # Actions 页面手动触发
+  push:
+    tags: [ 'ios-v*' ]
+
+jobs:
+  ios:
+    runs-on: macos-15          # 云端 Mac(相当于一台远程 iMac)——不用你自己有 Mac
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Rust (含 iOS 目标)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+
+      - name: npm ci
+        run: npm ci --no-audit --no-fund
+
+      - name: Frontend build
+        run: npm run build
+
+      - name: 生成 iOS 工程(只需一次，产物会提交或每次重建)
+        run: npx tauri ios init || echo "already initialized"
+
+      # ---- 模拟器包(无需开发者证书，可立即下载查看) ----
+      - name: 构建 iPad/iPhone 模拟器 App(未签名)
+        run: npx tauri ios build --target aarch64-apple-ios-sim --no-bundle
+        continue-on-error: true
+
+
+      - name: 装进模拟器并截图(自动验证“可启动”)
+        if: always()
+        continue-on-error: true
+        run: |
+          set -e
+          APP=$(find client/src-tauri/gen/apple/build -name "*.app" -path "*iphonesimulator*" | head -1)
+          echo "app=$APP"
+          if [ -z "$APP" ]; then echo "no simulator app"; exit 0; fi
+          DEVICE=$(xcrun simctl list devices available | grep -m1 "iPhone" | sed -E 's/.*\(([0-9A-F-]+)\).*/\1/')
+          if [ -z "$DEVICE" ]; then DEVICE=$(xcrun simctl create "CI-iPhone" "com.apple.CoreSimulator.SimDeviceType.iPhone-15" "com.apple.CoreSimulator.SimRuntime.iOS-17-5" 2>/dev/null); fi
+          xcrun simctl boot "$DEVICE" 2>/dev/null || true
+          xcrun simctl install "$DEVICE" "$APP"
+          xcrun simctl launch "$DEVICE" $(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Info.plist")
+          sleep 6
+          xcrun simctl io "$DEVICE" screenshot /tmp/mingli-ios.png
+          mkdir -p screenshots
+          cp /tmp/mingli-ios.png screenshots/mingli-ios.png
+      - name: 上传启动截图
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mingli-ios-screenshot
+          path: screenshots/mingli-ios.png
+
+      - name: 上传模拟器 App
+        uses: actions/upload-artifact@v4
+        with:
+          name: mingli-ios-simulator
+          path: |
+            client/src-tauri/gen/apple/build/*/Build/Products/*-iphonesimulator/*.app
+
+      # ---- 真机 .ipa(需要你的 Apple 证书，见 README/指南) ----
+      - name: 构建真机 ipa
+        if: env.APPLE_CERT_B64 != ''
+        env:
+          APPLE_CERT_B64: ${{ secrets.APPLE_CERT_B64 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -e
+          echo "$APPLE_CERT_B64" | base64 --decode > /tmp/cert.p12
+          security create-keychain -p temp build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p temp build.keychain
+          security import /tmp/cert.p12 -k build.keychain -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k temp build.keychain
+          npx tauri ios build --team-id "$APPLE_TEAM_ID"
+
+      - name: 上传真机 ipa
+        if: env.APPLE_CERT_B64 != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: mingli-ios-device
+          path: client/src-tauri/gen/apple/build/*/*.ipa

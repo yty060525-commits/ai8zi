@@ -1,0 +1,53 @@
+name: build-windows-exe
+
+on:
+  workflow_dispatch:        # 手动触发：Actions 页面点 Run workflow
+  push:
+    tags: [ 'v*' ]          # 或推送 v0.1.0 这类 tag 时自动构建
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain (MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: client/src-tauri
+
+      - name: Cache frontend
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: npm ci
+        run: npm ci --no-audit --no-fund
+
+      - name: Frontend build
+        run: npm run build
+
+      - name: Tauri build (NSIS + exe)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: --bundles nsis
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mingli-windows
+          path: |
+            client/src-tauri/target/release/mingli-client.exe
+            client/src-tauri/target/release/bundle/nsis/*-setup.exe

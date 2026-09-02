@@ -1,0 +1,40 @@
+[package]
+name = "mingli-client"
+version = "0.1.0"
+description = "命理客户端桌面窗口"
+authors = ["Mingli Client"]
+edition = "2021"
+rust-version = "1.77.2"
+build = "build.rs"
+
+[lib]
+name = "mingli_client_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# keyring 需要按操作系统启用对应的凭据后端，否则 Entry::new 运行时直接失败，
+# 表现为“设置保存密钥无效 / AI 分析永远未配置”。(AI 按钮失效的根因修复)
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["linux-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "time", "macros"] }
+[target.'cfg(target_os = "ios")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+# Android 端凭据建议改用应用内加密存储; keyring 官方暂无 android 后端(预留占位)
