@@ -29,7 +29,7 @@ export async function runAiSelfTest(): Promise<AiSelfTest> {
     return { ok: false, message: error instanceof Error ? error.message : String(error) };
   }
 }
-/** 清空并全量重算专用：删除该命盘(性别+四柱)的所有缓存条目，确保重新调 AI。 */
+/** 清除该命盘(性别+四柱)的所有命中缓存条目：删除后下一次 AI 分析会重新调用(只清除，不自动重算)。 */
 export async function clearChartCache(fields: { gender: string; yearPillar: string; monthPillar: string; dayPillar: string; hourPillar: string }): Promise<number> {
   if (!inTauri()) return 0;
   return invoke<number>('clear_chart_cache', { gender: fields.gender, yearPillar: fields.yearPillar, monthPillar: fields.monthPillar, dayPillar: fields.dayPillar, hourPillar: fields.hourPillar });

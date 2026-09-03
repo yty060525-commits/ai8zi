@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { getServiceStatus, clearServiceCredential, saveServiceCredential, setSelectedService, type ServiceId } from '../../data/aiSettings';
 import { compactRecords, getStorageStats, runAiSelfTest, type AiSelfTest } from '../../data/storageInfo';
-import { listBaziRecords } from '../../data/clientRepository';
+import { listBaziRecords, reloadLocalForSession } from '../../data/clientRepository';
 import { exportRecordsSQLite } from '../../data/sqliteExport';
+import { apiAuth, getServerSession, getServerUrl, setServerSession, setServerUrl, type ServerSession } from '../../data/serverClient';
 
 type DisplayStatus = '已配置' | '未配置' | '保存中' | '保存失败';
 
@@ -21,6 +22,12 @@ export function SettingsPage() {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<AiSelfTest | null>(null);
   const [exportNote, setExportNote] = useState<string>();
+  const [serverUrl, setUrl] = useState<string>(() => getServerUrl());
+  const [srvUser, setSrvUser] = useState('');
+  const [srvPw, setSrvPw] = useState('');
+  const [srvBusy, setSrvBusy] = useState(false);
+  const [srvMsg, setSrvMsg] = useState<string>();
+  const [session, setSession] = useState<ServerSession | null>(() => getServerSession());
 
   useEffect(() => {
     let active = true;
@@ -102,6 +109,45 @@ export function SettingsPage() {
     finally { setSecret(''); }
   }
 
+  function syncAfterLoginChange() {
+    setSession(getServerSession());
+    reloadLocalForSession();
+    setSrvPw('');
+  }
+  async function saveServerUrl() { setServerUrl(serverUrl); setSrvMsg('服务器地址已保存：此后数据与分析默认走服务器，连不上时自动退回本机离线。'); }
+  async function doLogin() {
+    if (!serverUrl || !srvUser || !srvPw) { setSrvMsg('请先填服务器地址与账号密码'); return; }
+    setSrvBusy(true); setSrvMsg(undefined);
+    try {
+      setServerUrl(serverUrl);
+      const data = await apiAuth.login(srvUser.trim(), srvPw);
+      setServerSession({ token: data.token, username: data.user.username, role: data.user.role });
+      syncAfterLoginChange();
+      setSrvMsg('登录成功：' + data.user.username + (data.user.role === 'admin' ? '（管理员，可看全部记录并管理 AI 密钥）' : '（只能看到自己的客户）') + '。本设备已记住，下次打开自动登录。');
+    } catch (error) { setSrvMsg('登录失败：' + (error instanceof Error ? error.message : String(error))); }
+    finally { setSrvBusy(false); }
+  }
+  async function doRegister() {
+    if (!serverUrl || !srvUser || !srvPw) { setSrvMsg('请先填服务器地址、新账号与密码'); return; }
+    setSrvBusy(true); setSrvMsg(undefined);
+    try {
+      setServerUrl(serverUrl);
+      const data = await apiAuth.register(srvUser.trim(), srvPw);
+      setServerSession({ token: data.token, username: data.user.username, role: data.user.role });
+      syncAfterLoginChange();
+      setSrvMsg('注册并登录成功：' + data.user.username + (data.user.role === 'admin' ? '（本机首个账号为管理员）' : ''));
+    } catch (error) { setSrvMsg('注册失败：' + (error instanceof Error ? error.message : String(error))); }
+    finally { setSrvBusy(false); }
+  }
+  async function doLogout() {
+    setSrvBusy(true);
+    try { await apiAuth.logout(); } catch { /* 忽略 */ }
+    setServerSession(null);
+    syncAfterLoginChange();
+    setSrvMsg('已退出登录。数据仍留在本机可离线查看；重新登录后会自动同步。');
+    setSrvBusy(false);
+  }
+
   return <main className="settings-page">
     <header className="page-heading"><p className="eyebrow">LOCAL SETTINGS</p><h1>设置</h1><p className="page-description">管理内部服务的访问配置。</p></header>
     <section aria-label="服务选择"><h2>当前服务</h2><div className="button-group">{services.map((service) => <button key={service.id} type="button" className={selected === service.id ? 'choice-button selected' : 'choice-button'} onClick={() => void selectService(service.id)} aria-pressed={selected === service.id}>{service.label}</button>)}</div></section>
@@ -114,5 +160,18 @@ export function SettingsPage() {
     {exportNote && <p role="status">{exportNote}</p>}
     {testResult && <p role="status">{testResult.ok ? `自检通过：${testResult.provider} · ${testResult.model} · ${testResult.latencyMs ?? ''}ms · 回复“${testResult.reply ?? ''}”` : `自检失败：${testResult.message ?? '未知错误'}`}</p>}
     {testResult && <button className="text-button" type="button" onClick={() => setTestResult(null)}>关闭自检结果</button>}
+    <section className="server-section" aria-label="服务器 API 服务"><h2>服务器通道（默认）</h2>
+      <p className="page-description">客户端可独立运行：连得上服务器时，数据与分析都走服务器通道；连不上时自动使用本机离线数据继续，联网后自动汇总同步。</p>
+      <div className="settings-form">
+        <label>服务器地址<input aria-label="服务器地址" value={serverUrl} onChange={(e) => setUrl(e.target.value)} placeholder="https://你的服务器:8787" /></label>
+        <div className="button-group"><button className="text-button" type="button" onClick={() => void saveServerUrl()}>保存服务器地址</button></div>
+        {!session && <><label>账号<input aria-label="服务器账号" value={srvUser} onChange={(e) => setSrvUser(e.target.value)} autoComplete="username" /></label>
+          <label>密码<input aria-label="服务器密码" type="password" value={srvPw} onChange={(e) => setSrvPw(e.target.value)} autoComplete="current-password" /></label>
+          <div className="button-group"><button className="primary-button" type="button" disabled={srvBusy} onClick={() => void doLogin()}>{srvBusy ? '处理中…' : '登录并记住此设备'}</button><button className="text-button" type="button" disabled={srvBusy} onClick={() => void doRegister()}>注册新账号</button></div></>}
+        {session && <p className="ai-status">已连接：{session.username}（{session.role === 'admin' ? '管理员' : '普通用户'}）· 本设备自动登录</p>}
+        {session && <div className="button-group"><button className="text-button" type="button" disabled={srvBusy} onClick={() => void doLogout()}>退出登录</button></div>}
+        {srvMsg && <p role="status">{srvMsg}</p>}
+      </div>
+    </section>
   </main>;
 }

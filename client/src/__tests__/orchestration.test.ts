@@ -106,3 +106,87 @@ describe('task layout: 本命 + 未来十年 + 滚动12个月(+大运)，无总�
     expect((result.aiAnalysis?.usefulElements ?? []).join('、')).toBe('');
   });
 });
+
+describe('auto retry on failed tasks', () => {
+  it('automatically retries a transient failure and completes the task', async () => {
+    let calls = 0;
+    const result = await orchestrateBaziAnalysis({ ...record, nonAiResult: undefined }, async (task) => {
+      calls += 1;
+      if (task.type === 'baseline' && calls <= 1) return { task, status: 'failed', error: 'HTTP 503' };
+      return { task, status: 'completed', analysis: okAnalysis };
+    });
+    expect(calls).toBeGreaterThanOrEqual(2);
+    expect(result.aiTasks?.['task-01']?.status).toBe('completed');
+    expect(result.aiStatus).toBe('completed');
+  });
+
+  it('repairs still-failing tasks with an automatic extra pass (失败不再直接停留)', async () => {
+    let baselineCalls = 0;
+    const result = await orchestrateBaziAnalysis({ ...record, nonAiResult: undefined }, async (task) => {
+      if (task.type === 'baseline') {
+        baselineCalls += 1;
+        if (baselineCalls < 3) return { task, status: 'failed', error: 'HTTP 503' };
+      }
+      return { task, status: 'completed', analysis: okAnalysis };
+    });
+    expect(baselineCalls).toBeGreaterThanOrEqual(3); // 即时重试 + 整批后的自动补跑
+    expect(result.aiTasks?.['task-01']?.status).toBe('completed');
+    expect(result.aiStatus).toBe('completed');
+  });
+
+  it('does not retry credential/permission style failures', async () => {
+    let calls = 0;
+    const result = await orchestrateBaziAnalysis({ ...record, nonAiResult: undefined }, async (task) => {
+      calls += 1;
+      return { task, status: 'failed', error: 'HTTP 401' };
+    });
+    expect(calls).toBe(23); // 每个任务只试一次
+    expect(result.aiStatus).toBe('failed');
+  });
+
+  it('aborts instantly even while a request is still in flight (stop mid-call)', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const called: string[] = [];
+    await expect(orchestrateBaziAnalysis(
+      { ...record, nonAiResult: undefined },
+      async (task) => { called.push(task.taskId); await new Promise<void>(() => {}); return { task, status: 'completed', analysis: okAnalysis }; },
+      undefined,
+      { signal: controller.signal },
+    )).rejects.toThrow(/已停止/);
+    expect(called).toEqual([]); // 没有任何任务被继续发出
+  });
+
+  it('stops immediately when 停止 fires while a request never returns', async () => {
+    const controller = new AbortController();
+    const started: string[] = [];
+    const run = orchestrateBaziAnalysis(
+      { ...record, nonAiResult: undefined },
+      async (task) => {
+        started.push(task.taskId);
+        if (started.length === 1) setTimeout(() => controller.abort(), 0);
+        await new Promise<void>(() => {}); // 永不返回的请求
+        return { task, status: 'completed', analysis: okAnalysis };
+      },
+      undefined,
+      { signal: controller.signal },
+    );
+    await expect(run).rejects.toThrow(/已停止/);
+    expect(started.length).toBeLessThanOrEqual(3); // 未继续铺开任务
+  });
+
+  it('honors an aborted signal by throwing before writing the aborted task', async () => {
+    const controller = new AbortController();
+    const calls: string[] = [];
+    await expect(orchestrateBaziAnalysis(
+      { ...record, nonAiResult: undefined },
+      async (task) => {
+        calls.push(task.taskId);
+        if (calls.length === 1) controller.abort();
+        return { task, status: 'failed', error: 'network failure' };
+      },
+      undefined,
+      { signal: controller.signal, retries: 2, retryDelayMs: 0 },
+    )).rejects.toThrow(/已停止/);
+  });
+});

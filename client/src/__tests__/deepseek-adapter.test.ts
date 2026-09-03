@@ -39,6 +39,13 @@ describe('DeepSeek adapter', () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  it('forwards the tone option to the active secure runner (server/PWA 模式)', async () => {
+    const runner = vi.fn().mockResolvedValue({ task: undefined, status: 'completed', analysis: { pattern: 'p', strength: 's', usefulElements: [], avoidElements: [], explanation: 'x' } });
+    configureAiTaskRunner(runner);
+    await analyzeBazi(record, undefined, { tone: 70 });
+    expect(runner).toHaveBeenCalledWith(record, undefined, expect.objectContaining({ tone: 70 }));
+  });
+
   it('serializes structured record fields before invoking the Tauri AI command', async () => {
     Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {} });
     vi.mocked(invoke).mockResolvedValue({ task: { taskId: 'task-01', type: 'baseline' }, status: 'completed', analysis: { pattern: '格局', strength: '身强', usefulElements: [], avoidElements: [], explanation: '结果' } });
