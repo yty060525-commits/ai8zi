@@ -15,3 +15,5 @@ Thumbs.db
 # 构建成品(CI 会重建)
 release/
 release/windows/data/
+*.sqlite3-shm
+*.sqlite3-wal
