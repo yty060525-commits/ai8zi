@@ -76,3 +76,46 @@
 .scope-status { color: #555; font-size: 0.85rem; }
 .scope-lead { margin: 4px 0; }
 .scope-body p { margin: 4px 0; }
+/* ---- AI 正文分点化 ---- */
+.points-view { margin-top: 2px; }
+.point-block { margin: 2px 0 4px; }
+.point-head { font-weight: 700; margin: 8px 0 2px; }
+.point-list { margin: 2px 0 8px; padding-left: 20px; }
+.point-list li { line-height: 1.65; margin: 3px 0; }
+.long-text .points-view { margin-top: 6px; }
+.retry-hint { color: #8a6d1a; font-size: 13px; font-weight: 600; margin: 6px 0 0; }
+/* ---- 语气滑杆 ---- */
+.tone-block { display: grid; grid-template-columns: auto minmax(120px, 1fr) auto; gap: 6px 12px; align-items: center; border: 1px solid #e0e0e0; background: #fafafa; padding: 10px 12px; margin: 6px 0 12px; }
+.tone-label { font-size: 13px; font-weight: 700; }
+#tone-slider { width: 100%; min-height: 26px; margin: 0; padding: 0; }
+.tone-value { font-size: 12px; color: #333; font-weight: 600; }
+.tone-scale { grid-column: 2; display: flex; justify-content: space-between; font-size: 11px; color: #999; }
+.tone-scale em { font-style: normal; }
+@media (max-width: 520px) { .tone-block { grid-template-columns: 1fr; } .tone-value { grid-column: 1; } }
+/* ---- 通用按钮按下反馈：点按立即有视觉回应 ---- */
+button { transition: transform 0.05s ease-out, background-color 0.1s ease, color 0.1s ease, border-color 0.1s ease, box-shadow 0.1s ease, opacity 0.1s ease; -webkit-tap-highlight-color: transparent; }
+button:not(:disabled):active { transform: translateY(1px) scale(0.965); filter: brightness(0.92); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+.primary-button { border: 1px solid #171717; background: #171717; color: #fff; min-height: 44px; padding: 9px 18px; }
+.primary-button:not(:disabled):hover { background: #333; border-color: #333; }
+.stop-button { margin: 0; min-height: 44px; padding: 9px 18px; font-weight: 600; }
+/* 可点击条目/摘要也给出按下反馈 */
+.person-item:active, .sort-button:active, .nav-item:active, .scope-item summary:active, .shen-sha summary:active { background: #e6e6e6; }
+.nav-item.active:active { background: #333; }
+
+/* ---- 复制筛选面板（范围行 x 维度行） ---- */
+.copy-panel { border: 1px solid #d5d5d5; background: #fafafa; padding: 10px 12px; margin: 4px 0 14px; }
+.copy-panel-row { display: flex; align-items: flex-start; gap: 8px; margin: 4px 0; }
+.copy-row-label { flex: 0 0 auto; font-size: 12px; font-weight: 700; color: #666; line-height: 28px; padding-right: 2px; }
+.chip-list { display: flex; flex-wrap: wrap; gap: 6px; flex: 1 1 auto; }
+.filter-chip { border: 1px solid #999; background: #fff; color: #171717; font-size: 12px; min-height: 26px; padding: 3px 9px; border-radius: 13px; line-height: 1.3; }
+.filter-chip.selected { background: #171717; border-color: #171717; color: #fff; }
+.filter-chip.selected:active { background: #333; }
+.chip-actions { flex: 0 0 auto; display: flex; gap: 2px; }
+.text-button.tiny { min-height: 24px; padding: 2px 8px; margin: 0; font-size: 12px; border: 0; background: transparent; color: #555; text-decoration: underline; }
+.copy-actions { display: flex; align-items: center; gap: 12px; margin-top: 8px; border-top: 1px dashed #ccc; padding-top: 8px; flex-wrap: wrap; }
+.copy-selected { min-height: 38px; }
+.copy-note { font-size: 13px; color: #1d6b2f; font-weight: 600; }
+.copy-help { font-size: 12px; color: #777; margin: 6px 0 0; line-height: 1.5; }
+.copy-empty-hint { color: #999; font-size: 12px; line-height: 28px; }
+

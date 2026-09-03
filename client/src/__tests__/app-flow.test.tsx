@@ -7,7 +7,7 @@ import { initializeMockSession, listBaziRecords, resetMockSession } from '../dat
 import { mockPeople, mockPersonDetails } from './fixtures/mockData';
 import { analyzeBazi } from '../data/deepseekAdapter';
 
-vi.mock('../data/deepseekAdapter', () => ({ analyzeBazi: vi.fn() }));
+vi.mock('../data/deepseekAdapter', () => ({ analyzeBazi: vi.fn(), beginAiSession: vi.fn(), cancelAiSession: vi.fn() }));
 
 describe('simplified chart application flow', () => {
   beforeEach(() => { initializeMockSession(mockPeople, mockPersonDetails); vi.mocked(analyzeBazi).mockResolvedValue({ status: 'not_configured' }); });
@@ -130,7 +130,7 @@ describe('simplified chart application flow', () => {
     expect(await screen.findByRole('button', { name: 'AI 分析' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '删除数据' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'AI 分析' }));
-    await waitFor(() => expect(analyzeBazi).toHaveBeenCalledWith(expect.objectContaining({ id: 'zhang-wei' }), expect.objectContaining({ taskId: 'task-01' })));
+    await waitFor(() => expect(analyzeBazi).toHaveBeenCalledWith(expect.objectContaining({ id: 'zhang-wei' }), expect.objectContaining({ taskId: 'task-01' }), expect.anything()));
     fireEvent.click(screen.getByRole('button', { name: '删除数据' }));
     await waitFor(() => expect(screen.getByRole('heading', { name: '记录' })).toBeTruthy());
     expect(screen.queryByText('张伟')).toBeNull();

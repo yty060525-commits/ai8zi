@@ -81,6 +81,8 @@ export interface BaziRecord {
   aiOverview?: BaziAIAnalysis;
   aiError?: string;
   aiTasks?: Record<string, BaziTaskResult>;
+  /** 生成这套结果时使用的语气档(0 犀利 .. 50 中立 .. 100 温柔)，默认 80 */
+  toneUsed?: number;
 }
 
 export interface BaziAIAnalysis {

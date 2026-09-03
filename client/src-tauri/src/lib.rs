@@ -2,6 +2,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::{Manager, State};
 
@@ -174,7 +175,7 @@ pub(crate) fn purge_chart_cache(connection: &rusqlite::Connection, gender: &str,
 
 #[tauri::command]
 pub fn clear_chart_cache(state: State<'_, Database>, gender: String, year_pillar: String, month_pillar: String, day_pillar: String, hour_pillar: String) -> Result<usize, String> {
-    // 清空并全量重算 = 真删缓存：让同盘同任务不再命中，重新调用 AI
+    // 只清除：真删该盘缓存，让同盘同任务下次不再命中、重新调用 AI(不自动重算)
     let connection = state.0.lock().map_err(|e| e.to_string())?;
     purge_chart_cache(&connection, &gender, &year_pillar, &month_pillar, &day_pillar, &hour_pillar)
 }
@@ -359,7 +360,7 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
                 "baselineSummary": baseline_text,
                 "guide": guide_text,
             });
-            let content = format!("你是资深子平命理师。根据【本命结论】的喜用五行与下方【资料库】中对应五行的后天调整/职业知识，输出该命局的【后天调整】与【事业职业适配】建议(长文，尽量贴合资料，不要另造体系)。禁止输出/* */注释、HTML注释或代码块标记，只给最终正文。JSON schema：{{\"explanation\":长文}}，explanation 用【后天调整】【事业适配】【健康注意】分段。\n\n# 本命结论\n{}\n\n# 资料库(喜用{})\n{}", baseline_text, guide.get("element").and_then(|e| e.as_str()).unwrap_or(""), guide_text);
+            let content = format!("你是资深子平命理师。根据【本命结论】的喜用五行与下方【资料库】中对应五行的后天调整/职业知识，输出该命局的【后天调整】与【事业职业适配】建议(长文，尽量贴合资料，不要另造体系)。禁止输出/* */注释、HTML注释或代码块标记，只给最终正文。JSON schema：{{\"explanation\":长文}}，explanation 用【后天调整】【事业适配】【健康注意】分段；每个主题内部再分点：每条单独一行、行首 1. 2. 3. 编号，一句话一条，不要整段连排。\n\n# 本命结论\n{}\n\n# 资料库(喜用{})\n{}", baseline_text, guide.get("element").and_then(|e| e.as_str()).unwrap_or(""), guide_text);
             return Ok(serde_json::json!({
                 "model": "deepseek-reasoner", "promptVersion": "ctx-v4", "thinking": true,
                 "taskId": task.task_id, "type": task.task_type, "year": task.year, "month": task.month,
@@ -424,11 +425,11 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
 let is_scope = matches!(task.task_type.as_str(), "annual" | "monthly" | "decade");
     let prompt = if is_scope {
         format!(
-            "你是资深子平命理师，仅分析时段运势。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行或关系。禁止输出/* */注释、HTML注释或任何代码块/围栏标记，只给最终正文。当前分析目标：{when}{age_seg}。本命的身强身弱/格局/喜忌已在 natal 结论中单独确定，你不要再输出强弱/格局/喜忌判断。用 JSON(仅 JSON)返回，schema：{{\"title\":\"两行式标题(可选)\",\"explanation\":长文}}。title 需有古风韵味并只能引用下列古籍原文/口诀(标注出处，禁止自创伪古文)：六合(《三命通会》六合歌)：子与丑合、寅与亥合、卯与戌合、辰与酉合、巳与申合、午与未合；六冲(《渊海子平》冲诀，地支七位为冲)：子午、丑未、寅申、卯酉、辰戌、巳亥相冲；三刑(《三命通会·论三刑》)：子刑卯卯刑子为无礼之刑，寅刑巳巳刑申申刑寅为恃势之刑，丑刑戌戌刑未未刑丑为无恩之刑，辰午酉亥自刑；六害(穿害口诀)：子未害丑午害寅巳害卯辰害申亥害酉戌害；六破(破口诀)：子酉破丑辰破寅亥破卯午破巳申破未戌破。若无对应原文则标题用干支+四字直书(如：卯戌六合·和合之象)，不得编造引文。explanation 按【健康】【事业】【财运】【爱情】分段展开；若 scope 提供 annualHits/monthlyHits/decadeHits 关系命中，末尾加【刑冲克害批注】。批注必须是编号要点，每行格式：数字. 关系（干支实例说明）：一句影响，例如：1. 三合（巳酉丑半合）：…；2. 六害（丙戌）：…。每条一句话，把 合/冲/刑/害/破/克 的对象与含义写清楚；无命中则省略该段。各主题全文只出现一次，勿先短句后长文重复。"
+            "你是资深子平命理师，仅分析时段运势。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行或关系。禁止输出/* */注释、HTML注释或任何代码块/围栏标记，只给最终正文。当前分析目标：{when}{age_seg}。本命的身强身弱/格局/喜忌已在 natal 结论中单独确定，你不要再输出强弱/格局/喜忌判断。用 JSON(仅 JSON)返回，schema：{{\"title\":\"两行式标题(可选)\",\"explanation\":长文}}。title 需有古风韵味并只能引用下列古籍原文/口诀(标注出处，禁止自创伪古文)：六合(《三命通会》六合歌)：子与丑合、寅与亥合、卯与戌合、辰与酉合、巳与申合、午与未合；六冲(《渊海子平》冲诀，地支七位为冲)：子午、丑未、寅申、卯酉、辰戌、巳亥相冲；三刑(《三命通会·论三刑》)：子刑卯卯刑子为无礼之刑，寅刑巳巳刑申申刑寅为恃势之刑，丑刑戌戌刑未未刑丑为无恩之刑，辰午酉亥自刑；六害(穿害口诀)：子未害丑午害寅巳害卯辰害申亥害酉戌害；六破(破口诀)：子酉破丑辰破寅亥破卯午破巳申破未戌破。若无对应原文则标题用干支+四字直书(如：卯戌六合·和合之象)，不得编造引文。explanation 按【健康】【事业】【财运】【爱情】分段展开；若 scope 提供 annualHits/monthlyHits/decadeHits 关系命中，末尾加【刑冲克害批注】。批注必须是编号要点，每行格式：数字. 关系（干支实例说明）：一句影响，例如：1. 三合（巳酉丑半合）：…；2. 六害（丙戌）：…。每条一句话，把 合/冲/刑/害/破/克 的对象与含义写清楚；无命中则省略该段。各主题全文只出现一次，勿先短句后长文重复。每个主题内部必须分点陈述：每条单独一行、行首用 1. 2. 3. 编号，一句话一条，不要整段连排文字。"
         )
     } else {
         format!(
-            "你是资深子平命理师。严格依据下方【事实数据(JSON)】中的确定性命理数据作答，禁止自行推算干支、十神、五行、藏干或干支关系。禁止输出/* */注释、HTML注释或任何代码块/围栏标记，只给最终正文。当前分析目标：本命{age_seg}。用 JSON(仅 JSON)返回，schema：{{\"pattern\":格局,\"strength\":身强/身弱/中和,\"usefulElements\":[喜用],\"avoidElements\":[忌用],\"explanation\":长文}}。explanation 从【身强身弱与喜忌】开始，依次【健康】【事业】【财运】【爱情】，以【总评/行为建议】收尾；各主题全文只出现一次，禁止在 JSON 顶层重复 overall/health/career/wealth/love/notice 等字段，也不要先给短句摘要再写长文。"
+            "你是资深子平命理师。严格依据下方【事实数据(JSON)】中的确定性命理数据作答，禁止自行推算干支、十神、五行、藏干或干支关系。禁止输出/* */注释、HTML注释或任何代码块/围栏标记，只给最终正文。当前分析目标：本命{age_seg}。用 JSON(仅 JSON)返回，schema：{{\"pattern\":格局,\"strength\":身强/身弱/中和,\"usefulElements\":[喜用],\"avoidElements\":[忌用],\"explanation\":长文}}。explanation 从【身强身弱与喜忌】开始，依次【健康】【事业】【财运】【爱情】，以【总评/行为建议】收尾；各主题全文只出现一次，禁止在 JSON 顶层重复 overall/health/career/wealth/love/notice 等字段，也不要先给短句摘要再写长文。每个主题内部必须分点陈述：每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。"
         )
     };
     // 关键：把“事实数据 JSON”直接嵌入消息正文 —— 模型只能看到 messages，
@@ -449,8 +450,25 @@ let is_scope = matches!(task.task_type.as_str(), "annual" | "monthly" | "decade"
     }))
 }
 
+/// 一次“分析会话”的取消开关(桌面版点“立即停止”时置位，使正在发送的 HTTP 请求立刻中断)。
+static AI_SESSION_CANCELLED: AtomicBool = AtomicBool::new(false);
+
+#[tauri::command]
+pub fn begin_ai_session() { AI_SESSION_CANCELLED.store(false, Ordering::SeqCst); }
+
+#[tauri::command]
+pub fn cancel_ai_session() { AI_SESSION_CANCELLED.store(true, Ordering::SeqCst); }
+
+fn session_cancelled() -> bool { AI_SESSION_CANCELLED.load(Ordering::SeqCst) }
+
+/// 等待直到会话被取消(轮询间隔 50ms，够快且不忙等)。
+async fn wait_until_cancelled() {
+    while !session_cancelled() { tokio::time::sleep(std::time::Duration::from_millis(50)).await; }
+}
+
 #[tauri::command]
 pub async fn run_ai_task(state: State<'_, Database>, record: BaziRecord, task: AiTaskInput) -> Result<AiTaskOutput, String> {
+    if session_cancelled() { return Err("cancelled".into()); }
     let mut errors = Vec::new();
     for provider in provider_order(&selected_provider()) {
         let model = provider_model(&provider);
@@ -472,12 +490,22 @@ pub async fn run_ai_task(state: State<'_, Database>, record: BaziRecord, task: A
         let payload = build_ai_request_payload(&record, &task)?;
         let mut api_payload = api_request_payload(&payload, model, provider_temperature(&provider));
         if model == "deepseek-reasoner" { apply_reasoner_settings(&mut api_payload); } // 高上限+思考从简，避免正文为空
-        // 传输层抗抖：429/5xx/网络错误重试一次(同 provider)，降低单任务失败率
+        // 传输层抗抖：429/5xx/网络错误重试一次(同 provider)；请求期间可被“立即停止”中断
         let mut transport_ok = false;
         let mut body: Value = Value::Null;
         let mut request_failed = String::new();
         for attempt in 0..2u8 {
-            match reqwest::Client::new().post(endpoint).bearer_auth(&secret).json(&api_payload).send().await {
+            if session_cancelled() { return Err("cancelled".into()); }
+            let send_result = {
+                let client = reqwest::Client::new();
+                let request = client.post(endpoint).bearer_auth(&secret).json(&api_payload).send();
+                tokio::pin!(request);
+                tokio::select! {
+                    result = &mut request => result,
+                    _ = wait_until_cancelled() => return Err("cancelled".into()),
+                }
+            };
+            match send_result {
                 Ok(response) if response.status().is_success() => {
                     match response.json::<Value>().await {
                         Ok(parsed) => { body = parsed; transport_ok = true; break; }
@@ -497,6 +525,7 @@ pub async fn run_ai_task(state: State<'_, Database>, record: BaziRecord, task: A
                 }
             }
         }
+        if session_cancelled() { return Err("cancelled".into()); }
         if !transport_ok { errors.push(request_failed); continue; }
         let content = match body["choices"][0]["message"]["content"].as_str() { Some(content) => content, None => { errors.push("invalid response".into()); continue; } };
         let content = content.trim().trim_start_matches("```json").trim_end_matches("```").trim();
@@ -549,7 +578,7 @@ pub fn run() {
             app.manage(Database(Mutex::new(connection)));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![commands::init_database, commands::save_bazi_record, commands::list_bazi_records, commands::get_bazi_record, commands::delete_bazi_record, commands::clear_chart_cache, commands::get_storage_stats, commands::compact_records, commands::ai_self_test, commands::save_ai_credential, commands::clear_ai_credential, commands::get_ai_provider_status, commands::set_ai_provider, commands::run_ai_task])
+        .invoke_handler(tauri::generate_handler![commands::init_database, commands::save_bazi_record, commands::list_bazi_records, commands::get_bazi_record, commands::delete_bazi_record, commands::clear_chart_cache, commands::get_storage_stats, commands::compact_records, commands::ai_self_test, commands::save_ai_credential, commands::clear_ai_credential, commands::get_ai_provider_status, commands::set_ai_provider, commands::run_ai_task, commands::begin_ai_session, commands::cancel_ai_session])
         .run(tauri::generate_context!()).expect("error while running tauri application");
 }
 

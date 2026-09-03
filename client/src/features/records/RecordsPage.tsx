@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { listBaziRecords } from '../../data/clientRepository';
+import { listBaziRecords, syncAdminAll } from '../../data/clientRepository';
+import { getServerSession, isServerMode } from '../../data/serverClient';
 import type { BaziRecord } from '../../types/domain';
 
 interface RecordsPageProps {
@@ -12,11 +13,13 @@ export function RecordsPage({ onOpenPerson, refreshKey = 0 }: RecordsPageProps) 
   const [descending, setDescending] = useState(false);
   const [records, setRecords] = useState<BaziRecord[]>([]);
   const latestRequest = useRef(0);
+  const adminScope = isServerMode() && getServerSession()?.role === 'admin';
   useEffect(() => {
     const request = ++latestRequest.current;
     let mounted = true;
     const readRecords = async () => {
       try {
+        if (adminScope) await syncAdminAll();
         const nextRecords = await listBaziRecords();
         // A refresh can start before the previous adapter read resolves. Only
         // the most recent read is allowed to publish its snapshot.
@@ -40,7 +43,7 @@ export function RecordsPage({ onOpenPerson, refreshKey = 0 }: RecordsPageProps) 
       <header className="page-heading">
         <p className="eyebrow">LOCAL DIRECTORY</p>
         <h1>记录</h1>
-        <p className="page-description">管理已经保存的出生与四柱记录。</p>
+        <p className="page-description">管理已经保存的出生与四柱记录。{adminScope ? '（管理员：本列表为服务器全部账号记录，含账号名）' : '（登录服务器后自动同步）'}</p>
       </header>
 
       <div className="records-toolbar">
