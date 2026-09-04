@@ -57,8 +57,8 @@ function summarizeHits(row, ownGanZhi) {
   return [...new Set(out)].sort();
 }
 
-const BASELINE_PROMPT = '你是资深子平命理师。严格依据下方【事实数据(JSON)】中的确定性命理数据作答，禁止自行推算干支、十神、五行、藏干或干支关系。禁止输出/* */注释、HTML注释或任何代码块/围栏标记，只给最终正文。当前分析目标：本命。用 JSON(仅 JSON)返回，schema：{"pattern":格局,"strength":身强/身弱/中和,"usefulElements":[喜用],"avoidElements":[忌用],"explanation":长文}。explanation 从【身强身弱与喜忌】开始，依次【健康】【事业】【财运】【爱情】，以【总评/行为建议】收尾；每个主题内部必须分点陈述：每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。各主题全文只出现一次。';
-const SCOPE_PROMPT = (when, ageSeg, hitsHint) => '你是资深子平命理师，仅分析时段运势。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行或关系。禁止输出/* */注释、HTML注释或任何代码块/围栏标记，只给最终正文。当前分析目标：' + when + ageSeg + '。本命强弱/格局/喜忌已定，不要重复判断。用 JSON(仅 JSON)返回，schema：{"title":"古风四字或对仗标题(可选)","explanation":长文}。title 只能用干支+四字直书(如：卯戌六合·和合之象)或古典口诀风格，不得编造伪古文引文。explanation 按【健康】【事业】【财运】【爱情】分段展开' + (hitsHint ? '，末尾加【刑冲克害批注】' : '') + '；每个主题内部必须分点：每条单独一行、行首 1. 2. 3. 编号，一句话一条，不要整段连排。' + (hitsHint ? '【刑冲克害批注】必须是编号要点：每行格式 数字. 关系（干支实例）：一句影响。' : '') + '';
+const BASELINE_PROMPT = '你是资深子平命理师。严格依据下方【事实数据(JSON)】中的确定性命理数据作答，禁止自行推算干支、十神、五行、藏干或干支关系。禁止输出注释或代码块/围栏标记，只给最终正文。当前分析目标：本命。用 JSON(仅 JSON)返回，schema：{"pattern":格局,"strength":身强/身弱/中和,"usefulElements":[喜用],"avoidElements":[忌用],"explanation":长文}。explanation 必须以【身强身弱与喜忌】开头，随后按顺序各出现一次【健康】【事业】【财运】【爱情】(不得合并、省略或改名)，末尾可以加【总评/行为建议】收尾。判断身强身弱请按固定四步逐一写明依据再下结论：①得令：日主是否得月令生旺(看月支藏干旺衰及日主在月支的十二长生)；②得地：四支与藏干是否有日主印比禄刃的根气；③得势：四柱中印星比劫(生我、同我)出现几次(以五行个数与十神为准)；④克泄耗：食伤、财星、官杀(我生、我克、克我)出现几次。四步权衡后得出身强/身弱/中和；喜忌按子平通则推导并写明：身弱喜印比、忌克泄耗，身强反之，中和则以调候通关需要为准。';
+const SCOPE_PROMPT = (when, ageSeg) => '你是资深子平命理师，仅分析时段运势。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行或关系。禁止输出注释或代码块/围栏标记，只给最终正文。当前分析目标：' + when + ageSeg + '。本命强弱/格局/喜忌已定，不要重复判断。用 JSON(仅 JSON)返回，schema：{"title":"古风四字或对仗标题(可选)","explanation":长文}。title 只能用干支+四字直书(如：卯戌六合·和合之象)或古典口诀风格，不得编造伪古文引文。explanation 必须依次各出现一次【健康】【事业】【财运】【爱情】【刑冲克害批注】，顺序一致，不得合并、省略或改名；【刑冲克害批注】依据 scope 中的 annualHits/monthlyHits/decadeHits 逐条编号，每行格式：数字. 关系（干支实例）：一句影响，例如 1. 三合（巳酉丑半合）：…；若没有任何相关命中，该段写一条：1. 本期无重大刑冲克害（仅提示）。各主题全文只出现一次，禁止重复说两遍。每个主题内部必须分点陈述：每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。';
 
 export function baselineSummaryOf(baseline) {
   if (!baseline) return '';
@@ -104,7 +104,7 @@ export function buildTaskPayload(record, task, tone = DEFAULT_TONE) {
     }
   }
   let userContent = '';
-  let system = '请把思考压缩到最短，直接输出符合要求的 JSON 正文。';
+  let system = '请把思考压缩到最短，直接输出符合要求的简体中文 JSON 正文；全篇不得出现繁体字。';
   const natalNote = '';
   if (task.type === 'adjustment') {
     const guide = task.guide || {};
@@ -116,22 +116,27 @@ export function buildTaskPayload(record, task, tone = DEFAULT_TONE) {
     const whenLabel = task.type === 'decade' ? '所处大运(含 ' + y + ' 年)' : (task.month !== undefined ? y + '年' + task.month + '月' : y + '年');
     const ageSeg = y !== undefined && record.birthYear ? '(年龄约 ' + (y - record.birthYear) + ')' : '';
     const hits = (scope.annualHits && scope.annualHits.length) || (scope.monthlyHits && scope.monthlyHits.length) || (scope.decadeHits && scope.decadeHits.length);
-    const prompt = SCOPE_PROMPT(whenLabel, ageSeg, !!hits);
+    const prompt = SCOPE_PROMPT(whenLabel, ageSeg);
     const note = task.baseline ? baselineSummaryOf(task.baseline) : '';
     userContent = prompt + (note ? '\n# 本命结论(已定，必须沿用，不得重算)\n' + note : '') + '\n\n# 事实数据(JSON，只依据此数据)\n' + JSON.stringify({ natal, scope });
   }
+userContent += '\n\n# 输出硬性要求(违反即整篇作废重写)\n'
+  + '1. 全篇一律使用简体中文(UTF-8)，禁止任何繁体字、异体字混入。\n'
+  + '2. explanation 的【】小节必须按本任务规定逐段出现、各只出现一次，顺序一致，不得合并、省略或改名。\n'
+  + '3. 每个小节至少 1 条编号要点；每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。\n'
+  + '4. 禁止输出注释、代码块或任何围栏标记，只给最终正文。';
   userContent += '\n\n# 语气要求(必须按此措辞把握全篇)\n' + toneInstruction(tone);
   return { messages: [{ role: 'system', content: system }, { role: 'user', content: userContent }] };
 }
 
 export function cacheKey(record, task, model, tone = DEFAULT_TONE) {
   const toneBucket = Math.round(clampTone(tone) / 5) * 5; // 每 5 度一个缓存档，避免同一命盘缓存爆炸
-  return ['v6', model, record.gender, record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar, task.type, task.year ?? 0, task.month ?? 0, record.birthYear, toneBucket].join('|');
+  return ['v7', model, record.gender, record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar, task.type, task.year ?? 0, task.month ?? 0, record.birthYear, toneBucket].join('|');
 }
 
 /** 调一次上游(单 provider，最多 transport 重试一次)；失败返回 {error}。 */
 async function callProvider(provider, key, messages) {
-  const body = { model: provider.model, messages };
+  const body = { model: provider.model, messages, max_tokens: 32768 };
   if (provider.id !== 'deepseek') body.temperature = 1;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 150_000);

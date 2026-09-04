@@ -61,7 +61,7 @@ describe('simplified chart application flow', () => {
     expect(screen.getByText('十神')).toBeTruthy();
     expect(screen.getByText('纳音')).toBeTruthy();
     expect(screen.getByText('十二长生')).toBeTruthy();
-    expect(screen.getByText('神煞')).toBeTruthy();
+    expect(screen.queryByText('神煞')).toBeNull();
     expect(screen.queryByText('称骨')).toBeNull();
     expect(screen.queryByText('行动改变')).toBeNull();
     expect(screen.queryByText('运势')).toBeNull();
@@ -186,7 +186,7 @@ describe('simplified chart application flow', () => {
     expect(screen.queryByText('未来十年')).toBeNull();
     expect(screen.getByRole('region', { name: '生肖关系' })).toBeTruthy();
     expect(screen.getByText('破')).toBeTruthy();
-    expect(screen.getByRole('group', { name: '神煞' })).toBeTruthy();
+    expect(screen.queryByRole('group', { name: '神煞' })).toBeNull();
     expect(screen.getByText('适合稳步推进长期计划。')).toBeTruthy();
   });
 
