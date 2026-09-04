@@ -41,41 +41,28 @@ export const REQUIRED_SECTIONS: Record<string, string[]> = {
   adjustment: ['后天调整', '事业适配', '健康注意'],
 };
 
-export interface ConcurrencyProfile { min: number; max: number; cooldownMs?: number; rampAfter?: number; memoryKey?: string }
-/**
- * 波动并发(按“内容相似度”成组，而不是无差别全开)：
- * 同组任务的正文高度相似(同一命盘、只换一个 scope 行)，可放心一起并发；
- * 组与组(本命/年+月/大运/后天调整/补跑)之间仍串行。
- * 平衡点：记住上次稳定并发数直接起步(暖跑更快)；遇 429/超时立即减半冷却，成功每 2 次 +1 爬坡。
- */
-export const CONCURRENCY_PROFILES = {
-  scope: { min: 2, max: 8, rampAfter: 2, cooldownMs: 2500, memoryKey: 'mingli.concurrency.scope' },
-  decade: { min: 1, max: 3, rampAfter: 2, cooldownMs: 2500, memoryKey: 'mingli.concurrency.decade' },
-  repair: { min: 1, max: 5, rampAfter: 2, cooldownMs: 2500, memoryKey: 'mingli.concurrency.repair' },
-} satisfies Record<string, ConcurrencyProfile>;
+/** 固定最大并发(命中率优先)：不爬坡。出现限流/超时/失败时冷却后继续发，不降并发数。 */
+export const FIXED_CONCURRENCY = { scope: 6, decade: 3, repair: 5 } as const;
+const COOLDOWN_MS = 3000;
 
 const THROTTLE_RE = /429|rate\s*limit|限流|HTTP\s*5\d\d|timeout|timed out|network|econn|超时/i;
 export const isThrottleFailure = (error?: string): boolean => !!error && THROTTLE_RE.test(error);
 
-async function adaptiveMap<T>(items: T[], profile: ConcurrencyProfile, worker: (item: T) => Promise<{ status?: string; error?: string } | void>): Promise<void> {
+async function fixedMapLimit<T>(items: T[], concurrency: number, worker: (item: T) => Promise<{ status?: string; error?: string } | void>): Promise<void> {
   const queue = [...items];
-  const readCeiling = () => {
-    if (!profile.memoryKey || typeof localStorage === 'undefined') return profile.min;
-    try { const n = Number(localStorage.getItem(profile.memoryKey)); return Number.isFinite(n) ? Math.max(profile.min, Math.min(profile.max, Math.round(n))) : profile.min; } catch { return profile.min; }
-  };
-  const persist = (v: number) => { if (profile.memoryKey) { try { localStorage.setItem(profile.memoryKey, String(v)); } catch { /* 忽略 */ } } };
-  let limit = readCeiling(); // 暖跑：记住上次稳定并发，直接起步；冷跑从 min 爬
+  const c = Math.max(1, concurrency);
   let running = 0;
   let cooledUntil = 0;
-  let okRun = 0;
   let settled = false;
   let abortReason: unknown = null;
-  const rampAfter = profile.rampAfter ?? 2;
-  const cooldownMs = profile.cooldownMs ?? 2500;
+  let timer: ReturnType<typeof setTimeout> | null = null;
   await new Promise<void>((resolve, reject) => {
-    const finish = () => { if (!settled) { settled = true; if (abortReason) reject(abortReason); else resolve(); } };
+    const finish = () => { if (settled) return; settled = true; if (timer) { clearTimeout(timer); timer = null; } if (abortReason) reject(abortReason); else resolve(); };
     const pump = () => {
-      while (!settled && running < limit && queue.length > 0) {
+      if (settled || abortReason) return;
+      const now = Date.now();
+      if (now < cooledUntil) { if (timer === null) timer = setTimeout(() => { timer = null; pump(); }, Math.min(1000, cooledUntil - now)); return; }
+      while (!settled && running < c && queue.length > 0) {
         const item = queue.shift()!;
         running += 1;
         void (async () => {
@@ -84,15 +71,8 @@ async function adaptiveMap<T>(items: T[], profile: ConcurrencyProfile, worker: (
           catch (error) { abortReason = abortReason ?? error; outcome = undefined; }
           finally {
             running -= 1;
-            const now = Date.now();
-            const throttled = !!outcome && outcome.status === 'failed' && isThrottleFailure(outcome.error);
-            if (throttled) {
-              okRun = 0;
-              if (now >= cooledUntil) { cooledUntil = now + cooldownMs; limit = Math.max(profile.min, Math.ceil(limit / 2)); persist(limit); }
-            } else if (now >= cooledUntil) {
-              okRun += 1;
-              if (okRun >= rampAfter && limit < profile.max) { limit += 1; okRun = 0; persist(limit); }
-            }            pump();
+            if (outcome && outcome.status === 'failed' && isThrottleFailure(outcome.error)) cooledUntil = Date.now() + COOLDOWN_MS;
+            pump();
             if (running === 0) finish();
           }
         })();
@@ -269,19 +249,27 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
     }
   }
   // 前缀预热：同组任务共享大前缀(提示词+本命结论+本命事实)。先串行跑第一条建立 DeepSeek 前缀缓存，再并发其余 → 速度与命中率兼得
-  const scopeTasks = [...pick('annual'), ...pick('monthly')];
-  if (scopeTasks.length > 0) await step(scopeTasks[0]);
-  await adaptiveMap(scopeTasks.slice(1), CONCURRENCY_PROFILES.scope, step);
-  await adaptiveMap(pick('decade'), CONCURRENCY_PROFILES.decade, step);
+  // 命中率优先编排：先算年运建立“本命+该年”前缀，再让同年剩余流月并发吃缓存；不爬坡，遇限流只冷却重发
+  const annuals = pick('annual');
+  if (annuals.length > 0) await step(annuals[0]); // 第一条串行：预热 SCOPE 全局前缀(提示词+本命结论+本命事实+要求+语气)
+  if (annuals.length > 1) await fixedMapLimit(annuals.slice(1), FIXED_CONCURRENCY.scope, step);
+  const monthGroups: BaziAnalysisTask[][] = [];
+  for (const m of pick('monthly')) {
+    const last = monthGroups[monthGroups.length - 1];
+    if (last && last[0].year === m.year) last.push(m); else monthGroups.push([m]);
+  }
+  for (const group of monthGroups) await fixedMapLimit(group, FIXED_CONCURRENCY.scope, step); // 同一年内的月份共享该年前缀，可并发
+  await fixedMapLimit(pick('decade'), FIXED_CONCURRENCY.decade, step);
   // 工作/生活/职业知识：最后才上传(等大运流年流月都分析完，避免上下文污染)
   if (favorite && baselineResult.status === 'completed') {
     const guide: ElementGuide = ELEMENT_GUIDES[favorite];
+
     tasks.push({
       taskId: 'task-30', type: 'adjustment',
       baseline: baselineResult,
       guide: { element: guide.element, lifestyle: guide.lifestyle, career: guide.career, health: guide.health },
     });
-    await adaptiveMap(tasks.filter((t) => t.type === 'adjustment'), { min: 1, max: 1 }, step);
+    await fixedMapLimit(tasks.filter((t) => t.type === 'adjustment'), 1, step);
   }
   ensureLive();
   // 整批跑完后自动“补跑一轮”：把仍然失败(且属于可重试因素)的任务再调一次 AI，
@@ -312,7 +300,7 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
       aiTasks[task.taskId] = result;
       return result;
     };
-    await adaptiveMap(stillFailed, CONCURRENCY_PROFILES.repair, repairStep);
+    await fixedMapLimit(stillFailed, FIXED_CONCURRENCY.repair, repairStep);
     ensureLive();
   }
   const statuses = Object.values(aiTasks).map((item) => item.status);

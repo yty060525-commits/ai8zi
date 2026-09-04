@@ -131,7 +131,7 @@ async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask, opts: 
     + ' 不要输出注释或代码块。';
   const scopeTypes = !task || task.type === 'annual' || task.type === 'monthly' || task.type === 'decade';
   const content = instruction + '\n\n# 本命事实数据(JSON)\n' + JSON.stringify(natal)
-    + (scopeTypes ? '\n\n# 当前分析目标\n' + when + '\n\n# 本时段数据(JSON)\n' + JSON.stringify(scope) : '');
+    + (scopeTypes ? '\n\n# 本时段数据(JSON)\n' + JSON.stringify(scope) + '\n\n# 当前分析目标\n' + when : '');
   const payload: Record<string, unknown> = { model: 'deepseek-reasoner', max_tokens: 32768, messages: [
     { role: 'system', content: '请把思考压缩到最短，直接输出符合要求的JSON正文。' },
     { role: 'user', content },

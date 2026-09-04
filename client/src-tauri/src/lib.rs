@@ -455,7 +455,7 @@ let is_scope = matches!(task.task_type.as_str(), "annual" | "monthly" | "decade"
     } else { String::new() };
     let output_rules = "\n\n# 输出硬性要求(违反即整篇作废重写)\n1. 全篇一律使用简体中文(UTF-8)，禁止任何繁体字、异体字混入。\n2. explanation 的【】小节必须按本任务规定逐段出现、各只出现一次，顺序一致，不得合并、省略或改名。\n3. 每个小节至少 1 条编号要点；每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。\n\n# 语气要求\n";
     let content = if is_scope {
-        format!("{prompt}{natal_note}\n\n# 本命事实数据(JSON，只依据此数据)\n{natal_text}{output_rules}{tone}\n\n# 当前分析目标\n{when}{age_seg}\n\n# 本时段数据(JSON)\n{scope_text}", tone = tone_instruction(clamp_tone(task.tone)))
+        format!("{prompt}{natal_note}\n\n# 本命事实数据(JSON，只依据此数据)\n{natal_text}{output_rules}{tone}\n\n# 本时段数据(JSON)\n{scope_text}\n\n# 当前分析目标\n{when}{age_seg}", tone = tone_instruction(clamp_tone(task.tone)))
     } else {
         let base = format!("{prompt}{natal_note}\n\n# 事实数据(JSON，务必只依据此数据，禁止自行推算干支/十神/五行/藏干或关系)\n{natal_text}");
         format!("{base}{output_rules}{tone}", tone = tone_instruction(clamp_tone(task.tone)))
