@@ -268,7 +268,10 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
       if (task.type === 'annual' || task.type === 'monthly' || task.type === 'decade') task.baseline = { summary } as never;
     }
   }
-  await adaptiveMap([...pick('annual'), ...pick('monthly')], CONCURRENCY_PROFILES.scope, step);
+  // 前缀预热：同组任务共享大前缀(提示词+本命结论+本命事实)。先串行跑第一条建立 DeepSeek 前缀缓存，再并发其余 → 速度与命中率兼得
+  const scopeTasks = [...pick('annual'), ...pick('monthly')];
+  if (scopeTasks.length > 0) await step(scopeTasks[0]);
+  await adaptiveMap(scopeTasks.slice(1), CONCURRENCY_PROFILES.scope, step);
   await adaptiveMap(pick('decade'), CONCURRENCY_PROFILES.decade, step);
   // 工作/生活/职业知识：最后才上传(等大运流年流月都分析完，避免上下文污染)
   if (favorite && baselineResult.status === 'completed') {
