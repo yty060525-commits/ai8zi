@@ -125,11 +125,13 @@ async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask, opts: 
     : isAdjustment
       ? 'explanation 必须依次各出现一次【后天调整】【事业适配】【健康注意】(不得合并、省略或改名)。'
       : 'explanation 必须依次各出现一次【健康】【事业】【财运】【爱情】【刑冲克害批注】，顺序一致，不得合并、省略或改名；【刑冲克害批注】依据 annualHits/monthlyHits/decadeHits 逐条编号，每行 数字. 关系（干支实例）：一句影响；无命中时写 1. 本期无重大刑冲克害（仅提示）。';
-  const instruction = '你是资深子平命理师。仅依据下方JSON事实作答，禁止自行推算干支/十神/五行。目标：' + when
+  const instruction = '你是资深子平命理师。仅依据下方JSON事实作答，禁止自行推算干支/十神/五行。'
     + '。若为年份/月份分析且已有本命结论摘要请沿用。' + (isBaseline ? '输出 JSON 含 pattern/strength/usefulElements/avoidElements/explanation。' : '输出 JSON 仅含 explanation 以及可选 title。') + fiveDimRule
     + ' 全篇一律简体中文，禁止繁体字。正文必须分点：每个主题每条单独一行，行首 1. 2. 3. 编号，一句话一条，不要整段连排。' + toneInstructionText(opts.tone)
     + ' 不要输出注释或代码块。';
-  const content = instruction + '\n\n# 事实数据(JSON)\n' + JSON.stringify({ natal, scope });
+  const scopeTypes = !task || task.type === 'annual' || task.type === 'monthly' || task.type === 'decade';
+  const content = instruction + '\n\n# 本命事实数据(JSON)\n' + JSON.stringify(natal)
+    + (scopeTypes ? '\n\n# 当前分析目标\n' + when + '\n\n# 本时段数据(JSON)\n' + JSON.stringify(scope) : '');
   const payload: Record<string, unknown> = { model: 'deepseek-reasoner', max_tokens: 32768, messages: [
     { role: 'system', content: '请把思考压缩到最短，直接输出符合要求的JSON正文。' },
     { role: 'user', content },

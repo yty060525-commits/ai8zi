@@ -437,7 +437,7 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
 let is_scope = matches!(task.task_type.as_str(), "annual" | "monthly" | "decade");
     let prompt = if is_scope {
         format!(
-            "你是资深子平命理师，仅分析时段运势。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行或关系。禁止输出/* */注释、HTML注释或任何代码块/围栏标记，只给最终正文。当前分析目标：{when}{age_seg}。本命的身强身弱/格局/喜忌已在 natal 结论中单独确定，你不要再输出强弱/格局/喜忌判断。用 JSON(仅 JSON)返回，schema：{{\"title\":\"两行式标题(可选)\",\"explanation\":长文}}。title 需有古风韵味并只能引用下列古籍原文/口诀(标注出处，禁止自创伪古文)：六合(《三命通会》六合歌)：子与丑合、寅与亥合、卯与戌合、辰与酉合、巳与申合、午与未合；六冲(《渊海子平》冲诀，地支七位为冲)：子午、丑未、寅申、卯酉、辰戌、巳亥相冲；三刑(《三命通会·论三刑》)：子刑卯卯刑子为无礼之刑，寅刑巳巳刑申申刑寅为恃势之刑，丑刑戌戌刑未未刑丑为无恩之刑，辰午酉亥自刑；六害(穿害口诀)：子未害丑午害寅巳害卯辰害申亥害酉戌害；六破(破口诀)：子酉破丑辰破寅亥破卯午破巳申破未戌破。若无对应原文则标题用干支+四字直书(如：卯戌六合·和合之象)，不得编造引文。explanation 必须依次各出现一次【健康】【事业】【财运】【爱情】【刑冲克害批注】，顺序一致，不得合并、省略或改名；【刑冲克害批注】依据 scope 的 annualHits/monthlyHits/decadeHits 逐条编号，每行格式：数字. 关系（干支实例说明）：一句影响，例如：1. 三合（巳酉丑半合）：…；2. 六害（丙戌）：…；每条一句话，把 合/冲/刑/害/破/克 的对象与含义写清楚；若没有任何命中，该段写一条 1. 本期无重大刑冲克害（仅提示）。各主题全文只出现一次，勿先短句后长文重复。每个主题内部必须分点陈述：每条单独一行、行首用 1. 2. 3. 编号，一句话一条，不要整段连排文字。"
+            "你是资深子平命理师，仅分析时段运势。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行或关系。禁止输出/* */注释、HTML注释或任何代码块/围栏标记，只给最终正文。本命的身强身弱/格局/喜忌已在 natal 结论中单独确定，你不要再输出强弱/格局/喜忌判断。用 JSON(仅 JSON)返回，schema：{{\"title\":\"两行式标题(可选)\",\"explanation\":长文}}。title 需有古风韵味并只能引用下列古籍原文/口诀(标注出处，禁止自创伪古文)：六合(《三命通会》六合歌)：子与丑合、寅与亥合、卯与戌合、辰与酉合、巳与申合、午与未合；六冲(《渊海子平》冲诀，地支七位为冲)：子午、丑未、寅申、卯酉、辰戌、巳亥相冲；三刑(《三命通会·论三刑》)：子刑卯卯刑子为无礼之刑，寅刑巳巳刑申申刑寅为恃势之刑，丑刑戌戌刑未未刑丑为无恩之刑，辰午酉亥自刑；六害(穿害口诀)：子未害丑午害寅巳害卯辰害申亥害酉戌害；六破(破口诀)：子酉破丑辰破寅亥破卯午破巳申破未戌破。若无对应原文则标题用干支+四字直书(如：卯戌六合·和合之象)，不得编造引文。explanation 必须依次各出现一次【健康】【事业】【财运】【爱情】【刑冲克害批注】，顺序一致，不得合并、省略或改名；【刑冲克害批注】依据 scope 的 annualHits/monthlyHits/decadeHits 逐条编号，每行格式：数字. 关系（干支实例说明）：一句影响，例如：1. 三合（巳酉丑半合）：…；2. 六害（丙戌）：…；每条一句话，把 合/冲/刑/害/破/克 的对象与含义写清楚；若没有任何命中，该段写一条 1. 本期无重大刑冲克害（仅提示）。各主题全文只出现一次，勿先短句后长文重复。每个主题内部必须分点陈述：每条单独一行、行首用 1. 2. 3. 编号，一句话一条，不要整段连排文字。"
         )
     } else {
         format!(
@@ -447,14 +447,20 @@ let is_scope = matches!(task.task_type.as_str(), "annual" | "monthly" | "decade"
     // 关键：把“事实数据 JSON”直接嵌入消息正文 —— 模型只能看到 messages，
     // 顶层字段(如 nonAiResult)对模型不可见(此前因此返回“未提供结构化输入”)。
     let context = serde_json::json!({ "natal": natal, "scope": scope });
-    let context_text = serde_json::to_string(&context).unwrap_or_else(|_| "{}".into());
-    // 时段分析必须沿用本命已定的强弱/喜忌结论(锚点)，防止模型自行推断或跑偏
+    let natal_text = serde_json::to_string(&natal).unwrap_or_else(|_| "{}".into());
+    let scope_text = serde_json::to_string(&scope).unwrap_or_else(|_| "{}".into());
     let natal_note = if is_scope {
         task.baseline.as_ref().and_then(|b| b.get("summary")).and_then(|s| s.as_str())
             .map(|s| format!("\n# 本命结论(已定，必须沿用，不得推翻或重算)\n{s}\n")).unwrap_or_default()
     } else { String::new() };
-let mut content = format!("{prompt}{natal_note}\n\n# 事实数据(JSON，务必只依据此数据，禁止自行推算干支/十神/五行/藏干或关系)\n{context_text}");
-    content = format!("{content}\n\n# 输出硬性要求(违反即整篇作废重写)\n1. 全篇一律使用简体中文(UTF-8)，禁止任何繁体字、异体字混入。\n2. explanation 的【】小节必须按本任务规定逐段出现、各只出现一次，顺序一致，不得合并、省略或改名。\n3. 每个小节至少 1 条编号要点；每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。\n\n# 语气要求\n{}", tone_instruction(clamp_tone(task.tone)));
+    let output_rules = "\n\n# 输出硬性要求(违反即整篇作废重写)\n1. 全篇一律使用简体中文(UTF-8)，禁止任何繁体字、异体字混入。\n2. explanation 的【】小节必须按本任务规定逐段出现、各只出现一次，顺序一致，不得合并、省略或改名。\n3. 每个小节至少 1 条编号要点；每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。\n\n# 语气要求\n";
+    let content = if is_scope {
+        format!("{prompt}{natal_note}\n\n# 本命事实数据(JSON，只依据此数据)\n{natal_text}{output_rules}{tone}\n\n# 当前分析目标\n{when}{age_seg}\n\n# 本时段数据(JSON)\n{scope_text}", tone = tone_instruction(clamp_tone(task.tone)))
+    } else {
+        let base = format!("{prompt}{natal_note}\n\n# 事实数据(JSON，务必只依据此数据，禁止自行推算干支/十神/五行/藏干或关系)\n{natal_text}");
+        format!("{base}{output_rules}{tone}", tone = tone_instruction(clamp_tone(task.tone)))
+    };
+
     Ok(serde_json::json!({
         "model": "deepseek-reasoner", "promptVersion": "ctx-v5", "thinking": true,
         "taskId": task.task_id, "type": task.task_type, "year": task.year, "month": task.month,
