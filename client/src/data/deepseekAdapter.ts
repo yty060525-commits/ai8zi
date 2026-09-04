@@ -119,9 +119,12 @@ async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask, opts: 
   }
   const when = task ? (task.type === 'annual' ? y + '年' : task.type === 'monthly' ? y + '年' + task.month + '月' : task.type === 'decade' ? '大运' : '本命') : '本命';
   const isBaseline = !task || task.type === 'baseline';
+  const isAdjustment = task?.type === 'adjustment';
   const fiveDimRule = isBaseline
     ? 'explanation 必须以【身强身弱与喜忌】开头，随后按序各出现一次【健康】【事业】【财运】【爱情】(不得合并、省略或改名)。判断身强身弱按四步写明依据：①得令(月支生旺与十二长生)；②得地(四支藏干印比禄刃根基)；③得势(印比出现次数)；④克泄耗(食伤财官杀次数)，权衡后下结论；喜忌按通则：身弱喜印比、忌克泄耗，身强反之。'
-    : 'explanation 必须依次各出现一次【健康】【事业】【财运】【爱情】【刑冲克害批注】，顺序一致，不得合并、省略或改名；【刑冲克害批注】依据 annualHits/monthlyHits/decadeHits 逐条编号，每行 数字. 关系（干支实例）：一句影响；无命中时写 1. 本期无重大刑冲克害（仅提示）。';
+    : isAdjustment
+      ? 'explanation 必须依次各出现一次【后天调整】【事业适配】【健康注意】(不得合并、省略或改名)。'
+      : 'explanation 必须依次各出现一次【健康】【事业】【财运】【爱情】【刑冲克害批注】，顺序一致，不得合并、省略或改名；【刑冲克害批注】依据 annualHits/monthlyHits/decadeHits 逐条编号，每行 数字. 关系（干支实例）：一句影响；无命中时写 1. 本期无重大刑冲克害（仅提示）。';
   const instruction = '你是资深子平命理师。仅依据下方JSON事实作答，禁止自行推算干支/十神/五行。目标：' + when
     + '。若为年份/月份分析且已有本命结论摘要请沿用。' + (isBaseline ? '输出 JSON 含 pattern/strength/usefulElements/avoidElements/explanation。' : '输出 JSON 仅含 explanation 以及可选 title。') + fiveDimRule
     + ' 全篇一律简体中文，禁止繁体字。正文必须分点：每个主题每条单独一行，行首 1. 2. 3. 编号，一句话一条，不要整段连排。' + toneInstructionText(opts.tone)

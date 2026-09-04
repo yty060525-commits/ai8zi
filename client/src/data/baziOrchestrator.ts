@@ -49,9 +49,9 @@ export interface ConcurrencyProfile { min: number; max: number; cooldownMs?: num
  * 每个组以 max 拉满起步；若出现限流/超时类失败则自动减半并冷却，之后连续成功再逐步回升。
  */
 export const CONCURRENCY_PROFILES = {
-  scope: { min: 2, max: 8 },
-  decade: { min: 1, max: 4 },
-  repair: { min: 2, max: 6 },
+  scope: { min: 2, max: 6, rampAfter: 4, cooldownMs: 3000 },
+  decade: { min: 1, max: 3 },
+  repair: { min: 1, max: 4 },
 } satisfies Record<string, ConcurrencyProfile>;
 
 const THROTTLE_RE = /429|rate\s*limit|限流|HTTP\s*5\d\d|timeout|timed out|network|econn|超时/i;
@@ -59,7 +59,7 @@ export const isThrottleFailure = (error?: string): boolean => !!error && THROTTL
 
 async function adaptiveMap<T>(items: T[], profile: ConcurrencyProfile, worker: (item: T) => Promise<{ status?: string; error?: string } | void>): Promise<void> {
   const queue = [...items];
-  let limit = Math.min(profile.max, Math.max(profile.min, queue.length || profile.min));
+  let limit = profile.min; // 从低起步，成功再逐步爬升到 max，避免开局并发过大触发限流
   let running = 0;
   let cooledUntil = 0;
   let okRun = 0;
