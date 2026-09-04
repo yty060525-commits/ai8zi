@@ -126,8 +126,8 @@ export function buildTaskPayload(record, task, tone = DEFAULT_TONE) {
       + (note ? '\n# 本命结论(已定，必须沿用，不得重算)\n' + note : '')
       + '\n\n# 本命事实数据(JSON，只依据此数据)\n' + JSON.stringify(natal)
       + OUTPUT_RULES + toneText
-      + '\n\n# 当前分析目标\n' + whenLabel + ageSeg
       + '\n\n# 本时段数据(JSON)\n' + JSON.stringify(scope);
+      + '\n\n# 当前分析目标\n' + whenLabel + ageSeg
   }
   return { messages: [{ role: 'system', content: system }, { role: 'user', content: userContent }] };
 }
