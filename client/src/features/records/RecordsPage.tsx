@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { listBaziRecords, syncAdminAll } from '../../data/clientRepository';
-import { exportRecordsSQLite } from '../../data/sqliteExport';
+import { exportRecordsSQLite, exportRecordsSQLText } from '../../data/sqliteExport';
 import { getServerSession, isServerMode } from '../../data/serverClient';
 import type { BaziRecord } from '../../types/domain';
 
@@ -66,17 +66,22 @@ export function RecordsPage({ onOpenPerson, refreshKey = 0 }: RecordsPageProps) 
   const chosenRecords = useMemo(() => records.filter((r) => includedIds.has(r.id)), [records, includedIds]);
 
   const openPanel = () => { setIncludedIds(new Set(selectedIds)); setPanelOpen(true); };
-  const doExport = async (asJson: boolean) => {
+  const doExport = async (kind: 'sqlite' | 'sql' | 'json') => {
     if (chosenRecords.length === 0) { showNote('请先勾选至少一位人物再导出。'); return; }
     setExporting(true);
     try {
-      if (asJson) {
-        downloadBlob(new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), records: chosenRecords }, null, 2)], { type: 'application/json' }), 'mingli-export-' + stamp() + '.json');
+      const date = stamp();
+      if (kind === 'json') {
+        downloadBlob(new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), records: chosenRecords }, null, 2)], { type: 'application/json' }), 'mingli-export-' + date + '.json');
         showNote('已导出所选 ' + chosenRecords.length + ' 人的 JSON 备份。');
+      } else if (kind === 'sql') {
+        const text = exportRecordsSQLText(chosenRecords);
+        downloadBlob(new Blob([text], { type: 'text/plain;charset=utf-8' }), 'mingli-export-' + date + '.sql');
+        showNote('已导出所选 ' + chosenRecords.length + ' 人的 SQL 文本(.sql)，可在任何文本工具/数据库软件打开。');
       } else {
         const bytes = await exportRecordsSQLite(chosenRecords);
         const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-        downloadBlob(new Blob([ab], { type: 'application/x-sqlite3' }), 'mingli-export-' + stamp() + '.sqlite');
+        downloadBlob(new Blob([ab], { type: 'application/x-sqlite3' }), 'mingli-export-' + date + '.sqlite');
         showNote('已导出所选 ' + chosenRecords.length + ' 人的 SQLite(.sqlite)，每人整条记录完整保存，可在设置页导入还原。');
       }
       setPanelOpen(false);
@@ -152,7 +157,7 @@ export function RecordsPage({ onOpenPerson, refreshKey = 0 }: RecordsPageProps) 
         <div className="modal-backdrop" onClick={() => { if (!exporting) setPanelOpen(false); }}>
           <div className="modal" role="dialog" aria-label="导出勾选的人物" onClick={(event) => event.stopPropagation()}>
             <div className="modal-header"><h2>导出勾选的人物</h2><button className="text-button" type="button" onClick={() => setPanelOpen(false)}>关闭</button></div>
-            <p className="copy-help">每个人导出为一条完整记录（基础信息＋排盘数据＋全部 AI 结果），导入回来可完整还原。取消某人的勾选则不带入文件。</p>
+            <p className="copy-help">每个人导出为一条完整记录（基础信息＋排盘数据＋全部 AI 结果），可导出 .sqlite / .sql 文本 / .json 三种，导入回来可完整还原。取消某人的勾选则不带入文件。</p>
             {selectedRecords.length === 0 && <p role="status">还没有勾选人物，请回到列表勾选后再来。</p>}
             <ul className="export-person-list">
               {selectedRecords.map((record) => {
@@ -168,8 +173,9 @@ export function RecordsPage({ onOpenPerson, refreshKey = 0 }: RecordsPageProps) 
               })}
             </ul>
             <div className="button-group">
-              <button className="primary-button" type="button" disabled={chosenRecords.length === 0 || exporting} onClick={() => void doExport(false)}>{exporting ? '导出中…' : '导出 SQL(.sqlite) ' + chosenRecords.length + ' 人'}</button>
-              <button className="text-button" type="button" disabled={chosenRecords.length === 0 || exporting} onClick={() => void doExport(true)}>导出 JSON 备份</button>
+              <button className="primary-button" type="button" disabled={chosenRecords.length === 0 || exporting} onClick={() => void doExport('sqlite')}>{exporting ? '导出中…' : '导出 SQL(.sqlite) ' + chosenRecords.length + ' 人'}</button>
+              <button className="text-button" type="button" disabled={chosenRecords.length === 0 || exporting} onClick={() => void doExport('sql')}>导出 SQL 文本(.sql)</button>
+              <button className="text-button" type="button" disabled={chosenRecords.length === 0 || exporting} onClick={() => void doExport('json')}>导出 JSON 备份</button>
             </div>
           </div>
         </div>

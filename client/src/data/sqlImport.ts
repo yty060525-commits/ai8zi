@@ -15,16 +15,21 @@ const fpOf = (r: BaziRecord) => [r.gender, r.yearPillar, r.monthPillar, r.dayPil
 
 /** 解析 .sqlite(与桌面版同构)或 .json 备份文件为记录数组。 */
 export async function parseBackupFile(bytes: Uint8Array, fileName: string): Promise<{ records: BaziRecord[] }> {
-  const head = new TextDecoder().decode(bytes.slice(0, 64)).trimStart();
+  const text = new TextDecoder().decode(bytes);
+  const head = text.slice(0, 64).trimStart();
+  // .json 备份
   if (fileName.toLowerCase().endsWith('.json') || head.startsWith('{')) {
-    const parsed = JSON.parse(new TextDecoder().decode(bytes)) as { exportedAt?: string; records?: BaziRecord[] };
+    const parsed = JSON.parse(text) as { exportedAt?: string; records?: BaziRecord[] };
     const records = Array.isArray(parsed.records) ? parsed.records : Array.isArray(parsed) ? (parsed as unknown as BaziRecord[]) : [];
     return { records };
   }
   const initSqlJs = (await import('sql.js')).default;
   const SQL = await initSqlJs({ locateFile: () => './sql-wasm.wasm' });
-  const db = new SQL.Database(bytes);
+  // SQLite 二进制(.sqlite/.sqlite3)按文件读；.sql 文本 dump 先执行整段 SQL 再读表
+  const isBinary = head.startsWith('SQLite format 3');
+  const db = isBinary ? new SQL.Database(bytes) : new SQL.Database();
   try {
+    if (!isBinary) db.exec(text);
     const rows = db.exec('SELECT id,name,gender,birth_year,birth_month,created_at,year_pillar,month_pillar,day_pillar,hour_pillar,non_ai_result,ai_status,ai_analysis,ai_overview,ai_error,ai_tasks FROM bazi_records');
     if (!rows.length) return { records: [] };
     const cols = rows[0].columns;
@@ -44,8 +49,6 @@ export async function parseBackupFile(bytes: Uint8Array, fileName: string): Prom
     db.close();
   }
 }
-
-/** 落库导入结果统计。 */
 export interface ImportSummary { added: number; updated: number; skipped: number; total: number }
 
 /** 把备份记录合并进本机库。 */
