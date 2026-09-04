@@ -41,17 +41,17 @@ export const REQUIRED_SECTIONS: Record<string, string[]> = {
   adjustment: ['后天调整', '事业适配', '健康注意'],
 };
 
-export interface ConcurrencyProfile { min: number; max: number; cooldownMs?: number; rampAfter?: number }
+export interface ConcurrencyProfile { min: number; max: number; cooldownMs?: number; rampAfter?: number; memoryKey?: string }
 /**
  * 波动并发(按“内容相似度”成组，而不是无差别全开)：
  * 同组任务的正文高度相似(同一命盘、只换一个 scope 行)，可放心一起并发；
- * 组与组(本命/年+月/大运/后天调整/补跑)之间仍串行，避免瞬时把差异很大的请求全砸给上游。
- * 每个组以 max 拉满起步；若出现限流/超时类失败则自动减半并冷却，之后连续成功再逐步回升。
+ * 组与组(本命/年+月/大运/后天调整/补跑)之间仍串行。
+ * 平衡点：记住上次稳定并发数直接起步(暖跑更快)；遇 429/超时立即减半冷却，成功每 2 次 +1 爬坡。
  */
 export const CONCURRENCY_PROFILES = {
-  scope: { min: 2, max: 6, rampAfter: 4, cooldownMs: 3000 },
-  decade: { min: 1, max: 3 },
-  repair: { min: 1, max: 4 },
+  scope: { min: 2, max: 8, rampAfter: 2, cooldownMs: 2500, memoryKey: 'mingli.concurrency.scope' },
+  decade: { min: 1, max: 3, rampAfter: 2, cooldownMs: 2500, memoryKey: 'mingli.concurrency.decade' },
+  repair: { min: 1, max: 5, rampAfter: 2, cooldownMs: 2500, memoryKey: 'mingli.concurrency.repair' },
 } satisfies Record<string, ConcurrencyProfile>;
 
 const THROTTLE_RE = /429|rate\s*limit|限流|HTTP\s*5\d\d|timeout|timed out|network|econn|超时/i;
@@ -59,13 +59,18 @@ export const isThrottleFailure = (error?: string): boolean => !!error && THROTTL
 
 async function adaptiveMap<T>(items: T[], profile: ConcurrencyProfile, worker: (item: T) => Promise<{ status?: string; error?: string } | void>): Promise<void> {
   const queue = [...items];
-  let limit = profile.min; // 从低起步，成功再逐步爬升到 max，避免开局并发过大触发限流
+  const readCeiling = () => {
+    if (!profile.memoryKey || typeof localStorage === 'undefined') return profile.min;
+    try { const n = Number(localStorage.getItem(profile.memoryKey)); return Number.isFinite(n) ? Math.max(profile.min, Math.min(profile.max, Math.round(n))) : profile.min; } catch { return profile.min; }
+  };
+  const persist = (v: number) => { if (profile.memoryKey) { try { localStorage.setItem(profile.memoryKey, String(v)); } catch { /* 忽略 */ } } };
+  let limit = readCeiling(); // 暖跑：记住上次稳定并发，直接起步；冷跑从 min 爬
   let running = 0;
   let cooledUntil = 0;
   let okRun = 0;
   let settled = false;
   let abortReason: unknown = null;
-  const rampAfter = profile.rampAfter ?? 3;
+  const rampAfter = profile.rampAfter ?? 2;
   const cooldownMs = profile.cooldownMs ?? 2500;
   await new Promise<void>((resolve, reject) => {
     const finish = () => { if (!settled) { settled = true; if (abortReason) reject(abortReason); else resolve(); } };
@@ -83,12 +88,11 @@ async function adaptiveMap<T>(items: T[], profile: ConcurrencyProfile, worker: (
             const throttled = !!outcome && outcome.status === 'failed' && isThrottleFailure(outcome.error);
             if (throttled) {
               okRun = 0;
-              if (now >= cooledUntil) { cooledUntil = now + cooldownMs; limit = Math.max(profile.min, Math.ceil(limit / 2)); }
+              if (now >= cooledUntil) { cooledUntil = now + cooldownMs; limit = Math.max(profile.min, Math.ceil(limit / 2)); persist(limit); }
             } else if (now >= cooledUntil) {
               okRun += 1;
-              if (okRun >= rampAfter && limit < profile.max) { limit += 1; okRun = 0; }
-            }
-            pump();
+              if (okRun >= rampAfter && limit < profile.max) { limit += 1; okRun = 0; persist(limit); }
+            }            pump();
             if (running === 0) finish();
           }
         })();
