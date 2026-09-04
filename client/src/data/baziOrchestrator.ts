@@ -32,11 +32,71 @@ export const isRetryableFailure = (error: string | undefined): boolean => {
   return true;
 };
 
-/** 并发上限执行器：控制同时发往大模型的请求数，降低被限流概率、进度更稳定。 */
-async function mapLimit<T>(items: T[], limit: number, worker: (item: T) => Promise<unknown>): Promise<void> {
+/** 每个任务类型硬性要求出现的【小节】。模型输出缺段时自动重写一次(与提示词“输出硬性要求”呼应)。 */
+export const REQUIRED_SECTIONS: Record<string, string[]> = {
+  baseline: ['身强身弱与喜忌', '健康', '事业', '财运', '爱情'],
+  annual: ['健康', '事业', '财运', '爱情', '刑冲克害批注'],
+  monthly: ['健康', '事业', '财运', '爱情', '刑冲克害批注'],
+  decade: ['健康', '事业', '财运', '爱情', '刑冲克害批注'],
+  adjustment: ['后天调整', '事业适配', '健康注意'],
+};
+
+export interface ConcurrencyProfile { min: number; max: number; cooldownMs?: number; rampAfter?: number }
+/**
+ * 波动并发(按“内容相似度”成组，而不是无差别全开)：
+ * 同组任务的正文高度相似(同一命盘、只换一个 scope 行)，可放心一起并发；
+ * 组与组(本命/年+月/大运/后天调整/补跑)之间仍串行，避免瞬时把差异很大的请求全砸给上游。
+ * 每个组以 max 拉满起步；若出现限流/超时类失败则自动减半并冷却，之后连续成功再逐步回升。
+ */
+export const CONCURRENCY_PROFILES = {
+  scope: { min: 2, max: 8 },
+  decade: { min: 1, max: 4 },
+  repair: { min: 2, max: 6 },
+} satisfies Record<string, ConcurrencyProfile>;
+
+const THROTTLE_RE = /429|rate\s*limit|限流|HTTP\s*5\d\d|timeout|timed out|network|econn|超时/i;
+export const isThrottleFailure = (error?: string): boolean => !!error && THROTTLE_RE.test(error);
+
+async function adaptiveMap<T>(items: T[], profile: ConcurrencyProfile, worker: (item: T) => Promise<{ status?: string; error?: string } | void>): Promise<void> {
   const queue = [...items];
-  const count = Math.min(limit, queue.length);
-  await Promise.all(Array.from({ length: count }, async () => { while (queue.length > 0) { const item = queue.shift(); if (item !== undefined) await worker(item); } }));
+  let limit = Math.min(profile.max, Math.max(profile.min, queue.length || profile.min));
+  let running = 0;
+  let cooledUntil = 0;
+  let okRun = 0;
+  let settled = false;
+  let abortReason: unknown = null;
+  const rampAfter = profile.rampAfter ?? 3;
+  const cooldownMs = profile.cooldownMs ?? 2500;
+  await new Promise<void>((resolve, reject) => {
+    const finish = () => { if (!settled) { settled = true; if (abortReason) reject(abortReason); else resolve(); } };
+    const pump = () => {
+      while (!settled && running < limit && queue.length > 0) {
+        const item = queue.shift()!;
+        running += 1;
+        void (async () => {
+          let outcome: { status?: string; error?: string } | void = undefined;
+          try { outcome = await worker(item); }
+          catch (error) { abortReason = abortReason ?? error; outcome = undefined; }
+          finally {
+            running -= 1;
+            const now = Date.now();
+            const throttled = !!outcome && outcome.status === 'failed' && isThrottleFailure(outcome.error);
+            if (throttled) {
+              okRun = 0;
+              if (now >= cooledUntil) { cooledUntil = now + cooldownMs; limit = Math.max(profile.min, Math.ceil(limit / 2)); }
+            } else if (now >= cooledUntil) {
+              okRun += 1;
+              if (okRun >= rampAfter && limit < profile.max) { limit += 1; okRun = 0; }
+            }
+            pump();
+            if (running === 0) finish();
+          }
+        })();
+      }
+      if (running === 0 && queue.length === 0) finish();
+    };
+    pump();
+  });
 }
 
 const taskLabel = (task: BaziAnalysisTask): string => {
@@ -142,33 +202,52 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
     });
   };
 
-  const step = async (task: BaziAnalysisTask) => {
+  // 进度落库串行化：并发完成时按顺序排队保存，避免“后写覆盖早写”导致丢任务(共享 aiTasks 每步只增不减)
+  let progressTail: Promise<unknown> = Promise.resolve();
+  const emitProgress = (progress: AiProgress): Promise<void> => {
+    const run = progressTail.then(() => onProgress?.(progress));
+    progressTail = run.then(() => undefined, () => undefined);
+    return run;
+  };
+  const sanitizeCompleted = (result: BaziTaskResult): BaziTaskResult => result.status === 'completed' && result.analysis
+    ? { ...result, analysis: sanitizeAnalysis(result.analysis) } : result;
+  const missingOf = (taskType: string, result: BaziTaskResult): string[] => {
+    const required = REQUIRED_SECTIONS[taskType];
+    const text = result.analysis ? (result.analysis.explanation || '') : '';
+    if (!required || !result.analysis) return [];
+    // 无任何【】小节的旧式散文输出无法校验结构(与复制兜底一致)，交给提示词约束；带小节却缺段才重试
+    if (!/【[^】]{1,16}】/.test(text)) return [];
+    return required.filter((name) => !text.includes('【' + name + '】'));
+  };
+
+  const step = async (task: BaziAnalysisTask): Promise<BaziTaskResult> => {
     ensureLive();
     const prev = aiTasks[task.taskId];
     // 历史脏结果(completed 但无正文)必须重跑
     const reusable = prev?.status === 'completed' && !!prev.analysis && (!!prev.analysis.explanation || !!prev.analysis.pattern);
-    let result: BaziTaskResult;
     if (reusable) {
-      result = prev;
-    } else {
-      // 自动重新分析：任何可重试因素导致失败都会自动再试一次(总额外重试上限见 options.retries)
-      result = await attemptOnce(task);
-      let attempt = 0;
-      while (attempt < retries && result.status === 'failed' && isRetryableFailure(result.error)) {
-        ensureLive();
-        if (retryDelayMs > 0) await sleep(retryDelayMs);
-        result = await attemptOnce(task);
-        attempt += 1;
-      }
-      ensureLive(); // 若停止发生在最后一次请求收尾阶段，丢弃该结果(不落库)
-      if (result.status === 'completed') {
-        result = { ...result, analysis: result.analysis ? sanitizeAnalysis(result.analysis) : undefined };
-      }
-      aiTasks[task.taskId] = result;
+      done += 1;
+      const progress: AiProgress = { done, total: tasks.length, label: taskLabel(task), record: snapshot() };
+      await emitProgress(progress);
+      return prev;
     }
+    // 自动重新分析：失败或缺【小节】(五个维度不齐)都会自动再试，用完 options.retries 的额外次数为止
+    let result: BaziTaskResult = sanitizeCompleted(await attemptOnce(task));
+    let attempt = 0;
+    while (attempt < retries) {
+      const missing = result.status === 'completed' ? missingOf(task.type, result) : [];
+      const retryable = result.status === 'failed' && isRetryableFailure(result.error);
+      if (!retryable && missing.length === 0) break;
+      ensureLive();
+      if (retryDelayMs > 0) await sleep(retryDelayMs);
+      attempt += 1;
+      result = sanitizeCompleted(await attemptOnce(task));
+    }
+    ensureLive(); // 若停止发生在最后一次请求收尾阶段，丢弃该结果(不落库)
+    aiTasks[task.taskId] = result;
     done += 1;
     const progress: AiProgress = { done, total: tasks.length, label: taskLabel(task), record: snapshot() };
-    await onProgress?.(progress);
+    await emitProgress(progress);
     return result;
   };
 
@@ -185,8 +264,8 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
       if (task.type === 'annual' || task.type === 'monthly' || task.type === 'decade') task.baseline = { summary } as never;
     }
   }
-  await mapLimit([...pick('annual'), ...pick('monthly')], 4, step);
-  await mapLimit(pick('decade'), 3, step);
+  await adaptiveMap([...pick('annual'), ...pick('monthly')], CONCURRENCY_PROFILES.scope, step);
+  await adaptiveMap(pick('decade'), CONCURRENCY_PROFILES.decade, step);
   // 工作/生活/职业知识：最后才上传(等大运流年流月都分析完，避免上下文污染)
   if (favorite && baselineResult.status === 'completed') {
     const guide: ElementGuide = ELEMENT_GUIDES[favorite];
@@ -195,7 +274,7 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
       baseline: baselineResult,
       guide: { element: guide.element, lifestyle: guide.lifestyle, career: guide.career, health: guide.health },
     });
-    await mapLimit(tasks.filter((t) => t.type === 'adjustment'), 1, step);
+    await adaptiveMap(tasks.filter((t) => t.type === 'adjustment'), { min: 1, max: 1 }, step);
   }
   ensureLive();
   // 整批跑完后自动“补跑一轮”：把仍然失败(且属于可重试因素)的任务再调一次 AI，
@@ -208,20 +287,25 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
     const waitMs = isTest ? 0 : REPAIR_WAIT_MS;
     if (waitMs > 0) await sleep(waitMs);
     if (!signal?.aborted) await onProgress?.({ done, total: tasks.length, label: '自动重试失败任务(' + stillFailed.length + ')…', record: snapshot() });
-    const repairStep = async (task: BaziAnalysisTask) => {
+    const repairStep = async (task: BaziAnalysisTask): Promise<BaziTaskResult> => {
       ensureLive();
-      let result = await attemptOnce(task);
+      const sanitizeDone = (r: BaziTaskResult): BaziTaskResult => r.status === 'completed' && r.analysis ? { ...r, analysis: sanitizeAnalysis(r.analysis) } : r;
+      const missingOfType = (r: BaziTaskResult): string[] => { const required = REQUIRED_SECTIONS[task.type]; const text = r.analysis ? (r.analysis.explanation || '') : ''; if (!required || !r.analysis) return []; if (!/【[^】]{1,16}】/.test(text)) return []; return required.filter((name) => !text.includes('【' + name + '】')); };
+      let result: BaziTaskResult = sanitizeDone(await attemptOnce(task));
       let attempt = 0;
-      while (attempt < REPAIR_RETRIES && result.status === 'failed' && isRetryableFailure(result.error)) {
+      while (attempt < REPAIR_RETRIES) {
+        const missing = result.status === 'completed' ? missingOfType(result) : [];
+        const retryable = result.status === 'failed' && isRetryableFailure(result.error);
+        if (!retryable && missing.length === 0) break;
         if (retryDelayMs > 0) await sleep(retryDelayMs);
-        result = await attemptOnce(task);
         attempt += 1;
+        result = sanitizeDone(await attemptOnce(task));
       }
       ensureLive();
-      if (result.status === 'completed') result = { ...result, analysis: result.analysis ? sanitizeAnalysis(result.analysis) : undefined };
       aiTasks[task.taskId] = result;
+      return result;
     };
-    await mapLimit(stillFailed, 3, repairStep);
+    await adaptiveMap(stillFailed, CONCURRENCY_PROFILES.repair, repairStep);
     ensureLive();
   }
   const statuses = Object.values(aiTasks).map((item) => item.status);

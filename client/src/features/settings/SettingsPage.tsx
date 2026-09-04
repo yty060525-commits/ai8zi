@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { getServiceStatus, clearServiceCredential, saveServiceCredential, setSelectedService, type ServiceId } from '../../data/aiSettings';
 import { compactRecords, getStorageStats, runAiSelfTest, type AiSelfTest } from '../../data/storageInfo';
 import { listBaziRecords, reloadLocalForSession } from '../../data/clientRepository';
 import { exportRecordsSQLite } from '../../data/sqliteExport';
+import { importRecords, parseBackupFile, type ImportMode } from '../../data/sqlImport';
 import { apiAuth, getServerSession, getServerUrl, setServerSession, setServerUrl, type ServerSession } from '../../data/serverClient';
 
 type DisplayStatus = '已配置' | '未配置' | '保存中' | '保存失败';
@@ -22,6 +23,10 @@ export function SettingsPage() {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<AiSelfTest | null>(null);
   const [exportNote, setExportNote] = useState<string>();
+  const [importMode, setImportMode] = useState<ImportMode>('overwrite');
+  const [importNote, setImportNote] = useState<string>();
+  const [importing, setImporting] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
   const [serverUrl, setUrl] = useState<string>(() => getServerUrl());
   const [srvUser, setSrvUser] = useState('');
   const [srvPw, setSrvPw] = useState('');
@@ -78,6 +83,24 @@ export function SettingsPage() {
       setExportNote('已导出 JSON 备份，共 ' + records.length + ' 条记录。');
     } catch (error) {
       setExportNote('导出失败：' + (error instanceof Error ? error.message : String(error)));
+    }
+  }
+  async function onImportFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) { return; }
+    setImporting(true); setImportNote(undefined);
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const { records } = await parseBackupFile(bytes, file.name);
+      if (records.length === 0) { setImportNote('文件中没有可导入的记录：' + file.name); return; }
+      const summary = await importRecords(records, importMode);
+      await refreshStorage();
+      setImportNote('导入完成：新增 ' + summary.added + ' 条、覆盖 ' + summary.updated + ' 条、跳过 ' + summary.skipped + ' 条（文件共 ' + summary.total + ' 条）。' + (importMode === 'dedupe' ? '（同盘已去重，现有记录未被改动）' : ''));
+    } catch (error) {
+      setImportNote('导入失败：' + (error instanceof Error ? error.message : String(error)) + '。请确认选的是 .sqlite 或 .json 备份。');
+    } finally {
+      setImporting(false);
     }
   }
   async function selfTest() {
@@ -158,6 +181,20 @@ export function SettingsPage() {
     <p className="ai-status" role="status">配置状态：{status}　·　数据库：{storage ? `${storage.records} 条记录 / 缓存 ${storage.cache} 条 / ${(storage.bytes / 1024).toFixed(0)} KB` : '读取中…'}</p>
     <div className="button-group"><button className="text-button" type="button" disabled={compacting || !storage} onClick={() => void compress()}>{compacting ? '压缩中…' : '压缩旧记录（缩小数据库）'}</button><button className="text-button" type="button" disabled={testing} onClick={() => void selfTest()}>{testing ? '自检中…' : 'AI 连通自检（微小消耗）'}</button><button className="text-button" type="button" onClick={() => void exportSQLite()}>导出数据库(.sqlite)</button><button className="text-button" type="button" onClick={() => void exportJson()}>导出JSON备份</button></div>
     {exportNote && <p role="status">{exportNote}</p>}
+    <section aria-label="数据导入"><h2>数据导入（.sqlite / .json 备份）</h2>
+      <p className="page-description">导入后可继续离线查看；桌面版会写入本机数据库，联网账号会自动同步到服务器。遇到同名记录时按下方选择处理。</p>
+      <div className="import-mode-row">
+        <label className="checkbox-label"><input type="radio" name="importMode" checked={importMode === 'overwrite'} onChange={() => setImportMode('overwrite')} />追加并覆盖（同 id 覆盖、新记录追加）</label>
+        <label className="checkbox-label"><input type="radio" name="importMode" checked={importMode === 'dedupe'} onChange={() => setImportMode('dedupe')} />同盘去重（性别+四柱+出生年相同则跳过）</label>
+      </div>
+      <div className="button-group">
+        <button className="text-button" type="button" disabled={importing} onClick={() => fileRef.current?.click()}>{importing ? '导入中…' : '导入备份文件…'}</button>
+        <span className="copy-help">支持本应用导出的 .sqlite / .json；也可以直接选择桌面版同目录下的 data\bazi_records.sqlite3。</span>
+      </div>
+      <input ref={fileRef} type="file" accept=".sqlite,.json,application/json,application/octet-stream" style={{ display: 'none' }} aria-hidden="true"
+        onChange={(event: ChangeEvent<HTMLInputElement>) => { void onImportFile(event); }} />
+      {importNote && <p role="status">{importNote}</p>}
+    </section>
     {testResult && <p role="status">{testResult.ok ? `自检通过：${testResult.provider} · ${testResult.model} · ${testResult.latencyMs ?? ''}ms · 回复“${testResult.reply ?? ''}”` : `自检失败：${testResult.message ?? '未知错误'}`}</p>}
     {testResult && <button className="text-button" type="button" onClick={() => setTestResult(null)}>关闭自检结果</button>}
     <section className="server-section" aria-label="服务器 API 服务"><h2>服务器通道（默认）</h2>

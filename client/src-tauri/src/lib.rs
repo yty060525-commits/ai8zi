@@ -231,6 +231,7 @@ pub struct AiTaskInput {
     pub year: Option<i32>, pub month: Option<i32>,
     pub annual: Option<Value>, pub monthly: Option<Value>, pub baseline: Option<Value>,
     pub guide: Option<Value>, // 行动改变/职业适配：喜用五行对应的资料
+    pub tone: Option<i32>, // 措辞语气 0..100（滑杆），None 视为 80
 }
 
 #[derive(Debug, Serialize)]
@@ -252,6 +253,15 @@ pub(crate) fn provider_temperature(provider: &AiProvider) -> Option<i32> {
     match provider { AiProvider::Deepseek => None, AiProvider::Kimi => Some(1) }
 }
 
+fn clamp_tone(tone: Option<i32>) -> i32 { match tone { Some(n) => n.clamp(0, 100), None => 80 } }
+fn tone_instruction(tone: i32) -> &'static str {
+    if tone >= 90 { "语气：温柔夸夸。以积极、美好、有鼓励性的语言为主；如确有不足，先说优点亮点，再把不足放进“建议/期待/贵人提点”式的委婉表达里轻轻带过，避免直接批评。" }
+    else if tone >= 60 { "语气：温和优先。正面与亮点先说、多说(约占八成篇幅)，不足只以委婉、建设性的方式简要点到(约占两成)，措辞照顾感受，不说重话。" }
+    else if tone >= 45 { "语气：中立客观。好坏都如实、平衡地说明，不回避问题也不夸大优点，保持专业、就事论事。" }
+    else if tone >= 10 { "语气：偏犀利。减少客套铺垫，直接点出风险、短板与容易踩坑之处，同时给出依据和可操作的改进方向，不粉饰。" }
+    else { "语气：犀利直白。重点明显指出不利之处、性格短板与应戒之事，直截了当、不留情面，但每句都要有命理依据，不做人身攻击。" }
+}
+fn tone_bucket(tone: Option<i32>) -> i32 { (clamp_tone(tone) + 2) / 5 * 5 }
 fn now_text() -> String {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis().to_string()).unwrap_or_else(|_| "0".into())
@@ -260,9 +270,10 @@ fn now_text() -> String {
 /// 确定性缓存键：同一 八字+性别+任务类型+年份+月份+出生年(年龄) + 模型 => 同一输出。
 /// 同一命盘(不同人同名同盘)命中同一缓存，重复分析与断点续跑不再花钱。
 pub(crate) fn cache_key(record: &BaziRecord, task: &AiTaskInput, model: &str) -> String {
-    format!("v4|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", model, record.gender,
+    // v5: 语气分档参与缓存键(每 5 度一档)，与服务器端口径一致；同盘同任务同语气命中同缓存
+    format!("v5|{model}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", record.gender,
         record.year_pillar, record.month_pillar, record.day_pillar, record.hour_pillar,
-        task.task_type, task.year.unwrap_or(0), task.month.unwrap_or(0), record.birth_year)
+        task.task_type, task.year.unwrap_or(0), task.month.unwrap_or(0), record.birth_year, tone_bucket(task.tone))
 }
 
 pub(crate) fn read_cache(connection: &rusqlite::Connection, key: &str) -> Result<Option<String>, String> {
@@ -360,9 +371,10 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
                 "baselineSummary": baseline_text,
                 "guide": guide_text,
             });
-            let content = format!("你是资深子平命理师。根据【本命结论】的喜用五行与下方【资料库】中对应五行的后天调整/职业知识，输出该命局的【后天调整】与【事业职业适配】建议(长文，尽量贴合资料，不要另造体系)。禁止输出/* */注释、HTML注释或代码块标记，只给最终正文。JSON schema：{{\"explanation\":长文}}，explanation 用【后天调整】【事业适配】【健康注意】分段；每个主题内部再分点：每条单独一行、行首 1. 2. 3. 编号，一句话一条，不要整段连排。\n\n# 本命结论\n{}\n\n# 资料库(喜用{})\n{}", baseline_text, guide.get("element").and_then(|e| e.as_str()).unwrap_or(""), guide_text);
+            let mut content = format!("你是资深子平命理师。根据【本命结论】的喜用五行与下方【资料库】中对应五行的后天调整/职业知识，输出该命局的【后天调整】与【事业职业适配】建议(长文，尽量贴合资料，不要另造体系)。禁止输出/* */注释、HTML注释或代码块标记，只给最终正文。JSON schema：{{\"explanation\":长文}}，explanation 必须依次各出现一次【后天调整】【事业适配】【健康注意】(不得合并、省略或改名)，每段至少 1 条；每个主题内部再分点：每条单独一行、行首 1. 2. 3. 编号，一句话一条，不要整段连排。\n\n# 本命结论\n{}\n\n# 资料库(喜用{})\n{}", baseline_text, guide.get("element").and_then(|e| e.as_str()).unwrap_or(""), guide_text);
+            content = format!("{content}\n\n# 语气要求\n{}", tone_instruction(clamp_tone(task.tone)));
             return Ok(serde_json::json!({
-                "model": "deepseek-reasoner", "promptVersion": "ctx-v4", "thinking": true,
+                "model": "deepseek-reasoner", "promptVersion": "ctx-v5", "thinking": true,
                 "taskId": task.task_id, "type": task.task_type, "year": task.year, "month": task.month,
                 "nonAiResult": body,
                 "messages": [{ "role": "user", "content": content }]
@@ -425,11 +437,11 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
 let is_scope = matches!(task.task_type.as_str(), "annual" | "monthly" | "decade");
     let prompt = if is_scope {
         format!(
-            "你是资深子平命理师，仅分析时段运势。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行或关系。禁止输出/* */注释、HTML注释或任何代码块/围栏标记，只给最终正文。当前分析目标：{when}{age_seg}。本命的身强身弱/格局/喜忌已在 natal 结论中单独确定，你不要再输出强弱/格局/喜忌判断。用 JSON(仅 JSON)返回，schema：{{\"title\":\"两行式标题(可选)\",\"explanation\":长文}}。title 需有古风韵味并只能引用下列古籍原文/口诀(标注出处，禁止自创伪古文)：六合(《三命通会》六合歌)：子与丑合、寅与亥合、卯与戌合、辰与酉合、巳与申合、午与未合；六冲(《渊海子平》冲诀，地支七位为冲)：子午、丑未、寅申、卯酉、辰戌、巳亥相冲；三刑(《三命通会·论三刑》)：子刑卯卯刑子为无礼之刑，寅刑巳巳刑申申刑寅为恃势之刑，丑刑戌戌刑未未刑丑为无恩之刑，辰午酉亥自刑；六害(穿害口诀)：子未害丑午害寅巳害卯辰害申亥害酉戌害；六破(破口诀)：子酉破丑辰破寅亥破卯午破巳申破未戌破。若无对应原文则标题用干支+四字直书(如：卯戌六合·和合之象)，不得编造引文。explanation 按【健康】【事业】【财运】【爱情】分段展开；若 scope 提供 annualHits/monthlyHits/decadeHits 关系命中，末尾加【刑冲克害批注】。批注必须是编号要点，每行格式：数字. 关系（干支实例说明）：一句影响，例如：1. 三合（巳酉丑半合）：…；2. 六害（丙戌）：…。每条一句话，把 合/冲/刑/害/破/克 的对象与含义写清楚；无命中则省略该段。各主题全文只出现一次，勿先短句后长文重复。每个主题内部必须分点陈述：每条单独一行、行首用 1. 2. 3. 编号，一句话一条，不要整段连排文字。"
+            "你是资深子平命理师，仅分析时段运势。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行或关系。禁止输出/* */注释、HTML注释或任何代码块/围栏标记，只给最终正文。当前分析目标：{when}{age_seg}。本命的身强身弱/格局/喜忌已在 natal 结论中单独确定，你不要再输出强弱/格局/喜忌判断。用 JSON(仅 JSON)返回，schema：{{\"title\":\"两行式标题(可选)\",\"explanation\":长文}}。title 需有古风韵味并只能引用下列古籍原文/口诀(标注出处，禁止自创伪古文)：六合(《三命通会》六合歌)：子与丑合、寅与亥合、卯与戌合、辰与酉合、巳与申合、午与未合；六冲(《渊海子平》冲诀，地支七位为冲)：子午、丑未、寅申、卯酉、辰戌、巳亥相冲；三刑(《三命通会·论三刑》)：子刑卯卯刑子为无礼之刑，寅刑巳巳刑申申刑寅为恃势之刑，丑刑戌戌刑未未刑丑为无恩之刑，辰午酉亥自刑；六害(穿害口诀)：子未害丑午害寅巳害卯辰害申亥害酉戌害；六破(破口诀)：子酉破丑辰破寅亥破卯午破巳申破未戌破。若无对应原文则标题用干支+四字直书(如：卯戌六合·和合之象)，不得编造引文。explanation 必须依次各出现一次【健康】【事业】【财运】【爱情】【刑冲克害批注】，顺序一致，不得合并、省略或改名；【刑冲克害批注】依据 scope 的 annualHits/monthlyHits/decadeHits 逐条编号，每行格式：数字. 关系（干支实例说明）：一句影响，例如：1. 三合（巳酉丑半合）：…；2. 六害（丙戌）：…；每条一句话，把 合/冲/刑/害/破/克 的对象与含义写清楚；若没有任何命中，该段写一条 1. 本期无重大刑冲克害（仅提示）。各主题全文只出现一次，勿先短句后长文重复。每个主题内部必须分点陈述：每条单独一行、行首用 1. 2. 3. 编号，一句话一条，不要整段连排文字。"
         )
     } else {
         format!(
-            "你是资深子平命理师。严格依据下方【事实数据(JSON)】中的确定性命理数据作答，禁止自行推算干支、十神、五行、藏干或干支关系。禁止输出/* */注释、HTML注释或任何代码块/围栏标记，只给最终正文。当前分析目标：本命{age_seg}。用 JSON(仅 JSON)返回，schema：{{\"pattern\":格局,\"strength\":身强/身弱/中和,\"usefulElements\":[喜用],\"avoidElements\":[忌用],\"explanation\":长文}}。explanation 从【身强身弱与喜忌】开始，依次【健康】【事业】【财运】【爱情】，以【总评/行为建议】收尾；各主题全文只出现一次，禁止在 JSON 顶层重复 overall/health/career/wealth/love/notice 等字段，也不要先给短句摘要再写长文。每个主题内部必须分点陈述：每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。"
+            "你是资深子平命理师。严格依据下方【事实数据(JSON)】中的确定性命理数据作答，禁止自行推算干支、十神、五行、藏干或干支关系。禁止输出/* */注释、HTML注释或任何代码块/围栏标记，只给最终正文。当前分析目标：本命{age_seg}。用 JSON(仅 JSON)返回，schema：{{\"pattern\":格局,\"strength\":身强/身弱/中和,\"usefulElements\":[喜用],\"avoidElements\":[忌用],\"explanation\":长文}}。explanation 必须以【身强身弱与喜忌】开头，随后按顺序各出现一次【健康】【事业】【财运】【爱情】(不得合并、省略或改名)，末尾可以加【总评/行为建议】收尾。判断身强身弱按四步逐条写明依据：①得令：日主是否得月令生旺(月支藏干旺衰与日主于月支的十二长生)；②得地：四支及藏干是否有日主印比禄刃根气；③得势：四柱印星比劫(生我、同我)出现几次(以五行个数/十神统计为准)；④克泄耗：食伤财官杀(我生、我克、克我)出现几次；权衡后下结论。喜忌按通则推导并写明：身弱喜印比、忌克泄耗，身强反之，中和看调候通关。禁止在 JSON 顶层重复 overall/health/career/wealth/love/notice 等字段，也不要先给短句摘要再写长文。每个主题内部必须分点陈述：每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。"
         )
     };
     // 关键：把“事实数据 JSON”直接嵌入消息正文 —— 模型只能看到 messages，
@@ -441,9 +453,10 @@ let is_scope = matches!(task.task_type.as_str(), "annual" | "monthly" | "decade"
         task.baseline.as_ref().and_then(|b| b.get("summary")).and_then(|s| s.as_str())
             .map(|s| format!("\n# 本命结论(已定，必须沿用，不得推翻或重算)\n{s}\n")).unwrap_or_default()
     } else { String::new() };
-    let content = format!("{prompt}{natal_note}\n\n# 事实数据(JSON，务必只依据此数据，禁止自行推算干支/十神/五行/藏干或关系)\n{context_text}");
+let mut content = format!("{prompt}{natal_note}\n\n# 事实数据(JSON，务必只依据此数据，禁止自行推算干支/十神/五行/藏干或关系)\n{context_text}");
+    content = format!("{content}\n\n# 输出硬性要求(违反即整篇作废重写)\n1. 全篇一律使用简体中文(UTF-8)，禁止任何繁体字、异体字混入。\n2. explanation 的【】小节必须按本任务规定逐段出现、各只出现一次，顺序一致，不得合并、省略或改名。\n3. 每个小节至少 1 条编号要点；每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。\n\n# 语气要求\n{}", tone_instruction(clamp_tone(task.tone)));
     Ok(serde_json::json!({
-        "model": "deepseek-reasoner", "promptVersion": "ctx-v2", "thinking": true,
+        "model": "deepseek-reasoner", "promptVersion": "ctx-v5", "thinking": true,
         "taskId": task.task_id, "type": task.task_type, "year": task.year, "month": task.month,
         "nonAiResult": context,
         "messages": [{ "role": "user", "content": content }]
@@ -621,7 +634,7 @@ mod tests {
     #[test]
     fn ai_payload_keeps_structured_facts_and_stable_task_fields() {
         let record = BaziRecord { id: Some("r1".into()), name: "名".into(), gender: "male".into(), birth_year: 1984, birth_month: 2, created_at: "2025-01-01".into(), year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "庚午".into(), hour_pillar: "壬午".into(), non_ai_result: Some(r#"{"zodiac":"鼠"}"#.into()), ai_status: "pending".into(), ai_analysis: None, ai_overview: None, ai_error: None, ai_tasks: None };
-        let task = commands::AiTaskInput { task_id: "task-03".into(), task_type: "annual".into(), year: Some(2025), month: None, annual: None, monthly: None, baseline: None, guide: None };
+        let task = commands::AiTaskInput { task_id: "task-03".into(), task_type: "annual".into(), year: Some(2025), month: None, annual: None, monthly: None, baseline: None, guide: None, tone: None };
         let payload = commands::build_ai_request_payload(&record, &task).unwrap();
         assert_eq!(payload["taskId"], "task-03");
         assert_eq!(payload["type"], "annual");
@@ -662,7 +675,7 @@ mod tests {
             ]
         });
         let record = BaziRecord { id: Some("r1".into()), name: "名".into(), gender: "male".into(), birth_year: 1984, birth_month: 2, created_at: "2025-01-01".into(), year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "庚午".into(), hour_pillar: "壬午".into(), non_ai_result: Some(big.to_string()), ai_status: "pending".into(), ai_analysis: None, ai_overview: None, ai_error: None, ai_tasks: None };
-        let task = commands::AiTaskInput { task_id: "task-03".into(), task_type: "annual".into(), year: Some(2025), month: None, annual: None, monthly: None, baseline: None, guide: None };
+        let task = commands::AiTaskInput { task_id: "task-03".into(), task_type: "annual".into(), year: Some(2025), month: None, annual: None, monthly: None, baseline: None, guide: None, tone: None };
         let payload = commands::build_ai_request_payload(&record, &task).unwrap();
         assert_eq!(payload["nonAiResult"]["natal"]["zodiac"], "鼠");
         assert_eq!(payload["nonAiResult"]["natal"]["dayMaster"], "庚");
@@ -673,7 +686,7 @@ mod tests {
         assert_eq!(scope["annual"]["ganZhi"], "乙巳");
         assert_eq!(scope["decade"]["ganZhi"], "辛未");
         assert_eq!(scope["age"], 41);
-        assert!(serde_json::to_string(&payload).unwrap().len() < 4000);
+        assert!(serde_json::to_string(&payload).unwrap().len() < 8000); // 上下文仍只含单行 scope(数 KB)，不含整包流年/流月
     }
 
     #[test]
@@ -683,7 +696,7 @@ mod tests {
             "greatFortunes": [{ "ganZhi": "辛未", "startYear": 2017, "endYear": 2026 }]
         });
         let record = BaziRecord { id: Some("r1".into()), name: "名".into(), gender: "male".into(), birth_year: 1984, birth_month: 2, created_at: "2025-01-01".into(), year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "庚午".into(), hour_pillar: "壬午".into(), non_ai_result: Some(big.to_string()), ai_status: "pending".into(), ai_analysis: None, ai_overview: None, ai_error: None, ai_tasks: None };
-        let task = commands::AiTaskInput { task_id: "task-26".into(), task_type: "decade".into(), year: Some(2017), month: None, annual: None, monthly: None, baseline: None, guide: None };
+        let task = commands::AiTaskInput { task_id: "task-26".into(), task_type: "decade".into(), year: Some(2017), month: None, annual: None, monthly: None, baseline: None, guide: None, tone: None };
         let payload = commands::build_ai_request_payload(&record, &task).unwrap();
         let scope = &payload["nonAiResult"]["scope"];
         assert_eq!(scope["decade"]["ganZhi"], "辛未");
@@ -736,7 +749,7 @@ mod tests {
     #[test]
     fn ai_cache_key_is_deterministic_and_scope_sensitive() {
         let record = BaziRecord { id: Some("r1".into()), name: "名".into(), gender: "male".into(), birth_year: 1984, birth_month: 2, created_at: "2025-01-01".into(), year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "庚午".into(), hour_pillar: "壬午".into(), non_ai_result: None, ai_status: "pending".into(), ai_analysis: None, ai_overview: None, ai_error: None, ai_tasks: None };
-        let mk = |y: Option<i32>, m: Option<i32>| commands::AiTaskInput { task_id: "t".into(), task_type: "monthly".into(), year: y, month: m, annual: None, monthly: None, baseline: None, guide: None };
+        let mk = |y: Option<i32>, m: Option<i32>| commands::AiTaskInput { task_id: "t".into(), task_type: "monthly".into(), year: y, month: m, annual: None, monthly: None, baseline: None, guide: None, tone: None };
         let k1 = commands::cache_key(&record, &mk(Some(2027), Some(5)), "deepseek-reasoner");
         let k2 = commands::cache_key(&record, &mk(Some(2027), Some(5)), "deepseek-reasoner");
         let k3 = commands::cache_key(&record, &mk(Some(2027), Some(6)), "deepseek-reasoner");

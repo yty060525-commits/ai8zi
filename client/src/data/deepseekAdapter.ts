@@ -42,9 +42,9 @@ export function buildAiRequestPayload(record: BaziRecord, task?: BaziAnalysisTas
   };
 }
 
-export async function analyzeTask(record: BaziRecord, task: BaziAnalysisTask): Promise<BaziTaskResult> {
+export async function analyzeTask(record: BaziRecord, task: BaziAnalysisTask, tone?: number): Promise<BaziTaskResult> {
   if (inTauri()) {
-    try { return await invoke<BaziTaskResult>('run_ai_task', { record: toTauriRecord(record), task }); }
+    try { return await invoke<BaziTaskResult>('run_ai_task', { record: toTauriRecord(record), task: { ...task, tone: tone } }); }
     catch (error) { return { task, status: 'failed', error: error instanceof Error ? error.message : 'request failed' }; }
   }
   if (secureRunner) return secureRunner(record, task);
@@ -75,7 +75,7 @@ export async function analyzeBazi(record: BaziRecord, task?: BaziAnalysisTask, o
   if (isBrowser && import.meta.env.MODE !== 'test') return browserDirect(record, task, options);
   if (inTauri()) {
     let result: BaziTaskResult;
-    try { result = await invoke<BaziTaskResult>('run_ai_task', { record: toTauriRecord(record), task }); }
+    try { result = await invoke<BaziTaskResult>('run_ai_task', { record: toTauriRecord(record), task: { ...task, tone: options?.tone } }); }
     catch (error) { return { status: 'failed', error: error instanceof Error ? error.message : 'request failed' }; }
     if (result.status === 'completed' && result.analysis) return { status: 'completed', analysis: result.analysis };
     return { status: result.status === 'failed' ? 'failed' : 'not_configured', error: result.error };
@@ -118,9 +118,14 @@ async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask, opts: 
     }
   }
   const when = task ? (task.type === 'annual' ? y + '年' : task.type === 'monthly' ? y + '年' + task.month + '月' : task.type === 'decade' ? '大运' : '本命') : '本命';
+  const isBaseline = !task || task.type === 'baseline';
+  const fiveDimRule = isBaseline
+    ? 'explanation 必须以【身强身弱与喜忌】开头，随后按序各出现一次【健康】【事业】【财运】【爱情】(不得合并、省略或改名)。判断身强身弱按四步写明依据：①得令(月支生旺与十二长生)；②得地(四支藏干印比禄刃根基)；③得势(印比出现次数)；④克泄耗(食伤财官杀次数)，权衡后下结论；喜忌按通则：身弱喜印比、忌克泄耗，身强反之。'
+    : 'explanation 必须依次各出现一次【健康】【事业】【财运】【爱情】【刑冲克害批注】，顺序一致，不得合并、省略或改名；【刑冲克害批注】依据 annualHits/monthlyHits/decadeHits 逐条编号，每行 数字. 关系（干支实例）：一句影响；无命中时写 1. 本期无重大刑冲克害（仅提示）。';
   const instruction = '你是资深子平命理师。仅依据下方JSON事实作答，禁止自行推算干支/十神/五行。目标：' + when
-    + '。若为年份/月份分析且已有本命结论摘要请沿用。输出JSON仅含 explanation(长文) 以及可选 title；本命输出含 pattern/strength/usefulElements/avoidElements/explanation。正文必须分点：每个主题每条单独一行，行首 1. 2. 3. 编号，一句话一条，不要整段连排。' + toneInstructionText(opts.tone)
-    + ' 不要输出/* */注释或代码块。';
+    + '。若为年份/月份分析且已有本命结论摘要请沿用。' + (isBaseline ? '输出 JSON 含 pattern/strength/usefulElements/avoidElements/explanation。' : '输出 JSON 仅含 explanation 以及可选 title。') + fiveDimRule
+    + ' 全篇一律简体中文，禁止繁体字。正文必须分点：每个主题每条单独一行，行首 1. 2. 3. 编号，一句话一条，不要整段连排。' + toneInstructionText(opts.tone)
+    + ' 不要输出注释或代码块。';
   const content = instruction + '\n\n# 事实数据(JSON)\n' + JSON.stringify({ natal, scope });
   const payload: Record<string, unknown> = { model: 'deepseek-reasoner', max_tokens: 32768, messages: [
     { role: 'system', content: '请把思考压缩到最短，直接输出符合要求的JSON正文。' },

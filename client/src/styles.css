@@ -119,3 +119,32 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .copy-help { font-size: 12px; color: #777; margin: 6px 0 0; line-height: 1.5; }
 .copy-empty-hint { color: #999; font-size: 12px; line-height: 28px; }
 
+
+
+/* ---- 记录小方格：勾选 + 打开按钮（导出批量） ---- */
+.records-toolbar { grid-template-columns: 1fr auto; }
+.toolbar-buttons { display: flex; gap: 10px; align-items: end; }
+.person-item { grid-template-columns: auto 1fr; column-gap: 10px; padding: 12px 16px; }
+.records-check { display: flex; align-items: flex-start; justify-content: center; padding-top: 6px; cursor: pointer; }
+.records-check input { width: 16px; height: 16px; min-height: 0; margin: 0; }
+.person-open { display: grid; grid-template-columns: 1fr auto; gap: 10px 14px; align-items: center; width: 100%; border: 0; background: transparent; padding: 0; margin: 0; text-align: left; color: inherit; font: inherit; cursor: pointer; }
+.person-open:focus-visible { outline: 2px solid #171717; outline-offset: 2px; }
+.records-selectbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 14px; padding: 10px 14px; background: #f7f6f1; border: 1px solid #ccc; }
+.records-selectbar .export-selected { margin-bottom: 0; }
+.select-summary { font-weight: 600; }
+.copy-help { color: #666; font-size: 13px; }
+.export-person-list { list-style: none; padding: 0; margin: 12px 0; max-height: 46vh; overflow: auto; border: 1px solid #e3e3e3; background: #fff; }
+.export-person-list li { padding: 8px 12px; border-bottom: 1px solid #eee; }
+.export-person-list li:last-child { border-bottom: 0; }
+.import-mode-row { display: flex; flex-wrap: wrap; gap: 8px 22px; padding: 10px 0; }
+.import-mode-row .checkbox-label { gap: 8px; }
+@media (max-width: 700px) {
+  .records-toolbar { grid-template-columns: 1fr; align-items: stretch; }
+  .toolbar-buttons { justify-content: flex-start; }
+}
+@media (max-width: 520px) {
+  .person-item { grid-template-columns: auto 1fr; gap: 7px 8px; padding: 12px 8px; min-height: 0; }
+  .records-check { padding-top: 2px; }
+  .person-open { grid-template-columns: 1fr auto; gap: 7px 12px; }
+  .records-selectbar { padding: 8px 10px; }
+}
