@@ -360,63 +360,70 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
   async function requestAnalysis(base: BaziRecord = record, _auto = false) {
     if (busyRef.current) return;
     cancelAutoRetry();
-    const currentTone = toneRef.current;
-    const expectedIds = buildBaziTasks(base).map((task) => task.taskId);
-    const completeTasks = expectedIds.filter((id) => {
-      const item = base.aiTasks?.[id];
-      return item?.status === 'completed' && !!item.analysis && (!!item.analysis.explanation || !!item.analysis.pattern);
-    });
-    if (expectedIds.length > 0 && completeTasks.length === expectedIds.length) {
-      if (base.toneUsed === currentTone) {
-        setProgress(null);
-        setHint('已存在该语气下的完整分析结果（命中缓存/已保存）。要改语气后重出，请拖动下方语气条再点 AI 分析。');
-        return;
-      }
-      // 语气变了：清掉本地旧结果，按新语气重新生成(服务器缓存按语气分档，不会命中旧语气)
-      setHint('语气已从 ' + (base.toneUsed ?? 80) + ' 调到 ' + currentTone + '：先清旧结果，按新语气重新生成…');
-      const cleared = await saveBaziRecord({ ...base, aiTasks: undefined, aiAnalysis: undefined, aiOverview: undefined, aiError: undefined, aiStatus: 'not_started' });
-      onUpdated(cleared);
-      base = cleared;
-    }
-    const controller = new AbortController();
-    controllerRef.current = controller;
-    beginAiSession();
-    markBusy(true);
-    setHint(undefined);
-    setCopyNote(undefined);
-    setProgress({ done: 0, total: expectedIds.length, label: '准备任务…' });
-    const pending = await saveBaziRecord({ ...base, aiStatus: 'pending', aiError: undefined, toneUsed: currentTone });
-    onUpdated(pending);
-    let lastSnapshot: BaziRecord = pending;
+    if (!_auto) autoRetryCountRef.current = 0;
+    let enteredBusy = false;
     try {
-      // 每个任务完成即顺序落库一次(await，避免并发写互相覆盖)；中断/退出后重试只补缺失任务
-      const finished = await orchestrateBaziAnalysis(pending, undefined, async (step) => {
-        setProgress({ done: step.done, total: step.total, label: step.label });
-        const persisted = await saveBaziRecord(step.record);
-        lastSnapshot = persisted;
-        onUpdated(persisted);
-      }, { signal: controller.signal, tone: currentTone });
-      const saved = await saveBaziRecord(finished);
-      lastSnapshot = saved;
-      setProgress(null);
-      markBusy(false);
-      onUpdated(saved);
-      if (saved.aiStatus === 'failed') {
-        scheduleAutoRetry(saved); // 失败后自动再分析，不需要人点按钮
+      const currentTone = toneRef.current;
+      const expectedIds = buildBaziTasks(base).map((task) => task.taskId);
+      const completeTasks = expectedIds.filter((id) => {
+        const item = base.aiTasks?.[id];
+        return item?.status === 'completed' && !!item.analysis && (!!item.analysis.explanation || !!item.analysis.pattern);
+      });
+      if (expectedIds.length > 0 && completeTasks.length === expectedIds.length) {
+        if (base.toneUsed === currentTone) {
+          setProgress(null);
+          setHint('已存在该语气下的完整分析结果（命中缓存/已保存）。要改语气后重出，请拖动下方语气条再点 AI 分析。');
+          return;
+        }
+        setHint('语气已从 ' + (base.toneUsed ?? 80) + ' 调到 ' + currentTone + '：先清旧结果，按新语气重新生成…');
+        const cleared = await saveBaziRecord({ ...base, aiTasks: undefined, aiAnalysis: undefined, aiOverview: undefined, aiError: undefined, aiStatus: 'not_started' });
+        onUpdated(cleared);
+        base = cleared;
+      }
+      const controller = new AbortController();
+      controllerRef.current = controller;
+      beginAiSession();
+      markBusy(true); enteredBusy = true;
+      setHint(undefined); setCopyNote(undefined);
+      setProgress({ done: 0, total: expectedIds.length, label: '准备任务…' });
+      const pending = await saveBaziRecord({ ...base, aiStatus: 'pending', aiError: undefined, toneUsed: currentTone });
+      onUpdated(pending);
+      let lastSnapshot: BaziRecord = pending;
+      try {
+        const finished = await orchestrateBaziAnalysis(pending, undefined, async (step) => {
+          setProgress({ done: step.done, total: step.total, label: step.label });
+          try {
+            const persisted = await saveBaziRecord(step.record);
+            lastSnapshot = persisted;
+            onUpdated(persisted);
+          } catch { /* 单次进度落库失败不中断整体，最终结果会整体保存 */ }
+        }, { signal: controller.signal, tone: currentTone });
+        const saved = await saveBaziRecord(finished);
+        lastSnapshot = saved;
+        setProgress(null);
+        markBusy(false); enteredBusy = false;
+        onUpdated(saved);
+        if (saved.aiStatus === 'failed') scheduleAutoRetry(saved);
+      } catch (error) {
+        setProgress(null);
+        markBusy(false); enteredBusy = false;
+        const aborted = controller.signal.aborted;
+        const reason = error instanceof Error ? error.message : 'request failed';
+        try {
+          const partial = await saveBaziRecord({ ...lastSnapshot, aiStatus: 'failed', aiError: aborted ? ABORTED_MESSAGE : reason });
+          onUpdated(partial);
+        } catch { /* 保存部分进度失败也不卡住界面 */ }
+        setHint(aborted ? '已停止：已完成的任务已保存，可随时再点 AI 分析继续。' : '分析失败：' + safeAiError(reason));
       }
     } catch (error) {
+      if (enteredBusy) markBusy(false);
       setProgress(null);
-      markBusy(false);
-      const aborted = controller.signal.aborted;
-      const reason = error instanceof Error ? error.message : 'request failed';
-      // 保存已完成的部分进度，避免整段结果丢失
-      const partial = await saveBaziRecord({ ...lastSnapshot, aiStatus: 'failed', aiError: aborted ? ABORTED_MESSAGE : reason });
-      onUpdated(partial);
-      setHint(aborted ? '已停止：正在分析/已完成的任务均已按实际情况保存，可随时再点 AI 分析继续（自动跳过已完成项）。' : '分析失败：' + safeAiError(reason));
+      setHint('操作失败：' + safeAiError(error instanceof Error ? error.message : String(error)));
     }
   }
   function stopAnalysis() {
     cancelAutoRetry();
+    autoRetryCountRef.current = 0;
     controllerRef.current?.abort();
     cancelAiSession();
     setProgress(null);
