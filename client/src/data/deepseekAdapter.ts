@@ -36,7 +36,7 @@ export function buildAiRequestPayload(record: BaziRecord, task?: BaziAnalysisTas
   const forecastRange = record.nonAiResult?.forecastRange ?? [];
   const nonAiResult = record.nonAiResult ?? null;
   return {
-    model: 'deepseek-chat', temperature: 0, forecastRange, forecastScopes: ['大运', '流年', '流月'], task,
+    model: 'deepseek-flash', reasoning_effort: 'low', forecastRange, forecastScopes: ['大运', '流年', '流月'], task,
     nonAiResult,
     messages: [{ role: 'user', content: `请仅基于 nonAiResult 中的事实解释格局、身强身弱、喜忌，不要自行计算八字、十神、关系或运势，并返回 JSON（pattern,strength,usefulElements,avoidElements,explanation）。仅生成大运、流年、流月：${forecastRange.join('、')}；不要生成范围外年份。四柱：${record.yearPillar} ${record.monthPillar} ${record.dayPillar} ${record.hourPillar}` }],
   };
@@ -132,7 +132,7 @@ async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask, opts: 
   const scopeTypes = !task || task.type === 'annual' || task.type === 'monthly' || task.type === 'decade';
   const content = instruction + '\n\n# 本命事实数据(JSON)\n' + JSON.stringify(natal)
     + (scopeTypes ? '\n\n# 本时段数据(JSON)\n' + JSON.stringify(scope) + '\n\n# 当前分析目标\n' + when : '');
-  const payload: Record<string, unknown> = { model: 'deepseek-reasoner', max_tokens: 32768, messages: [
+  const payload: Record<string, unknown> = { model: 'deepseek-flash', reasoning_effort: (isBaseline || isAdjustment) ? 'high' : 'low', max_tokens: 32768, messages: [
     { role: 'system', content: '请把思考压缩到最短，直接输出符合要求的JSON正文。' },
     { role: 'user', content },
   ] };
