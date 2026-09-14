@@ -1,7 +1,7 @@
 import { getSetting, readCache, writeCache, setSetting } from './db.mjs';
 
 export const PROVIDERS = [
-  { id: 'deepseek', label: 'DeepSeek', endpoint: 'https://api.deepseek.com/chat/completions', model: 'deepseek-reasoner' },
+  { id: 'deepseek', label: 'DeepSeek V4.1', endpoint: 'https://api.deepseek.com/chat/completions', model: 'deepseek-flash' },
   { id: 'kimi', label: 'Kimi(Moonshot)', endpoint: 'https://api.moonshot.cn/v1/chat/completions', model: 'kimi-k2.6' },
 ];
 export const currentProviderId = (db) => getSetting(db, 'ai.provider', 'deepseek');
@@ -129,7 +129,8 @@ export function buildTaskPayload(record, task, tone = DEFAULT_TONE) {
       + '\n\n# 本时段数据(JSON)\n' + JSON.stringify(scope);
       + '\n\n# 当前分析目标\n' + whenLabel + ageSeg
   }
-  return { messages: [{ role: 'system', content: system }, { role: 'user', content: userContent }] };
+  const effort = (task.type === 'baseline' || task.type === 'adjustment') ? 'high' : 'low';
+  return { messages: [{ role: 'system', content: system }, { role: 'user', content: userContent }], effort };
 }
 
 export function cacheKey(record, task, model, tone = DEFAULT_TONE) {
@@ -138,8 +139,10 @@ export function cacheKey(record, task, model, tone = DEFAULT_TONE) {
 }
 
 /** 调一次上游(单 provider，最多 transport 重试一次)；失败返回 {error}。 */
-async function callProvider(provider, key, messages) {
+async function callProvider(provider, key, messages, effort) {
   const body = { model: provider.model, messages, max_tokens: 32768 };
+  // V4.1：思考模式默认开启；按任务类型控制思考力度(本命/后天调整=high，时段=low 以省时省钱)
+  if (provider.id === 'deepseek' && effort) body.reasoning_effort = effort;
   if (provider.id !== 'deepseek') body.temperature = 1;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 150_000);
@@ -173,7 +176,7 @@ async function callProvider(provider, key, messages) {
 /** 执行单个任务：命中服务器缓存 -> 调用所选/备用 provider -> 写缓存。 */
 export async function runOneTask(db, record, task, tone = DEFAULT_TONE) {
   const t = clampTone(tone);
-  const { messages } = buildTaskPayload(record, task, t);
+  const { messages, effort } = buildTaskPayload(record, task, t);
   const order = providerOrder(db);
   if (order.length === 0) return { status: 'not_configured', error: '服务器未配置 AI 密钥，请在服务器设置中填写后保存' };
   const errors = [];
@@ -185,7 +188,7 @@ export async function runOneTask(db, record, task, tone = DEFAULT_TONE) {
     if (hit) {
       try { return { status: 'completed', analysis: JSON.parse(hit) }; } catch { /* 坏缓存忽略，重算 */ }
     }
-    const result = await callProvider(provider, key, messages);
+    const result = await callProvider(provider, key, messages, effort);
     if (result.analysis) {
       try { writeCache(db, ck, JSON.stringify(result.analysis)); } catch { /* 写缓存失败忽略 */ }
       return { status: 'completed', analysis: result.analysis };
@@ -202,7 +205,7 @@ export async function runSelfTest(db) {
   const key = providerKey(db, provider.id);
   const messages = [{ role: 'user', content: '只回复两个字母：ok' }];
   const started = Date.now();
-  const r = await callProvider(provider, key, messages);
+  const r = await callProvider(provider, key, messages, 'low');
   if (r.analysis) return { ok: true, provider: provider.id, model: provider.model, latencyMs: Date.now() - started, reply: r.analysis };
   return { ok: false, message: provider.id + ' ' + (r.error || 'failed') };
 }

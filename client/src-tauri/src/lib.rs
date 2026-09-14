@@ -200,7 +200,7 @@ pub async fn ai_self_test() -> Result<Value, String> {
             Err(_) => { errors.push(format!("{} 未配置密钥", provider.key())); continue; }
         };
         let endpoint = match provider { AiProvider::Deepseek => "https://api.deepseek.com/chat/completions", AiProvider::Kimi => "https://api.moonshot.cn/v1/chat/completions" };
-        let model = match provider { AiProvider::Deepseek => "deepseek-chat", AiProvider::Kimi => "kimi-k2.6" };
+        let model = match provider { AiProvider::Deepseek => "deepseek-flash", AiProvider::Kimi => "kimi-k2.6" };
         let request = serde_json::json!({ "model": model, "temperature": 0, "messages": [{ "role": "user", "content": "只回复两个字母：ok" }] });
         let started = std::time::Instant::now();
         let response = match reqwest::Client::new().post(endpoint).bearer_auth(&secret).json(&request).send().await {
@@ -245,8 +245,8 @@ pub(crate) fn provider_order(selected: &AiProvider) -> [AiProvider; 2] {
 }
 
 pub(crate) fn provider_model(provider: &AiProvider) -> &'static str {
-    // deepseek-reasoner = 思考模式(链式推理)；reasoner 不支持 temperature 参数。
-    match provider { AiProvider::Deepseek => "deepseek-reasoner", AiProvider::Kimi => "kimi-k2.6" }
+    // DeepSeek V4.1-Flash(deepseek-flash)：思考模式默认开启，用 reasoning_effort 控制力度；思考模式下 temperature 无效。
+    match provider { AiProvider::Deepseek => "deepseek-flash", AiProvider::Kimi => "kimi-k2.6" }
 }
 
 pub(crate) fn provider_temperature(provider: &AiProvider) -> Option<i32> {
@@ -289,6 +289,7 @@ pub(crate) fn write_cache(connection: &rusqlite::Connection, key: &str, payload:
 pub(crate) fn api_request_payload(payload: &Value, model: &str, temperature: Option<i32>) -> Value {
     let mut out = serde_json::json!({ "model": model, "messages": payload["messages"].clone() });
     if let Some(t) = temperature { out["temperature"] = t.into(); }
+    if model.starts_with("deepseek") { if let Some(effort) = payload.get("effort").and_then(|v| v.as_str()) { out["reasoning_effort"] = effort.into(); } } // 只有 DeepSeek 走思考力度参数，Kimi 不接受
     out
 }
 
@@ -374,7 +375,7 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
             let mut content = format!("你是资深子平命理师。根据【本命结论】的喜用五行与下方【资料库】中对应五行的后天调整/职业知识，输出该命局的【后天调整】与【事业职业适配】建议(长文，尽量贴合资料，不要另造体系)。禁止输出/* */注释、HTML注释或代码块标记，只给最终正文。JSON schema：{{\"explanation\":长文}}，explanation 必须依次各出现一次【后天调整】【事业适配】【健康注意】(不得合并、省略或改名)，每段至少 1 条；每个主题内部再分点：每条单独一行、行首 1. 2. 3. 编号，一句话一条，不要整段连排。\n\n# 本命结论\n{}\n\n# 资料库(喜用{})\n{}", baseline_text, guide.get("element").and_then(|e| e.as_str()).unwrap_or(""), guide_text);
             content = format!("{content}\n\n# 语气要求\n{}", tone_instruction(clamp_tone(task.tone)));
             return Ok(serde_json::json!({
-                "model": "deepseek-reasoner", "promptVersion": "ctx-v5", "thinking": true,
+                "model": "deepseek-flash", "promptVersion": "ctx-v5", "thinking": true, "effort": "high",
                 "taskId": task.task_id, "type": task.task_type, "year": task.year, "month": task.month,
                 "nonAiResult": body,
                 "messages": [{ "role": "user", "content": content }]
@@ -462,7 +463,7 @@ let is_scope = matches!(task.task_type.as_str(), "annual" | "monthly" | "decade"
     };
 
     Ok(serde_json::json!({
-        "model": "deepseek-reasoner", "promptVersion": "ctx-v5", "thinking": true,
+        "model": "deepseek-flash", "promptVersion": "ctx-v5", "thinking": true, "effort": if task.task_type == "baseline" { "high" } else { "low" },
         "taskId": task.task_id, "type": task.task_type, "year": task.year, "month": task.month,
         "nonAiResult": context,
         "messages": [{ "role": "user", "content": content }]
@@ -508,7 +509,7 @@ pub async fn run_ai_task(state: State<'_, Database>, record: BaziRecord, task: A
         let endpoint = match provider { AiProvider::Deepseek => "https://api.deepseek.com/chat/completions", AiProvider::Kimi => "https://api.moonshot.cn/v1/chat/completions" };
         let payload = build_ai_request_payload(&record, &task)?;
         let mut api_payload = api_request_payload(&payload, model, provider_temperature(&provider));
-        if model == "deepseek-reasoner" { apply_reasoner_settings(&mut api_payload); } // 高上限+思考从简，避免正文为空
+        if model.starts_with("deepseek") { apply_reasoner_settings(&mut api_payload); } // 高上限+思考从简，避免正文为空
         // 传输层抗抖：429/5xx/网络错误重试一次(同 provider)；请求期间可被“立即停止”中断
         let mut transport_ok = false;
         let mut body: Value = Value::Null;
@@ -663,7 +664,7 @@ mod tests {
 
     #[test]
     fn provider_models_match_current_service_api() {
-        assert_eq!(commands::provider_model(&commands::AiProvider::Deepseek), "deepseek-reasoner");
+        assert_eq!(commands::provider_model(&commands::AiProvider::Deepseek), "deepseek-flash");
         assert_eq!(commands::provider_model(&commands::AiProvider::Kimi), "kimi-k2.6");
         assert_eq!(commands::provider_temperature(&commands::AiProvider::Deepseek), None);
         assert_eq!(commands::provider_temperature(&commands::AiProvider::Kimi), Some(1));
@@ -724,9 +725,10 @@ mod tests {
 
     #[test]
     fn api_request_payload_sends_only_api_compatible_fields() {
-        let payload = serde_json::json!({ "model": "deepseek-reasoner", "taskId": "t1", "type": "annual", "year": 2027, "nonAiResult": { "x": 1 }, "messages": [{ "role": "user", "content": "hi" }] });
-        let api = commands::api_request_payload(&payload, "deepseek-reasoner", None);
-        assert_eq!(api["model"], "deepseek-reasoner");
+        let payload = serde_json::json!({ "model": "deepseek-flash", "effort": "low", "taskId": "t1", "type": "annual", "year": 2027, "nonAiResult": { "x": 1 }, "messages": [{ "role": "user", "content": "hi" }] });
+        let api = commands::api_request_payload(&payload, "deepseek-flash", None);
+        assert_eq!(api["model"], "deepseek-flash");
+        assert_eq!(api["reasoning_effort"], "low"); // V4.1 思考力度随 payload 转发
         assert!(api.get("taskId").is_none());
         assert!(api.get("nonAiResult").is_none());
         assert!(api.get("temperature").is_none()); // reasoner 不发送 temperature
