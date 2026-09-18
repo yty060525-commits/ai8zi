@@ -119,7 +119,7 @@ export function createApp({ db, allowRegister = true }) {
         if (method === 'POST' && rest[1] === 'ai' && rest[2] === 'task') {
           const body = await readJsonBody(req);
           if (!body?.task) return json(res, 400, { error: '缺少 task' });
-          const result = await runOneTask(db, rec, body.task, body.tone);
+          const result = await runOneTask(db, rec, body.task, body.tone, body.provider);
           return json(res, 200, { result });
         }
         if (method === 'POST' && rest[1] === 'ai' && rest[2] === 'cache-clear') {
