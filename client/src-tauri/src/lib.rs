@@ -526,6 +526,7 @@ pub async fn run_ai_task(state: State<'_, Database>, record: BaziRecord, task: A
         let payload = build_ai_request_payload(&record, &task)?;
         let mut api_payload = api_request_payload(&payload, model, provider_temperature(&provider));
         if model.starts_with("deepseek") { apply_reasoner_settings(&mut api_payload); } // 高上限+思考从简，避免正文为空
+        if provider == AiProvider::Qwen { api_payload["enable_thinking"] = serde_json::json!(false); } // Qwen3.8-Flash 关闭思考：实测快约 3.8 倍
         // 传输层抗抖：429/5xx/网络错误重试一次(同 provider)；请求期间可被“立即停止”中断
         let mut transport_ok = false;
         let mut body: Value = Value::Null;
