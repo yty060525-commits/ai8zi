@@ -52,9 +52,22 @@ describe('non-AI calculator', () => {
     expect(result.annualFortunes[0].tenGod).toEqual(expect.any(String));
   });
 
-  it('uses an auditable estimated three-days-one-year start and structured facts', () => {
+  it('不再做起运年龄推算；大运对齐公历十年且必须覆盖预测窗口', () => {
     const result = calculateNonAi({ birthYear: 1984, birthMonth: 2, yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午' }, 'male', '2025-03-08T12:34:56.000Z');
-    expect(result.fortuneMethod).toEqual(expect.objectContaining({ method: 'three-days-one-year', estimated: true, components: expect.anything(), boundary: expect.any(String) }));
+    expect((result as unknown as Record<string, unknown>).fortuneMethod).toBeUndefined();
+    expect((result as unknown as Record<string, unknown>).fortuneStart).toBeUndefined();
+    // 干支仍按「阳男顺排」从月柱起进：丙寅 → 丁卯(与 lunar-javascript getYun 的首步大运一致)
+    expect(result.greatFortunes[0].ganZhi).toBe('丁卯');
+    // 年份连续、每步 +10，且第一步覆盖当前年 → 未来十年必有可分析的大运段
+    expect(result.greatFortunes.every((g, i, arr) => i === 0 || g.startYear === arr[i - 1].startYear + 10)).toBe(true);
+    const currentYear = new Date(result.currentTime!).getUTCFullYear();
+    const covering = result.greatFortunes.filter((g) => g.startYear <= currentYear && currentYear <= g.endYear);
+    expect(covering).toHaveLength(1);
+    // 预测窗口 [currentYear, currentYear+9] 与大运集合有重叠（编排器按重叠挑选大运任务）
+    const overlapsWindow = result.greatFortunes.filter((g) => g.startYear <= currentYear + 9 && g.endYear >= currentYear);
+    expect(overlapsWindow.length).toBeGreaterThanOrEqual(1);
+    // 且第一步大运起点必为十年整数，保证跨盘可复现
+    expect(result.greatFortunes[0].startYear % 10).toBe(0);
     expect(result.tenGodDetails!.heavenly).toHaveLength(4);
     expect(result.tenGodDetails!.hidden).toHaveLength(4);
     expect(result.tenGodDetails!.hidden[1]).toHaveLength(3);

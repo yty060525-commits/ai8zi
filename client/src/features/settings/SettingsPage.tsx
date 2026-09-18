@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
-import { getServiceStatus, clearServiceCredential, saveServiceCredential, setSelectedService, type ServiceId } from '../../data/aiSettings';
+import { getServiceStatus, clearServiceCredential, saveServiceCredential, setSelectedService, serviceProvider, serviceOf, PROVIDER_LABEL, type ServiceId } from '../../data/aiSettings';
 import { compactRecords, getStorageStats, runAiSelfTest, type AiSelfTest } from '../../data/storageInfo';
 import { listBaziRecords, reloadLocalForSession } from '../../data/clientRepository';
 import { exportRecordsSQLite, exportRecordsSQLText } from '../../data/sqliteExport';
@@ -20,6 +20,7 @@ export function SettingsPage() {
   const [busyService, setBusyService] = useState<ServiceId | null>(null);
   const [currentProvider, setCurrentProvider] = useState<'deepseek' | 'kimi' | 'qwen'>('deepseek');
   const [switching, setSwitching] = useState(false);
+  const [notice, setNotice] = useState<Partial<Record<ServiceId, string>>>({});
   const [status, setStatus] = useState<DisplayStatus>('未配置');
   const [storage, setStorage] = useState<{ records: number; cache: number; bytes: number } | null>(null);
   const [compacting, setCompacting] = useState(false);
@@ -46,7 +47,7 @@ export function SettingsPage() {
         serviceTwo: current.serviceTwo === 'configured' ? '已配置' : '未配置',
         serviceThree: current.serviceThree === 'configured' ? '已配置' : '未配置',
       });
-      setCurrentProvider(serviceProviderOf(current.selectedService));
+      setCurrentProvider(serviceProvider(current.selectedService));
     }).catch(() => { if (active) setStatuses({ serviceOne: '保存失败', serviceTwo: '保存失败', serviceThree: '保存失败' }); });
     return () => { active = false; };
   }, []);
@@ -126,14 +127,12 @@ export function SettingsPage() {
     finally { setTesting(false); }
   }
 
-const providerOfService = (s: ServiceId): 'deepseek' | 'kimi' | 'qwen' => s === 'serviceOne' ? 'deepseek' : s === 'serviceTwo' ? 'kimi' : 'qwen';
-const serviceProviderOf = providerOfService;
-const providerLabel = (p: 'deepseek' | 'kimi' | 'qwen') => p === 'deepseek' ? 'DeepSeek' : p === 'kimi' ? 'Kimi' : 'Qwen3.8-Flash';
 
   /** 每个通道独立保存：同一屏可把 DeepSeek / Kimi / Qwen 三条通道都配好，无需先选再存。 */
   async function saveOne(service: ServiceId) {
     const value = secrets[service];
     if (!value) { setStatuses((c) => ({ ...c, [service]: '保存失败' })); return; }
+    const hadCredential = statuses[service] === '已配置';
     setBusyService(service);
     setStatuses((c) => ({ ...c, [service]: '保存中' }));
     try {
@@ -141,6 +140,10 @@ const providerLabel = (p: 'deepseek' | 'kimi' | 'qwen') => p === 'deepseek' ? 'D
       const nextStatus: DisplayStatus = result === 'configured' ? '已配置' : '未配置';
       setStatuses((c) => ({ ...c, [service]: nextStatus }));
       setSecrets((c) => ({ ...c, [service]: '' }));
+      if (result === 'configured') {
+        setNotice((c) => ({ ...c, [service]: hadCredential ? '已用新凭据覆盖原有配置' : '已保存' }));
+        setTimeout(() => setNotice((c) => ({ ...c, [service]: undefined })), 4000);
+      }
     } catch { setStatuses((c) => ({ ...c, [service]: '保存失败' })); }
     finally { setBusyService(null); }
   }
@@ -150,14 +153,14 @@ const providerLabel = (p: 'deepseek' | 'kimi' | 'qwen') => p === 'deepseek' ? 'D
       const result = await clearServiceCredential(service);
       setStatuses((c) => ({ ...c, [service]: result === 'configured' ? '已配置' : '未配置' }));
     } catch { setStatuses((c) => ({ ...c, [service]: '保存失败' })); }
-    finally { setBusyService(null); setSecrets((c) => ({ ...c, [service]: '' })); }
+    finally { setBusyService(null); setSecrets((c) => ({ ...c, [service]: '' })); setNotice((c) => ({ ...c, [service]: '已清除该通道的凭据' })); setTimeout(() => setNotice((c) => ({ ...c, [service]: undefined })), 4000); }
   }
   /** 切换当前应用使用的通道（持久保存：重启后仍生效）。 */
   async function useChannel(service: ServiceId) {
     setSwitching(true);
     try {
       const picked = await setSelectedService(service);
-      setCurrentProvider(providerOfService(picked));
+      setCurrentProvider(serviceProvider(picked));
     } catch { /* 保存失败保持原样 */ }
     finally { setSwitching(false); }
   }
@@ -207,16 +210,17 @@ const providerLabel = (p: 'deepseek' | 'kimi' | 'qwen') => p === 'deepseek' ? 'D
     <header className="page-heading"><p className="eyebrow">LOCAL SETTINGS</p><h1>设置</h1><p className="page-description">管理内部服务的访问配置。</p></header>
     <section aria-label="AI 通道" aria-labelledby="channels-title"><h2 id="channels-title">AI 通道（三条可同时配置）</h2>
       <p className="page-description">三条通道各自独立保存，互不影响。当前生效的那条会标注「使用中」并优先调用，失败时自动依次回退到已配置的其它通道。</p>
-      <p className="current-channel" role="status">当前使用：<strong>{providerLabel(currentProvider)}</strong>{statuses[currentProvider === 'deepseek' ? 'serviceOne' : currentProvider === 'kimi' ? 'serviceTwo' : 'serviceThree'] === '已配置' ? '' : '（该通道尚未配置，会直接使用其它已配置通道）'}　·　已配置 {configuredCount} / {services.length} 条</p>
+      <p className="current-channel" role="status">当前使用：<strong>{PROVIDER_LABEL[currentProvider]}</strong>{statuses[currentProvider === 'deepseek' ? 'serviceOne' : currentProvider === 'kimi' ? 'serviceTwo' : 'serviceThree'] === '已配置' ? '' : '（该通道尚未配置，会直接使用其它已配置通道）'}　·　已配置 {configuredCount} / {services.length} 条</p>
       {services.map((service) => {
         const st = statuses[service.id];
         const busy = busyService === service.id;
-        const isCurrent = providerOfService(service.id) === currentProvider;
+        const isCurrent = serviceProvider(service.id) === currentProvider;
         return <div className={isCurrent ? 'channel-block current' : 'channel-block'} key={service.id} aria-label={service.label + ' 通道'}>
           <div className="channel-head">
             <strong>{service.label}</strong>
             <span className={st === '已配置' ? 'channel-status ok' : st === '保存失败' ? 'channel-status bad' : 'channel-status'}>{st}</span>
             {isCurrent ? <span className="channel-current">使用中</span> : <button className="text-button tiny channel-use" type="button" disabled={switching} onClick={() => void useChannel(service.id)}>设为使用</button>}
+            {notice[service.id] && <span className="channel-notice" role="status">{notice[service.id]}</span>}
           </div>
           <div className="channel-row">
             <input aria-label={service.label + ' 访问凭据'} type="password" autoComplete="off" placeholder={st === '已配置' ? '已保存（重新填写可覆盖）' : '粘贴访问凭据'} value={secrets[service.id]} disabled={busy}

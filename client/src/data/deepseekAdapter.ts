@@ -134,7 +134,7 @@ export async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask,
   const scope: Record<string, unknown> = {};
   const y = task?.year;
   if (y !== undefined) {
-    scope.age = y - record.birthYear;
+    if (task?.type !== 'decade') scope.age = y - record.birthYear;
     const annual = (nonAi?.annualFortunes ?? []).find((row) => row.year === y);
     if (annual) scope.annual = annual;
     const decade = (nonAi?.greatFortunes ?? []).find((row) => y >= row.startYear && y <= row.endYear);
@@ -144,7 +144,11 @@ export async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask,
       if (monthly) scope.monthly = monthly;
     }
   }
-  const when = task ? (task.type === 'annual' ? y + '年' : task.type === 'monthly' ? y + '年' + task.month + '月' : task.type === 'decade' ? '大运' : '本命') : '本命';
+  const when = task?.type === 'adjustment' ? '后天调整与职业适配'
+    : task?.type === 'annual' ? y + '年'
+    : task?.type === 'monthly' ? y + '年' + task.month + '月'
+    : task?.type === 'decade' ? '大运'
+    : '本命';
   const isBaseline = !task || task.type === 'baseline';
   const isAdjustment = task?.type === 'adjustment';
   const fiveDimRule = isBaseline
@@ -157,8 +161,14 @@ export async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask,
     + ' 全篇一律简体中文，禁止繁体字。正文必须分点：每个主题每条单独一行，行首 1. 2. 3. 编号，一句话一条，不要整段连排。' + toneInstructionText(opts.tone)
     + ' 不要输出注释或代码块。';
   const scopeTypes = !task || task.type === 'annual' || task.type === 'monthly' || task.type === 'decade';
-  const content = instruction + '\n\n# 本命事实数据(JSON)\n' + JSON.stringify(natal)
-    + (scopeTypes ? '\n\n# 本时段数据(JSON)\n' + JSON.stringify(scope) + '\n\n# 当前分析目标\n' + when : '');
+  const baselineNote = (task && task.type !== 'baseline' && task.baseline)
+    ? '\n\n# 本命结论(已定，必须沿用，不得重算)\n' + String((task.baseline as { summary?: string }).summary ?? '')
+    : '';
+  const guideNote = isAdjustment
+    ? '\n\n# 资料库(喜用五行)' + '\n' + JSON.stringify(task?.guide ?? {})
+    : '';
+  const content = instruction + baselineNote + guideNote + '\n\n# 本命事实数据(JSON)\n' + JSON.stringify(natal)
+    + (isAdjustment ? '\n\n# 当前分析目标\n' + when : scopeTypes ? '\n\n# 本时段数据(JSON)\n' + JSON.stringify(scope) + '\n\n# 当前分析目标\n' + when : '');
   // 按“当前使用通道 → 其余已配置通道”依次尝试；每个通道用各自的端点/模型/参数
   const errors: string[] = [];
   for (const channel of channelOrder()) {

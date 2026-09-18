@@ -140,7 +140,7 @@ export function buildBaziTasks(record: BaziRecord): BaziAnalysisTask[] {
   const greatFortunes = record.nonAiResult?.greatFortunes ?? [];
   const decadeTasks: BaziAnalysisTask[] = greatFortunes
     .filter((g) => g.startYear <= year + 9 && g.endYear >= year)
-    .map((g, i) => ({ taskId: `task-${String(i + 24).padStart(2, '0')}`, type: 'decade' as const, year: g.startYear }));
+    .map((g, i) => ({ taskId: `task-${String(i + 24).padStart(2, '0')}`, type: 'decade' as const, year: g.startYear, decade: g }));
   return [...core, ...decadeTasks];
 }
 

@@ -12,7 +12,13 @@ vi.mocked(invoke).mockImplementation(async (command) => command === 'get_ai_prov
   : command === 'set_ai_provider' ? 'deepseek'
   : 'not_configured');
 
-afterEach(() => { cleanup(); resetAiSettingsForTests(); });
+const happyPath = async (command: string) => command === 'get_ai_provider_status' ? notConfigured
+  : command === 'save_ai_credential' ? 'configured'
+  : command === 'set_ai_provider' ? 'deepseek'
+  : 'not_configured';
+
+// 每个用例后恢复默认桩：否则某个用例改过的 invoke 实现会污染后续用例(曾导致覆盖测试误判)
+afterEach(() => { cleanup(); resetAiSettingsForTests(); vi.mocked(invoke).mockImplementation(happyPath); vi.clearAllTimers?.(); });
 
 describe('SettingsPage', () => {
   it('lists all three model channels at once and never shows secret/limit wording', async () => {
@@ -67,5 +73,21 @@ describe('SettingsPage', () => {
     const useButtons = screen.getAllByRole('button', { name: '设为使用' });
     fireEvent.click(useButtons[useButtons.length - 1]);
     await waitFor(() => expect(screen.getByText(/当前使用：/).textContent).toContain('Qwen3.8-Flash'));
+  });
+
+  it('overwrites an existing credential and confirms it', async () => {
+    render(<SettingsPage />);
+    const input = screen.getByLabelText('Qwen3.8-Flash 访问凭据') as HTMLInputElement;
+    const qwenSave = () => screen.getAllByRole('button', { name: '保存' })[2];
+    fireEvent.change(input, { target: { value: 'first-key' } });
+    fireEvent.click(qwenSave());
+    await waitFor(() => expect(screen.getByText('已保存')).toBeTruthy(), { timeout: 3000 });
+    // 再次输入新凭据 → 覆盖提示
+    await waitFor(() => expect(input.value).toBe(''));
+    fireEvent.change(input, { target: { value: 'second-key' } });
+    fireEvent.click(qwenSave());
+    await waitFor(() => expect(screen.getByText('已用新凭据覆盖原有配置')).toBeTruthy(), { timeout: 3000 });
+    expect(document.body.textContent).not.toContain('first-key');
+    expect(document.body.textContent).not.toContain('second-key');
   });
 });

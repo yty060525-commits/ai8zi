@@ -10,8 +10,6 @@ export interface AiProviderStatus {
   qwen: CredentialStatus;
 }
 
-const defaultStatus = (): AiProviderStatus => ({ selectedProvider: 'deepseek', deepseek: 'not_configured', kimi: 'not_configured', qwen: 'not_configured' });
-let memoryStatus = defaultStatus();
 
 const inTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 const credKey = (provider: AiProvider) => 'mingli.cred.' + provider;
@@ -41,8 +39,8 @@ export async function setAiProvider(provider: AiProvider): Promise<AiProvider> {
   return invoke<AiProvider>('set_ai_provider', { provider });
 }
 
-const serviceProvider = (service: ServiceId): AiProvider => service === 'serviceOne' ? 'deepseek' : service === 'serviceTwo' ? 'kimi' : 'qwen';
-const serviceOf = (provider: AiProvider): ServiceId => provider === 'deepseek' ? 'serviceOne' : provider === 'kimi' ? 'serviceTwo' : 'serviceThree';
+export const serviceProvider = (service: ServiceId): AiProvider => service === 'serviceOne' ? 'deepseek' : service === 'serviceTwo' ? 'kimi' : 'qwen';
+export const serviceOf = (provider: AiProvider): ServiceId => provider === 'deepseek' ? 'serviceOne' : provider === 'kimi' ? 'serviceTwo' : 'serviceThree';
 
 export async function getServiceStatus(): Promise<{ selectedService: ServiceId; serviceOne: CredentialStatus; serviceTwo: CredentialStatus; serviceThree: CredentialStatus }> {
   const status = await getAiProviderStatus();
@@ -62,7 +60,14 @@ export async function setSelectedService(service: ServiceId): Promise<ServiceId>
   return service;
 }
 
-/** Test-only reset for the browser adapter; never used by the production UI. */
+/** 通道显示名（与服务器/桌面端一致）。 */
+export const PROVIDER_LABEL: Record<AiProvider, string> = { deepseek: 'DeepSeek', kimi: 'Kimi', qwen: 'Qwen3.8-Flash' };
+
+/** 测试专用：清空本机(浏览器)凭据与通道选择，避免用例之间互相污染。 */
 export function resetAiSettingsForTests(): void {
-  memoryStatus = defaultStatus();
+  try {
+    localStorage.removeItem('mingli.provider');
+    for (const p of ['deepseek', 'kimi', 'qwen'] as AiProvider[]) localStorage.removeItem('mingli.cred.' + p);
+  } catch { /* 非浏览器环境忽略 */ }
 }
+

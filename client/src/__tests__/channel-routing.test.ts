@@ -55,4 +55,29 @@ describe('网页直连按当前使用通道路由', () => {
     expect(res.status).toBe('failed');
     expect(String((res as { error?: string }).error)).toContain('未配置凭据');
   });
+
+  it('后天调整任务会带上本命结论与资料库(离线备用通道不再凭空发挥)', async () => {
+    localStorage.setItem('mingli.provider', 'deepseek');
+    localStorage.setItem('mingli.cred.deepseek', 'ds-key');
+    const task = { taskId: 'task-30', type: 'adjustment', baseline: { summary: '格局：正印格 · 强弱：身强　喜：火、土　忌：水、木' }, guide: { element: '火', lifestyle: '多接触温暖环境' } } as never;
+    await browserDirect(record, task);
+    const body = JSON.parse(String((vi.mocked(fetch).mock.calls[0][1] as RequestInit).body));
+    const content = String(body.messages[1].content);
+    expect(content).toContain('本命结论');
+    expect(content).toContain('正印格');
+    expect(content).toContain('资料库');
+    expect(content).toContain('多接触温暖环境');
+    expect(content).toContain('后天调整与职业适配');
+  });
+
+  it('大运任务不带年龄推算字段', async () => {
+    localStorage.setItem('mingli.provider', 'deepseek');
+    localStorage.setItem('mingli.cred.deepseek', 'ds-key');
+    const task = { taskId: 'task-24', type: 'decade', year: 2026, baseline: { summary: '格局：正印格' } } as never;
+    await browserDirect(record, task);
+    const body = JSON.parse(String((vi.mocked(fetch).mock.calls[0][1] as RequestInit).body));
+    const content = String(body.messages[1].content);
+    expect(content).not.toContain('年龄约');
+    expect(content).toContain('本时段数据');
+  });
 });

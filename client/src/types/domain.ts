@@ -47,7 +47,7 @@ export interface NonAiChart {
   tenGods: string[];
   naYin: string[];
   dayMaster: string;
-  fortuneStart: string;
+
   currentTime?: string;
   forecastRange: number[];
   relationships: RelationshipFacts;
@@ -56,7 +56,7 @@ export interface NonAiChart {
   monthlyFortunes: FortunePeriod[];
   twelveLongevity: string[];
   shenSha: { auspicious: string[]; inauspicious: string[]; items?: ShenShaItem[]; daySha?: string; dayTianShen?: string; timeTianShen?: string; ruleVersion?: string; source?: string };
-  fortuneMethod: { method: 'three-days-one-year'; estimated: true; boundary: string; components: { days: number; hours: number; years: number; months: number; extraDays: number } };
+
   tenGodDetails: { heavenly: string[]; hidden: Array<Array<{ stem: string; tenGod: string; position: 'root' | 'middle' | 'residual' }>> };
   relationshipDetails: RelationshipDetail[];
   shenShaRuleVersion: string;
@@ -103,7 +103,7 @@ export interface BaziAIAnalysis {
 }
 export type BaziTaskType = 'baseline' | 'overview' | 'annual' | 'monthly' | 'synthesis' | 'decade' | 'adjustment';
 export interface BaziGuide { element: '木' | '火' | '土' | '金' | '水'; lifestyle: string; career: string; health: string; }
-export interface BaziAnalysisTask { taskId: string; type: BaziTaskType; year?: number; month?: number; annual?: FortunePeriod; monthly?: FortunePeriod; baseline?: BaziTaskResult; guide?: BaziGuide; }
+export interface BaziAnalysisTask { taskId: string; type: BaziTaskType; year?: number; month?: number; annual?: FortunePeriod; monthly?: FortunePeriod; decade?: NonAiChart['greatFortunes'][number]; baseline?: BaziTaskResult; guide?: BaziGuide; }
 export interface BaziTaskResult { task: BaziAnalysisTask; status: 'completed' | 'failed' | 'not_configured'; analysis?: BaziAIAnalysis; error?: string; }
 
 export interface Person {

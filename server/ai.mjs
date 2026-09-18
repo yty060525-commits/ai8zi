@@ -34,6 +34,16 @@ export function toneInstruction(tone) {
 }
 
 /* ---------- 提示词与上下文(与桌面端保持一致口径，正文一律分点编号) ---------- */
+/** 神煞压缩为「名称@柱位」列表：给模型足够信号，但不重复 basis/来源等冗余字段。 */
+function compactShenSha(shenSha) {
+  if (!shenSha) return undefined;
+  const pillarNames = ['年', '月', '日', '时'];
+  const items = Array.isArray(shenSha.items)
+    ? shenSha.items.map((item) => item.name + '@' + (pillarNames[item.pillarIndex] ?? '?') + (item.position === '天干' ? '干' : '支'))
+    : [];
+  return { 吉: shenSha.auspicious ?? [], 凶: shenSha.inauspicious ?? [], 明细: items };
+}
+
 const pickByYear = (rows, year) => (Array.isArray(rows) ? rows.find((r) => Number(r.year) === Number(year)) : null);
 const pickByYearMonth = (rows, year, month) => (Array.isArray(rows) ? rows.find((r) => Number(r.year) === Number(year) && Number(r.month) === Number(month)) : null);
 const pickDecade = (rows, year) => (Array.isArray(rows) ? rows.find((r) => Number(r.startYear) <= Number(year) && Number(year) <= Number(r.endYear)) : null);
@@ -83,19 +93,19 @@ export function buildTaskPayload(record, task, tone = DEFAULT_TONE) {
     elements: nonAi.elements, elementRatio: nonAi.elementRatio,
     hiddenStems: nonAi.hiddenStems, tenGods: nonAi.tenGods,
     naYin: nonAi.naYin, twelveLongevity: nonAi.twelveLongevity,
-    shenSha: nonAi.shenSha, relationships: nonAi.relationships,
+    shenSha: compactShenSha(nonAi.shenSha), relationships: nonAi.relationships,
   };
   const y = task.year;
   const scope = {};
   if (y !== undefined) {
-    scope.age = y - record.birthYear;
+    if (task.type !== 'decade') scope.age = y - record.birthYear;
     if (task.type === 'decade') {
-      const decade = pickDecade(nonAi.greatFortunes, y);
+      const decade = (task.decade && gzOf(task.decade)) ? task.decade : pickDecade(nonAi.greatFortunes, y);
       if (decade) { scope.decade = decade; scope.decadeHits = summarizeHits(decade, gzOf(decade)); }
     } else {
-      const annual = pickByYear(nonAi.annualFortunes, y);
+      const annual = (task.annual && gzOf(task.annual)) ? task.annual : pickByYear(nonAi.annualFortunes, y);
       if (annual) { scope.annual = annual; scope.annualHits = summarizeHits(annual, gzOf(annual)); }
-      const decade = pickDecade(nonAi.greatFortunes, y);
+      const decade = (task.decade && gzOf(task.decade)) ? task.decade : pickDecade(nonAi.greatFortunes, y);
       if (decade) { scope.decade = decade; scope.decadeHits = summarizeHits(decade, gzOf(decade)); }
       if (task.month !== undefined) {
         const monthly = task.monthly && gzOf(task.monthly)
@@ -121,15 +131,16 @@ export function buildTaskPayload(record, task, tone = DEFAULT_TONE) {
     userContent = BASELINE_PROMPT + '\n\n# 事实数据(JSON)\n' + JSON.stringify({ natal, scope: {} }) + OUTPUT_RULES + toneText;
   } else {
     const whenLabel = task.type === 'decade' ? '所处大运(含 ' + y + ' 年)' : (task.month !== undefined ? y + '年' + task.month + '月' : y + '年');
-    const ageSeg = y !== undefined && record.birthYear ? '(年龄约 ' + (y - record.birthYear) + ')' : '';
+    // 年龄仅对流年/流月有意义；大运不再推算年龄
+    const ageSeg = task.type !== 'decade' && y !== undefined && record.birthYear ? '(年龄约 ' + (y - record.birthYear) + ')' : '';
     const note = task.baseline ? baselineSummaryOf(task.baseline) : '';
     // 大前缀放前面(全组一致)，目标+scope 放最后 → DeepSeek 前缀缓存可被同组任务复用
     userContent = SCOPE_PROMPT()
       + (note ? '\n# 本命结论(已定，必须沿用，不得重算)\n' + note : '')
       + '\n\n# 本命事实数据(JSON，只依据此数据)\n' + JSON.stringify(natal)
       + OUTPUT_RULES + toneText
-      + '\n\n# 本时段数据(JSON)\n' + JSON.stringify(scope);
-      + '\n\n# 当前分析目标\n' + whenLabel + ageSeg
+      + '\n\n# 本时段数据(JSON)\n' + JSON.stringify(scope)
+      + '\n\n# 当前分析目标\n' + whenLabel + ageSeg;
   }
   const effort = (task.type === 'baseline' || task.type === 'adjustment') ? 'high' : 'low';
   return { messages: [{ role: 'system', content: system }, { role: 'user', content: userContent }], effort };
