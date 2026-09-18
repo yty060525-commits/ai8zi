@@ -72,6 +72,8 @@ function summarizeHits(row, ownGanZhi) {
 const BASELINE_PROMPT = '你是资深子平命理师。严格依据下方【事实数据(JSON)】中的确定性命理数据作答，禁止自行推算干支、十神、五行、藏干或干支关系。禁止输出注释或代码块/围栏标记，只给最终正文。当前分析目标：本命。用 JSON(仅 JSON)返回，schema：{"pattern":格局,"strength":身强/身弱/中和,"usefulElements":[喜用],"avoidElements":[忌用],"explanation":长文}。explanation 必须以【身强身弱与喜忌】开头，随后按顺序各出现一次【健康】【事业】【财运】【爱情】(不得合并、省略或改名)，末尾可以加【总评/行为建议】收尾。判断身强身弱请按固定四步逐一写明依据再下结论：①得令：日主是否得月令生旺(看月支藏干旺衰及日主在月支的十二长生)；②得地：四支与藏干是否有日主印比禄刃的根气；③得势：四柱中印星比劫(生我、同我)出现几次(以五行个数与十神为准)；④克泄耗：食伤、财星、官杀(我生、我克、克我)出现几次。四步权衡后得出身强/身弱/中和；喜忌按子平通则推导并写明：身弱喜印比、忌克泄耗，身强反之，中和则以调候通关需要为准。';
 const SCOPE_PROMPT = () => '你是资深子平命理师，仅分析时段运势。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行或关系。禁止输出注释或代码块/围栏标记，只给最终正文。本命强弱/格局/喜忌已定，不要重复判断。用 JSON(仅 JSON)返回，schema：{"title":"古风四字或对仗标题(可选)","explanation":长文}。title 只能用干支+四字直书(如：卯戌六合·和合之象)或古典口诀风格，不得编造伪古文引文。explanation 必须依次各出现一次【健康】【事业】【财运】【爱情】【刑冲克害批注】，顺序一致，不得合并、省略或改名；【刑冲克害批注】依据 scope 中的 annualHits/monthlyHits/decadeHits 逐条编号，每行格式：数字. 关系（干支实例）：一句影响，例如 1. 三合（巳酉丑半合）：…；若没有任何相关命中，该段写一条：1. 本期无重大刑冲克害（仅提示）。各主题全文只出现一次，禁止重复说两遍。每个主题内部必须分点陈述：每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。';
 
+const OVERVIEW_PROMPT = '你是资深子平命理师，现在做「全盘总结」。下面给出的是【已经算好的结论】：本命喜忌、以及未来十年的大运/流年/流月逐段批断要点。你的任务不是重新推算，也不是复述每一段，而是横向比较这些结论，挑出真正值得当事人注意的时间节点并说明理由。严格依据给定材料作答，禁止自行补充材料里没有的干支或事件；禁止输出注释或代码块/围栏标记，只给最终正文。用 JSON(仅 JSON)返回，schema：{"title":"古风四字或对仗标题(可选)","explanation":长文}。explanation 必须依次各出现一次【核心结论】【值得关注的时间节点】【行动建议】，顺序一致，不得合并、省略或改名。其中【值得关注的时间节点】是本文重点，要求：1. 按重要程度排序，每条单独一行、行首用 1. 2. 3. 编号；2. 每条写成「年份(或大运段) + 干支 + 为什么值得关注(引材料中的刑冲克害/喜忌依据) + 一句话怎么办」；3. 至少区分「机会窗口」与「风险窗口」两类，各自点明；4. 材料里若某年标注了六冲/三刑/六害等重大作用，必须纳入；5. 只写材料支持得起的结论，宁少勿滥，不要逐年流水账。【核心结论】用 2-4 条概括命局主线与该十年大势；【行动建议】用 2-4 条给出跨年份可执行的通用做法(贴合喜用五行，不重复时间节点里的原话)。全篇简体中文，每个主题内部一条一句，禁止整段连排。';
+
 export function baselineSummaryOf(baseline) {
   if (!baseline) return '';
   const analysis = baseline.analysis;
@@ -127,6 +129,13 @@ export function buildTaskPayload(record, task, tone = DEFAULT_TONE) {
     const guide = task.guide || {};
     const baseline = baselineSummaryOf(task.baseline) || '（暂无本命结论）';
     userContent = '你是资深子平命理师。根据【本命结论】的喜用五行与下方【资料库】中对应五行的后天调整/职业知识，输出该命局的【后天调整】与【事业职业适配】建议(长文，贴合资料，不要另造体系)。禁止输出注释或代码块，只给最终正文。JSON schema：{"explanation":长文}，explanation 用【后天调整】【事业适配】【健康注意】分段；每个主题内部必须分点：每条单独一行、行首 1. 2. 3. 编号，一句话一条。\n\n# 本命结论\n' + baseline + '\n\n# 资料库\n' + JSON.stringify(guide) + OUTPUT_RULES + toneText;
+  } else if (task.type === 'overview') {
+    userContent = OVERVIEW_PROMPT
+      + '\n# 本命结论(已定，必须沿用，不得重算)\n' + (baselineSummaryOf(task.baseline) || '（暂无本命结论）')
+      + '\n\n# 本命事实数据(JSON，只依据此数据)\n' + JSON.stringify(natal)
+      + OUTPUT_RULES + toneText
+      + '\n\n# 各时段分析要点(JSON)\n' + JSON.stringify(task.findings ?? {})
+      + '\n\n# 当前分析目标\n全盘总结：未来十年中值得关注的节点';
   } else if (task.type === 'baseline') {
     userContent = BASELINE_PROMPT + '\n\n# 事实数据(JSON)\n' + JSON.stringify({ natal, scope: {} }) + OUTPUT_RULES + toneText;
   } else {
@@ -142,7 +151,8 @@ export function buildTaskPayload(record, task, tone = DEFAULT_TONE) {
       + '\n\n# 本时段数据(JSON)\n' + JSON.stringify(scope)
       + '\n\n# 当前分析目标\n' + whenLabel + ageSeg;
   }
-  const effort = (task.type === 'baseline' || task.type === 'adjustment') ? 'high' : 'low';
+  // 需要横向权衡的判断类任务用 high；单期批断用 low(省时)
+  const effort = (task.type === 'baseline' || task.type === 'adjustment' || task.type === 'overview') ? 'high' : 'low';
   return { messages: [{ role: 'system', content: system }, { role: 'user', content: userContent }], effort };
 }
 

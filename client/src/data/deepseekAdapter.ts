@@ -1,4 +1,4 @@
-import type { BaziRecord, BaziAIAnalysis, BaziAnalysisTask, BaziTaskResult } from '../types/domain';
+import type { BaziRecord, BaziAIAnalysis, BaziAnalysisTask, BaziTaskResult, NonAiChart } from '../types/domain';
 import { invoke } from '@tauri-apps/api/core';
 import { getBrowserCredential } from './aiSettings';
 import { isServerMode, runTaskOnServer, ServerError } from './serverClient';
@@ -126,32 +126,66 @@ function channelOrder(forced?: string): ChannelSpec[] {
 
 export async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask, opts: AnalyzeOptions & { secret?: string } = {}): Promise<DeepSeekResult> {
   const nonAi = record.nonAiResult;
+  // 神煞压缩为「名称@柱位」：与服务器/桌面端同一口径(实测省约 89% 体积)
+  const compactShenSha = (shenSha: NonAiChart['shenSha'] | undefined) => {
+    if (!shenSha) return undefined;
+    const pillarNames = ['年', '月', '日', '时'];
+    const items = Array.isArray(shenSha.items)
+      ? shenSha.items.map((item) => item.name + '@' + (pillarNames[item.pillarIndex] ?? '?') + (item.position === '天干' ? '干' : '支'))
+      : [];
+    return { 吉: shenSha.auspicious ?? [], 凶: shenSha.inauspicious ?? [], 明细: items };
+  };
+  // 把与本期干支相关的命中压成可读串，供【刑冲克害批注】逐条引用(与服务器/桌面端一致)
+  const summarizeHits = (row: unknown, ownGanZhi: string): string[] => {
+    const details = (row as { relationshipDetails?: unknown } | undefined)?.relationshipDetails;
+    if (!Array.isArray(details) || !ownGanZhi) return [];
+    const labels: Record<string, string> = { sanHe: '三合', liuHe: '六合', chong: '六冲', xing: '相刑', hai: '六害', po: '六破', ke: '相克' };
+    const out: string[] = [];
+    for (const item of details as Array<Record<string, unknown>>) {
+      const sp = String(item?.sourcePillar ?? ''); const tg = String(item?.targetPillar ?? ''); const st = String(item?.status ?? '');
+      if (sp === ownGanZhi || tg === ownGanZhi || (!sp && !tg)) {
+        const other = tg === ownGanZhi ? sp : tg;
+        const extra = st === 'half-combination' ? '半合' : st === 'partial-punishment' ? '半刑' : '';
+        out.push((labels[String(item?.type)] ?? String(item?.type)) + (other ? '(' + other + ')' : '') + extra);
+      }
+    }
+    return [...new Set(out)].sort();
+  };
+  const gzOf = (row: unknown): string => (row && typeof row === 'object' ? String((row as { ganZhi?: unknown }).ganZhi ?? '') : '');
   const natal = {
     pillars: { year: record.yearPillar, month: record.monthPillar, day: record.dayPillar, hour: record.hourPillar },
     dayMaster: nonAi?.dayMaster, zodiac: nonAi?.zodiac, solarDate: nonAi?.solarDate,
-    elements: nonAi?.elements, tenGods: nonAi?.tenGods, hiddenStems: nonAi?.hiddenStems, relationships: nonAi?.relationships,
+    elements: nonAi?.elements, tenGods: nonAi?.tenGods, hiddenStems: nonAi?.hiddenStems,
+    shenSha: compactShenSha(nonAi?.shenSha), relationships: nonAi?.relationships,
   };
+  // 存储是瘦身过的(流年/流月/大运数组落库即清空)，因此必须优先采用任务自带的内联行，
+  // 否则离线直连会发出空的「本时段数据」——模型拿不到本期干支，只能凭空编。与服务器/桌面端口径一致。
+  const hasGz = (row: unknown): boolean => !!(row && typeof row === 'object' && typeof (row as { ganZhi?: unknown }).ganZhi === 'string' && (row as { ganZhi: string }).ganZhi.length > 0);
   const scope: Record<string, unknown> = {};
   const y = task?.year;
   if (y !== undefined) {
     if (task?.type !== 'decade') scope.age = y - record.birthYear;
-    const annual = (nonAi?.annualFortunes ?? []).find((row) => row.year === y);
-    if (annual) scope.annual = annual;
-    const decade = (nonAi?.greatFortunes ?? []).find((row) => y >= row.startYear && y <= row.endYear);
-    if (decade) scope.decade = decade;
+    const annual = hasGz(task?.annual) ? task!.annual : (nonAi?.annualFortunes ?? []).find((row) => row.year === y);
+    if (annual) { scope.annual = annual; scope.annualHits = summarizeHits(annual, gzOf(annual)); }
+    const decade = hasGz(task?.decade) ? task!.decade : (nonAi?.greatFortunes ?? []).find((row) => y >= row.startYear && y <= row.endYear);
+    if (decade) { scope.decade = decade; scope.decadeHits = summarizeHits(decade, gzOf(decade)); }
     if (task?.month !== undefined) {
-      const monthly = task.monthly ?? (nonAi?.monthlyFortunes ?? []).find((row) => row.year === y && row.month === task.month);
-      if (monthly) scope.monthly = monthly;
+      const monthly = hasGz(task?.monthly) ? task!.monthly : (nonAi?.monthlyFortunes ?? []).find((row) => row.year === y && row.month === task.month);
+      if (monthly) { scope.monthly = monthly; scope.monthlyHits = summarizeHits(monthly, gzOf(monthly)); }
     }
   }
-  const when = task?.type === 'adjustment' ? '后天调整与职业适配'
+  const isOverview = task?.type === 'overview';
+  const when = isOverview ? '全盘总结：未来十年中值得关注的节点'
+    : task?.type === 'adjustment' ? '后天调整与职业适配'
     : task?.type === 'annual' ? y + '年'
     : task?.type === 'monthly' ? y + '年' + task.month + '月'
     : task?.type === 'decade' ? '大运'
     : '本命';
   const isBaseline = !task || task.type === 'baseline';
   const isAdjustment = task?.type === 'adjustment';
-  const fiveDimRule = isBaseline
+  const fiveDimRule = isOverview
+    ? '你的任务不是重新推算、也不是逐段复述，而是横向比较这些已算好的结论，挑出真正值得注意的时间节点。严格依据材料，禁止补充材料里没有的干支或事件。explanation 必须依次各出现一次【核心结论】【值得关注的时间节点】【行动建议】(不得合并、省略或改名)。【值得关注的时间节点】是重点：按重要程度排序，每条写成「年份或大运段 + 干支 + 为什么值得关注(引材料中的刑冲克害/喜忌依据) + 一句话怎么办」，并区分机会窗口与风险窗口；材料里标了六冲/三刑/六害的年份必须纳入；宁少勿滥，不要逐年流水账。'
+    : isBaseline
     ? 'explanation 必须以【身强身弱与喜忌】开头，随后按序各出现一次【健康】【事业】【财运】【爱情】(不得合并、省略或改名)。判断身强身弱按四步写明依据：①得令(月支生旺与十二长生)；②得地(四支藏干印比禄刃根基)；③得势(印比出现次数)；④克泄耗(食伤财官杀次数)，权衡后下结论；喜忌按通则：身弱喜印比、忌克泄耗，身强反之。'
     : isAdjustment
       ? 'explanation 必须依次各出现一次【后天调整】【事业适配】【健康注意】(不得合并、省略或改名)。'
@@ -166,9 +200,11 @@ export async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask,
     : '';
   const guideNote = isAdjustment
     ? '\n\n# 资料库(喜用五行)' + '\n' + JSON.stringify(task?.guide ?? {})
-    : '';
+    : isOverview
+      ? '\n\n# 各时段分析要点(JSON)\n' + JSON.stringify(task?.findings ?? {})
+      : '';
   const content = instruction + baselineNote + guideNote + '\n\n# 本命事实数据(JSON)\n' + JSON.stringify(natal)
-    + (isAdjustment ? '\n\n# 当前分析目标\n' + when : scopeTypes ? '\n\n# 本时段数据(JSON)\n' + JSON.stringify(scope) + '\n\n# 当前分析目标\n' + when : '');
+    + (isAdjustment || isOverview ? '\n\n# 当前分析目标\n' + when : scopeTypes ? '\n\n# 本时段数据(JSON)\n' + JSON.stringify(scope) + '\n\n# 当前分析目标\n' + when : '');
   // 按“当前使用通道 → 其余已配置通道”依次尝试；每个通道用各自的端点/模型/参数
   const errors: string[] = [];
   for (const channel of channelOrder()) {
@@ -178,7 +214,7 @@ export async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask,
       { role: 'system', content: '请把思考压缩到最短，直接输出符合要求的JSON正文。' },
       { role: 'user', content },
     ] };
-    if (channel.id === 'deepseek') payload.reasoning_effort = (isBaseline || isAdjustment) ? 'high' : 'low';
+    if (channel.id === 'deepseek') payload.reasoning_effort = (isBaseline || isAdjustment || isOverview) ? 'high' : 'low';
     if (channel.disableThinking) payload.enable_thinking = false;
     if (channel.temperature !== undefined) payload.temperature = channel.temperature;
     try {

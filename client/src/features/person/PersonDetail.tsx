@@ -17,7 +17,7 @@ const scopeLabel = (result: BaziTaskResult): string => {
   const task = result.task;
   switch (task.type) {
     case 'baseline': return '本命命局（身强身弱/格局/喜忌）';
-    case 'overview': return '性格与行为总评';
+    case 'overview': return '全盘总结（值得关注的时间节点）';
     case 'adjustment': return '后天调整与职业适配（按喜用五行）';
     case 'annual': return `${task.year ?? ''} 年流年`;
     case 'monthly': return `${task.year ?? ''} 年 ${task.month ?? ''} 月`;
@@ -83,10 +83,11 @@ const describeScope = (result: BaziTaskResult, record: BaziRecord): string => {
 
 const scopeGroups: Array<{ key: BaziTaskResult['task']['type']; title: string }> = [
   { key: 'baseline', title: '① 本命（身强身弱/格局/喜忌 + 健康·事业·财运·爱情）' },
-  { key: 'adjustment', title: '② 后天调整与职业适配（按喜用五行）' },
-  { key: 'decade', title: '③ 未来大运' },
-  { key: 'annual', title: '④ 未来十年 · 每年流年' },
-  { key: 'monthly', title: '⑤ 从今天起 · 未来十二个月' },
+  { key: 'overview', title: '② 全盘总结（值得关注的时间节点）' },
+  { key: 'adjustment', title: '③ 后天调整与职业适配（按喜用五行）' },
+  { key: 'decade', title: '④ 未来大运' },
+  { key: 'annual', title: '⑤ 未来十年 · 每年流年' },
+  { key: 'monthly', title: '⑥ 从今天起 · 未来十二个月' },
 ];
 const groupTitle = (title: string) => '【' + title.replace(/^\d+\s*[①-⑨]?\s*/, '') + '】';
 
@@ -226,7 +227,7 @@ export function pointBodyText(blocks: PointBlock[]): string {
 }
 
 /** 复制正文排版：标题行 + 分点条目(•) + 段落间空行，方便检索/定位。 */
-export function formatCopyBody(analysis: NonNullable<BaziTaskResult['analysis']>, selected: DimKey[] | null): string {
+export function formatCopyBody(analysis: NonNullable<BaziTaskResult['analysis']>, selected: DimKey[] | null, keepWholeText = false): string {
   const blocks: string[] = [];
   if (selected === null && analysis.title) blocks.push('标题：' + analysis.title);
   if (analysis.pattern && selected === null && !analysis.explanation) {
@@ -242,6 +243,8 @@ export function formatCopyBody(analysis: NonNullable<BaziTaskResult['analysis']>
     used = allBlocks.filter((block) => block.head && selected.some((dim) => markerOf(dim, headName(block.head))));
     // 老数据没有【】标记：仅“不筛选(全选)”才整体带出，避免维度勾选下误传无关正文
     if (used.length === 0 && !hasAnyMarker(text)) used = [];
+    // 全盘总结的小节(核心结论/时间节点/行动建议)不属于五维度：勾选维度时仍要整篇带出，否则复制结果会丢掉总结
+    if (keepWholeText && used.length === 0) used = allBlocks;
   }
   const body = pointBodyText(used).trim();
   if (body) blocks.push(body);
@@ -299,7 +302,7 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
       const blocks: string[] = [];
       for (const item of items) {
         const analysis = item.analysis!;
-        const body = formatCopyBody(analysis, selected);
+        const body = formatCopyBody(analysis, selected, item.task.type === 'overview');
         if (!body.trim()) continue;
         blocks.push(describeScope(item, record) + '\n' + body);
       }
@@ -337,6 +340,7 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
   const chipLabel = (item: BaziTaskResult): string => {
     const t = item.task;
     if (t.type === 'baseline') return '本命命局';
+    if (t.type === 'overview') return '全盘总结';
     if (t.type === 'adjustment') return '后天调整';
     if (t.type === 'decade') {
       const gf = findDecade(record, t);
@@ -477,7 +481,8 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
     {record.aiStatus === 'failed' && <p role="status">个别任务自动重试多轮后仍未成功。常见原因：余额不足或额度已用完 / 密钥无效 / 请求过于频繁（限流）/ 网络超时或不可达 / 所选服务不可用。请按下方原因处理后，再点 AI 分析（只补失败项，不重复花钱）。</p>}
     {record.aiError && <p role="alert">原因：{safeAiError(record.aiError)}</p>}
     {record.aiAnalysis && <div className="long-text"><strong>格局与强弱</strong><p>{record.aiAnalysis.pattern || '—'} · {record.aiAnalysis.strength || '—'}</p><p>喜：{(record.aiAnalysis.usefulElements ?? []).join('、') || '—'}　忌：{(record.aiAnalysis.avoidElements ?? []).join('、') || '—'}</p><PointsView text={record.aiAnalysis.explanation} /></div>}
-    {record.aiOverview && <div className="long-text"><strong>最终结论：八字总览、工作与生活方式</strong><p>格局：{record.aiOverview.pattern || '—'}　强弱：{record.aiOverview.strength || '—'}</p><p>喜：{(record.aiOverview.usefulElements ?? []).join('、') || '—'}　忌：{(record.aiOverview.avoidElements ?? []).join('、') || '—'}</p><PointsView text={record.aiOverview.explanation} /></div>}
+    {/* 全盘总结正文(含古风标题)在下方「② 全盘总结」分组里完整展示；这里只留一处入口提示，避免同一段内容渲染两遍 */}
+    {record.aiOverview && <p className="long-text" aria-label="全盘总结提要"><strong>全盘总结已完成：</strong>值得关注的年份与机会/风险窗口见下方「② 全盘总结」段落。</p>}
     {aiResults.length > 0 && <div className="ai-scopes">
       <div className="section-heading"><div><h3>各范围分析结果</h3></div><button className="text-button" type="button" onClick={() => void copyAll()}>复制全部</button></div>
 

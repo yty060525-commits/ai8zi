@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { buildBaziTasks, orchestrateBaziAnalysis, sanitizeAnalysis } from '../data/baziOrchestrator';
 import { ELEMENT_GUIDES } from '../data/elementKnowledge';
-import type { BaziRecord } from '../types/domain';
+import type { BaziAnalysisTask, BaziRecord } from '../types/domain';
 
 const record = { id: 'r1', name: '测试', gender: 'male', birthYear: 1984, birthMonth: 2, createdAt: '2025-01-01T00:00:00.000Z', yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午', nonAiResult: { forecastRange: [2025, 2026, 2027, 2028, 2029, 2030, 2031, 2032, 2033, 2034], greatFortunes: [], annualFortunes: [], monthlyFortunes: [] } as unknown as BaziRecord['nonAiResult'], aiStatus: 'not_started' } as BaziRecord;
 
 const okAnalysis = { pattern: 'x', strength: '强', usefulElements: [], avoidElements: [], explanation: 'ok' };
 
-describe('task layout: 本命 + 未来十年 + 滚动12个月(+大运)，无总评/总结', () => {
+describe('task layout: 本命 + 未来十年 + 滚动12个月(+大运) + 末条全盘总结', () => {
   it('builds 23 tasks without great fortunes', () => {
     const tasks = buildBaziTasks({ ...record, createdAt: '2025-06-30T23:00:00.000Z', nonAiResult: undefined });
     expect(tasks).toHaveLength(23);
@@ -41,12 +41,13 @@ describe('task layout: 本命 + 未来十年 + 滚动12个月(+大运)，无总�
     const calls: string[] = [];
     const withDecades: BaziRecord = { ...record, nonAiResult: { forecastRange: Array.from({ length: 10 }, (_, i) => 2025 + i), greatFortunes: [{ ganZhi: '辛未', startYear: 2017, endYear: 2026 }], annualFortunes: [], monthlyFortunes: [] } as unknown as BaziRecord['nonAiResult'] };
     const result = await orchestrateBaziAnalysis(withDecades, async (task) => { calls.push(task.taskId); return { task, status: 'completed', analysis: okAnalysis }; });
-    expect(calls.length).toBe(24);
+    // 23 基础任务 + 1 大运 + 1 全盘总结 = 25
+    expect(calls.length).toBe(25);
     expect(calls[0]).toBe('task-01');
     expect(calls).toContain('task-24'); // 大运任务已跑
-    expect(Object.keys(result.aiTasks ?? {})).toHaveLength(24);
+    expect(calls[calls.length - 1]).toBe('task-31'); // 总结排在最后
+    expect(Object.keys(result.aiTasks ?? {})).toHaveLength(25);
     expect(result.aiAnalysis?.explanation).toBe('ok');
-    expect(result.aiOverview).toBeUndefined();
     // 月度任务携带了干支行(供后端最小上下文)
     const monthTask = result.aiTasks?.['task-12']?.task;
     expect(monthTask?.type).toBe('monthly');
@@ -69,9 +70,10 @@ describe('task layout: 本命 + 未来十年 + 滚动12个月(+大运)，无总�
     const progressCalls: number[] = [];
     let lastDone = 0;
     await orchestrateBaziAnalysis({ ...record, nonAiResult: undefined }, async (task) => ({ task, status: 'completed', analysis: okAnalysis }), (p) => { progressCalls.push(p.done); lastDone = p.total; });
-    expect(lastDone).toBe(23);
-    expect(progressCalls[progressCalls.length - 1]).toBe(23);
-    expect(progressCalls).toHaveLength(23);
+    // 无排盘数据时：23 条 + 全盘总结 1 条 = 24
+    expect(lastDone).toBe(24);
+    expect(progressCalls[progressCalls.length - 1]).toBe(24);
+    expect(progressCalls).toHaveLength(24);
   });
 
   it('appends one adjustment task after baseline when a favorite element is known', async () => {
@@ -188,5 +190,60 @@ describe('auto retry on failed tasks', () => {
       undefined,
       { signal: controller.signal, retries: 2, retryDelayMs: 0 },
     )).rejects.toThrow(/已停止/);
+  });
+});
+
+describe('全盘总结任务(task-31)', () => {
+  const richRecord: BaziRecord = { ...record, nonAiResult: { forecastRange: Array.from({ length: 10 }, (_, i) => 2025 + i), greatFortunes: [{ ganZhi: '辛未', startYear: 2025, endYear: 2034 }], annualFortunes: [], monthlyFortunes: [] } as unknown as BaziRecord['nonAiResult'] };
+
+  const OVERVIEW_TEXT = '【核心结论】1. 命局主线清晰。\n【值得关注的时间节点】1. 2027年(丙午)：官星得力，是机会窗口。\n【行动建议】1. 抓住上半年。';
+
+  it('排在所有时段任务之后，结构完整时只发一条', async () => {
+    const calls: string[] = [];
+    const result = await orchestrateBaziAnalysis(richRecord, async (task) => {
+      calls.push(task.taskId);
+      return { task, status: 'completed', analysis: { ...okAnalysis, explanation: task.type === 'overview' ? OVERVIEW_TEXT : '【健康】1. 注意作息。' } };
+    });
+    expect(calls[calls.length - 1]).toBe('task-31');
+    expect(calls.filter((id) => id === 'task-31')).toHaveLength(1);
+    expect(result.aiOverview?.explanation).toContain('值得关注的时间节点');
+  });
+
+  it('总结缺【小节】时会在本任务内自动重写，最终结果仍带齐三段', async () => {
+    let overviewAttempts = 0;
+    const result = await orchestrateBaziAnalysis(richRecord, async (task) => {
+      if (task.type === 'overview') overviewAttempts += 1;
+      const bad = task.type === 'overview' && overviewAttempts === 1;
+      // 第一次只给出两段(缺【行动建议】) —— 带小节但缺段才会触发结构重写
+      return { task, status: 'completed', analysis: { ...okAnalysis, explanation: bad ? '【核心结论】1. 主线。\n【值得关注的时间节点】1. 2027年(丙午)机会窗口。' : task.type === 'overview' ? OVERVIEW_TEXT : '【健康】1. 注意作息。' } };
+    });
+    expect(overviewAttempts).toBe(2);            // 缺段 → 自动再来一次
+    expect(result.aiOverview?.explanation).toContain('【行动建议】'); // 落库的是补全后的版本
+  });
+
+  it('总结任务携带本命结论摘要与各时段要点(含干支标题)', async () => {
+    let captured: BaziAnalysisTask | undefined;
+    await orchestrateBaziAnalysis(richRecord, async (task) => {
+      if (task.type === 'overview') captured = task;
+      return { task, status: 'completed', analysis: { ...okAnalysis, explanation: task.type === 'overview' ? '【核心结论】1. 主线。\n【值得关注的时间节点】1. 2027年(丙午)机会窗口。\n【行动建议】1. 抓上半年。' : '【事业】1. 有升迁机会。' } };
+    });
+    expect(captured).toBeTruthy();
+    expect(String((captured!.baseline as { summary?: string }).summary)).toContain('格局：x');
+    expect(captured!.findings?.annuals.length).toBeGreaterThan(0);
+    expect(captured!.findings?.decades[0]?.heading).toContain('辛未');
+    expect(captured!.findings?.annuals[0]?.text).toContain('【事业】');
+    expect(captured!.findings?.horizon).toEqual({ from: 2025, to: 2034 });
+  });
+
+  it('没有任何已完成的时段结果时不发总结请求(不浪费调用)', async () => {
+    const calls: string[] = [];
+    await orchestrateBaziAnalysis(richRecord, async (task) => {
+      calls.push(task.taskId);
+      // 全部时段任务失败 → 无要点可总结
+      return task.type === 'baseline'
+        ? { task, status: 'completed', analysis: okAnalysis }
+        : { task, status: 'failed', error: 'HTTP 400 bad request' };
+    }, undefined, { retries: 0 });
+    expect(calls).not.toContain('task-31');
   });
 });

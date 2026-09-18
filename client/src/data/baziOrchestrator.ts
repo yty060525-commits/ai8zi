@@ -1,4 +1,4 @@
-import type { BaziAIAnalysis, BaziAnalysisTask, BaziRecord, BaziTaskResult, BaziTaskType } from '../types/domain';
+import type { AiFindings, BaziAIAnalysis, BaziAnalysisTask, BaziRecord, BaziTaskResult, BaziTaskType } from '../types/domain';
 import * as adapter from './deepseekAdapter';
 import { chinaYear, chinaYearMonth } from '../utils/date';
 import { ELEMENT_GUIDES, primaryElement, type ElementGuide } from './elementKnowledge';
@@ -39,6 +39,7 @@ export const REQUIRED_SECTIONS: Record<string, string[]> = {
   monthly: ['健康', '事业', '财运', '爱情', '刑冲克害批注'],
   decade: ['健康', '事业', '财运', '爱情', '刑冲克害批注'],
   adjustment: ['后天调整', '事业适配', '健康注意'],
+  overview: ['核心结论', '值得关注的时间节点', '行动建议'],
 };
 
 /** 固定最大并发(命中率优先)：不爬坡。出现限流/超时/失败时冷却后继续发，不降并发数。 */
@@ -98,6 +99,7 @@ const taskLabel = (task: BaziAnalysisTask): string => {
   if (task.type === 'monthly') return task.year !== undefined && task.month !== undefined ? task.year + ' 年 ' + task.month + ' 月' : '流月';
   if (task.type === 'decade') return task.year !== undefined ? '大运段 ' + task.year : '大运段';
   if (task.type === 'adjustment') return '后天调整与职业适配(按喜用五行)';
+  if (task.type === 'overview') return '全盘总结(值得关注的时间节点)';
   return '任务';
 };
 
@@ -151,6 +153,47 @@ export function buildBaziTasks(record: BaziRecord): BaziAnalysisTask[] {
     .filter((g) => g.startYear <= year + 9 && g.endYear >= year)
     .map((g, i) => ({ taskId: `task-${String(i + 24).padStart(2, '0')}`, type: 'decade' as const, year: g.startYear, decade: g }));
   return [...core, ...decadeTasks];
+}
+
+/** 「全盘总结」任务的固定 id(排在所有时段任务之后)。 */
+export const OVERVIEW_TASK_ID = 'task-31';
+/** 单条要点截断长度：总结只需要结论，不需要把每篇长文原样再发一遍。 */
+export const FINDING_SNIPPET = 260;
+
+/** 从正文里提炼「值得注意」的句子：优先带年份/干支与风险词的编号行。 */
+const pickPoints = (text: string, limit: number): string => {
+  const lines = (text || '').replace(/\r/g, '').split('\n').map((s) => s.trim()).filter(Boolean);
+  if (lines.length === 0) return '';
+  const kept: string[] = [];
+  let head = '';
+  for (const line of lines) {
+    // 【小节】标题保留，便于模型按维度归纳
+    if (/^【[^】]{1,16}】/.test(line)) { head = line.slice(0, 24); continue; }
+    kept.push(line);
+  }
+  const body = kept.join(' ').replace(/\s+/g, ' ');
+  const out = (head ? head + ' ' : '') + body.slice(0, limit);
+  return out;
+};
+
+/** 汇总各时段已完成结果，作为「全盘总结」的输入(不含未完成任务，避免让模型猜)。 */
+export function collectFindings(record: BaziRecord, aiTasks: Record<string, BaziTaskResult>, tasks: BaziAnalysisTask[]): AiFindings {
+  const horizon = { from: chinaYear(record.createdAt), to: chinaYear(record.createdAt) + 9 };
+  const headingOf = (task: BaziAnalysisTask): string => {
+    if (task.type === 'decade') {
+      const gf = task.decade ?? (record.nonAiResult?.greatFortunes ?? []).find((row) => task.year !== undefined && task.year >= row.startYear && task.year <= row.endYear);
+      return (gf?.ganZhi ? gf.ganZhi + ' ' : '') + '大运段(' + (gf?.startYear ?? task.year ?? '') + '-' + (gf?.endYear ?? '') + ')';
+    }
+    if (task.type === 'monthly') return task.year + '年' + task.month + '月' + (task.monthly?.ganZhi ? '(' + task.monthly.ganZhi + ')' : '');
+    return (task.year ?? '') + '年' + (task.annual?.ganZhi ? '(' + task.annual.ganZhi + ')' : '');
+  };
+  const bucket = (type: BaziTaskType) => tasks
+    .filter((task) => task.type === type)
+    .map((task) => ({ task, result: aiTasks[task.taskId] }))
+    .filter((row) => row.result?.status === 'completed' && !!row.result.analysis?.explanation)
+    .map((row) => ({ key: row.task.taskId, heading: headingOf(row.task), text: pickPoints(row.result.analysis!.explanation!, FINDING_SNIPPET) }))
+    .filter((row) => row.text.length > 0);
+  return { horizon, baselineSummary: '', decades: bucket('decade'), annuals: bucket('annual'), monthlies: bucket('monthly') };
 }
 
 const makeDefaultRunner = (record: BaziRecord, signal?: AbortSignal, tone?: number): TaskRunner => async (task) => {
@@ -250,35 +293,40 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
   const favorite = baselineResult.status === 'completed' ? primaryElement(baselineResult.analysis?.usefulElements) : undefined;
   // 本命结论摘要注入每个时段任务作锚点，防止模型自推/乱说
   const analysis = baselineResult.analysis;
+  let baselineSummaryText = '';
   if (baselineResult.status === 'completed' && analysis) {
-    const summary = '格局：' + (analysis.pattern || '—') + ' · 强弱：' + (analysis.strength || '—')
+    baselineSummaryText = '格局：' + (analysis.pattern || '—') + ' · 强弱：' + (analysis.strength || '—')
       + '　喜：' + (analysis.usefulElements ?? []).join('、') + '　忌：' + (analysis.avoidElements ?? []).join('、');
     for (const task of tasks) {
-      if (task.type === 'annual' || task.type === 'monthly' || task.type === 'decade') task.baseline = { summary } as never;
+      if (task.type === 'annual' || task.type === 'monthly' || task.type === 'decade') task.baseline = { summary: baselineSummaryText } as never;
     }
   }
-  // 前缀预热：同组任务共享大前缀(提示词+本命结论+本命事实)。先串行跑第一条建立 DeepSeek 前缀缓存，再并发其余 → 速度与命中率兼得
-  // 命中率优先编排：先算年运建立“本命+该年”前缀，再让同年剩余流月并发吃缓存；不爬坡，遇限流只冷却重发
-  const annuals = pick('annual');
-  if (annuals.length > 0) await step(annuals[0]); // 第一条串行：预热 SCOPE 全局前缀(提示词+本命结论+本命事实+要求+语气)
-  if (annuals.length > 1) await fixedMapLimit(annuals.slice(1), FIXED_CONCURRENCY.scope, step);
-  const monthGroups: BaziAnalysisTask[][] = [];
-  for (const m of pick('monthly')) {
-    const last = monthGroups[monthGroups.length - 1];
-    if (last && last[0].year === m.year) last.push(m); else monthGroups.push([m]);
-  }
-  for (const group of monthGroups) await fixedMapLimit(group, FIXED_CONCURRENCY.scope, step); // 同一年内的月份共享该年前缀，可并发
-  await fixedMapLimit(pick('decade'), FIXED_CONCURRENCY.decade, step);
+  // 前缀缓存实测：全部时段任务(流年+流月+大运)共用同一段前缀，直到「# 本时段数据」才开始分叉
+  // —— 1441/1771 字符 ≈ 81% 完全一致。所以只需 1 条请求预热，其余时段任务可以一次性全并发，
+  // 不必按年分组串行(分组只会拉长总时长，对命中率毫无帮助)。不爬坡，遇限流只冷却重发。
+  const scopeTasks = [...pick('annual'), ...pick('monthly'), ...pick('decade')];
+  if (scopeTasks.length > 0) await step(scopeTasks[0]); // 预热：建立 SCOPE 公共前缀缓存
+  if (scopeTasks.length > 1) await fixedMapLimit(scopeTasks.slice(1), FIXED_CONCURRENCY.scope, step);
   // 工作/生活/职业知识：最后才上传(等大运流年流月都分析完，避免上下文污染)
   if (favorite && baselineResult.status === 'completed') {
     const guide: ElementGuide = ELEMENT_GUIDES[favorite];
 
-    tasks.push({
+    const adjustmentTask: BaziAnalysisTask = {
       taskId: 'task-30', type: 'adjustment',
       baseline: baselineResult,
       guide: { element: guide.element, lifestyle: guide.lifestyle, career: guide.career, health: guide.health },
-    });
-    await fixedMapLimit(tasks.filter((t) => t.type === 'adjustment'), 1, step);
+    };
+    tasks.push(adjustmentTask);
+    // 注意：这里必须跑「刚创建的那一条」，不能用 tasks.filter(type) —— 恢复旧记录时同一类型可能已有一条历史任务，filter 会把同一条塞进队列两次。
+    await fixedMapLimit([adjustmentTask], 1, step);
+  }
+  // 全盘总结：把已算出的大运/流年/流月要点交给模型，判断「哪些时间节点真正值得关注」。
+  // 必须排在时段任务之后 —— 它依赖前序结论；单独一条请求，不参与并发。
+  const findings = collectFindings(record, aiTasks, tasks);
+  if (findings.annuals.length + findings.monthlies.length + findings.decades.length > 0) {
+    const overviewTask: BaziAnalysisTask = { taskId: OVERVIEW_TASK_ID, type: 'overview', baseline: { summary: baselineSummaryText, analysis: baselineResult.analysis } as never, findings };
+    tasks.push(overviewTask);
+    await fixedMapLimit([overviewTask], 1, step);
   }
   ensureLive();
   // 整批跑完后自动“补跑一轮”：把仍然失败(且属于可重试因素)的任务再调一次 AI，
@@ -319,7 +367,8 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
     ...record,
     aiTasks,
     aiAnalysis: aiTasks['task-01']?.analysis ? sanitizeAnalysis(aiTasks['task-01']?.analysis) : undefined,
-    aiOverview: undefined,
+    // 全盘总结落到 aiOverview(记录里已有该字段与持久化通道)，供详情页顶部展示
+    aiOverview: aiTasks[OVERVIEW_TASK_ID]?.analysis ? sanitizeAnalysis(aiTasks[OVERVIEW_TASK_ID]!.analysis) : undefined,
     aiStatus: statuses.includes('failed') ? 'failed' : statuses.includes('not_configured') ? 'not_configured' : 'completed',
     aiError: failedTask?.error ?? (notConfigured ? '未配置 AI 服务' : undefined),
   };
