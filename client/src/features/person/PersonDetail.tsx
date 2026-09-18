@@ -32,21 +32,33 @@ const horizonOf = (record: BaziRecord) => {
   return { from: year, to: year + 9 };
 };
 
+/** 找到任务对应的大运段：优先用任务自带的内联行(最新且权威)，再按 startYear 精确匹配，最后按年份落区间兜底。
+ *  兜底是必要的：旧记录的大运任务存的是「起运年龄推算」得到的 startYear(如 2019)，与现在对齐十年边界的值(2020)不同。 */
+export const findDecade = (record: BaziRecord, task: { year?: number; decade?: { ganZhi: string; startYear: number; endYear: number } }) => {
+  if (task.decade?.ganZhi) return task.decade;
+  const list = record.nonAiResult?.greatFortunes ?? [];
+  const y = task.year;
+  if (y === undefined) return undefined;
+  const exact = list.find((item) => item.startYear === y) ?? list.find((item) => item.startYear <= y && y <= item.endYear);
+  if (exact) return exact;
+  // 旧记录的年份可能因原「起运年龄推算」而偏移一两年；取起点最接近的一段，保证标题仍有干支
+  if (!list.length) return undefined;
+  return list.reduce((best, item) => Math.abs(item.startYear - y) < Math.abs(best.startYear - y) ? item : best, list[0]);
+};
+
 /** 大运展示段：第一段“当年→本大运结束”，第二段“下一大运起→十年后”。 */
-const decadeSegment = (taskYear: number | undefined, record: BaziRecord): { start: number; end: number } => {
-  const nonAi = record.nonAiResult;
+const decadeSegment = (task: { year?: number; decade?: { ganZhi: string; startYear: number; endYear: number } }, record: BaziRecord): { start: number; end: number } => {
   const horizon = horizonOf(record);
-  const decade = (nonAi?.greatFortunes ?? []).find((item) => item.startYear === taskYear);
-  const rawStart = decade?.startYear ?? taskYear ?? horizon.from;
+  const decade = findDecade(record, task);
+  const rawStart = decade?.startYear ?? task.year ?? horizon.from;
   const rawEnd = decade?.endYear ?? horizon.to;
   return { start: Math.max(rawStart, horizon.from), end: Math.min(rawEnd, horizon.to) };
 };
 
 /** 大运标题：只保留干支+时段（如“庚子 大运段(2020-2029)”）。不显示年龄推算。 */
 const decadeHeading = (result: BaziTaskResult, record: BaziRecord): string => {
-  const seg = decadeSegment(result.task.year, record);
-  const decade = (record.nonAiResult?.greatFortunes ?? []).find((item) => item.startYear === result.task.year);
-  const name = decade?.ganZhi ?? '';
+  const seg = decadeSegment(result.task, record);
+  const name = findDecade(record, result.task)?.ganZhi ?? '';
   return name ? `${name} 大运段(${seg.start}-${seg.end})` : `大运段(${seg.start}-${seg.end})`;
 };
 
@@ -327,7 +339,7 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
     if (t.type === 'baseline') return '本命命局';
     if (t.type === 'adjustment') return '后天调整';
     if (t.type === 'decade') {
-      const gf = (record.nonAiResult?.greatFortunes ?? []).find((g) => g.startYear === t.year);
+      const gf = findDecade(record, t);
       return gf?.ganZhi ? '未来大运 · ' + gf.ganZhi : '未来大运';
     }
     if (t.type === 'annual') {
