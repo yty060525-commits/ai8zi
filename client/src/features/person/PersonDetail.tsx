@@ -42,14 +42,12 @@ const decadeSegment = (taskYear: number | undefined, record: BaziRecord): { star
   return { start: Math.max(rawStart, horizon.from), end: Math.min(rawEnd, horizon.to) };
 };
 
-/** 大运标题：去掉“2020 起”这类日期前缀，只保留干支+时段，如“庚子 大运段(2020-2029)”。 */
+/** 大运标题：只保留干支+时段（如“庚子 大运段(2020-2029)”）。不显示年龄推算。 */
 const decadeHeading = (result: BaziTaskResult, record: BaziRecord): string => {
   const seg = decadeSegment(result.task.year, record);
   const decade = (record.nonAiResult?.greatFortunes ?? []).find((item) => item.startYear === result.task.year);
   const name = decade?.ganZhi ?? '';
-  const span = name ? `${name} 大运段(${seg.start}-${seg.end})` : `大运段(${seg.start}-${seg.end})`;
-  const age = result.task.year !== undefined && record.birthYear ? `年龄约 ${result.task.year - record.birthYear} 岁` : '';
-  return [span, age].filter(Boolean).join(' · ');
+  return name ? `${name} 大运段(${seg.start}-${seg.end})` : `大运段(${seg.start}-${seg.end})`;
 };
 
 const fortuneMeta = (result: BaziTaskResult, record: BaziRecord): string => {
@@ -58,7 +56,7 @@ const fortuneMeta = (result: BaziTaskResult, record: BaziRecord): string => {
   const age = task.year !== undefined && record.birthYear ? `年龄约 ${task.year - record.birthYear} 岁` : '';
   let ganZhi = '';
   if (task.type === 'annual' && nonAi) {
-    ganZhi = nonAi.annualFortunes.find((item) => item.year === task.year)?.ganZhi ?? '';
+    ganZhi = task.annual?.ganZhi ?? nonAi.annualFortunes.find((item) => item.year === task.year)?.ganZhi ?? '';
   } else if (task.type === 'monthly') {
     ganZhi = task.monthly?.ganZhi ?? (nonAi ? nonAi.monthlyFortunes.find((item) => item.year === task.year && item.month === task.month)?.ganZhi ?? '' : '');
   }
