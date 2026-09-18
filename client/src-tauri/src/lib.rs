@@ -342,6 +342,22 @@ fn pick_decade(rows: &Value, year: i32) -> Value {
     }).cloned()).unwrap_or(Value::Null)
 }
 
+/// 失败原因分类：把上游 HTTP 状态码 + 响应体文案翻译成可读原因(与服务器端口径一致)。
+pub(crate) fn classify_failure(status: u16, body: &str) -> String {
+    let lower = body.to_lowercase();
+    let has = |pat: &str| lower.contains(pat);
+    let quota = status == 402 || has("insufficient") || has("balance") || has("quota") || has("arrears") || body.contains("余额") || body.contains("额度") || body.contains("配额");
+    if quota { return "余额不足或额度已用完".into(); }
+    let auth = status == 401 || status == 403 || has("invalid api key") || has("incorrect api key") || has("unauthorized") || has("authentication") || body.contains("密钥无效") || body.contains("鉴权");
+    if auth { return "密钥无效或无权限".into(); }
+    if status == 429 || has("rate limit") || has("too many requests") || body.contains("限流") || body.contains("频繁") { return "请求过于频繁（已被限流）".into(); }
+    if status == 404 || has("model not found") || has("no such model") || body.contains("模型不存在") { return "模型名不存在或已下线".into(); }
+    if status == 400 { return "请求参数不被接受".into(); }
+    if status >= 500 { return "服务端故障（上游 5xx）".into(); }
+    let snippet: String = body.replace(['\n', '\r'], " ").trim().chars().take(160).collect();
+    if snippet.is_empty() { format!("HTTP {status}") } else { format!("上游报错：{snippet}") }
+}
+
 pub(crate) fn final_ai_status(errors: &[String]) -> (&'static str, Option<String>) {
     ("failed", Some(if errors.is_empty() { "AI request failed".into() } else { errors.join("; ") }))
 }
@@ -514,6 +530,7 @@ pub async fn run_ai_task(state: State<'_, Database>, record: BaziRecord, task: A
         let mut transport_ok = false;
         let mut body: Value = Value::Null;
         let mut request_failed = String::new();
+        let started_at = std::time::Instant::now();
         for attempt in 0..2u8 {
             if session_cancelled() { return Err("cancelled".into()); }
             let send_result = {
@@ -529,25 +546,31 @@ pub async fn run_ai_task(state: State<'_, Database>, record: BaziRecord, task: A
                 Ok(response) if response.status().is_success() => {
                     match response.json::<Value>().await {
                         Ok(parsed) => { body = parsed; transport_ok = true; break; }
-                        Err(_) => { request_failed = "invalid response".into(); break; }
+                        Err(_) => { request_failed = "上游返回内容无法解析".into(); break; }
                     }
                 }
                 Ok(response) => {
                     let code = response.status().as_u16();
+                    let err_text = response.text().await.unwrap_or_default();
+                    // 限流/上游抖动重试一次
                     if attempt == 0 && (code == 429 || code >= 500) { continue; }
-                    request_failed = format!("HTTP {code}");
+                    request_failed = format!("{}（HTTP {} · {}）", classify_failure(code, &err_text), code, provider.key());
                     break;
                 }
-                Err(_) => {
+                Err(err) => {
                     if attempt == 0 { continue; }
-                    request_failed = "network failure".into();
+                    let secs = started_at.elapsed().as_secs();
+                    request_failed = if err.is_timeout() {
+                        format!("网络超时：上游 {secs} 秒未响应（{}）", provider.key())
+                    } else {
+                        format!("网络不可达或延迟过高（{}）：{err}", provider.key())
+                    };
                     break;
                 }
             }
         }
-        if session_cancelled() { return Err("cancelled".into()); }
         if !transport_ok { errors.push(request_failed); continue; }
-        let content = match body["choices"][0]["message"]["content"].as_str() { Some(content) => content, None => { errors.push("invalid response".into()); continue; } };
+        let content = match body["choices"][0]["message"]["content"].as_str() { Some(content) => content, None => { errors.push("上游返回空正文（可能被内容过滤或达到输出上限）".into()); continue; } };
         let content = content.trim().trim_start_matches("```json").trim_end_matches("```").trim();
         match serde_json::from_str::<Value>(content) {
             Ok(analysis) => {
@@ -671,6 +694,22 @@ mod tests {
         assert_eq!(commands::provider_temperature(&commands::AiProvider::Deepseek), None);
         assert_eq!(commands::provider_temperature(&commands::AiProvider::Kimi), Some(1));
         assert_eq!(commands::provider_temperature(&commands::AiProvider::Qwen), Some(1));
+    }
+
+    #[test]
+    fn classify_failure_maps_quota_auth_rate_and_network_cases() {
+        // 余额/额度：DashScope 常见于 HTTP 200/400 的 body 里
+        assert_eq!(commands::classify_failure(402, "Insufficient balance"), "余额不足或额度已用完");
+        assert_eq!(commands::classify_failure(400, "{\"message\":\"quota exceeded\"}"), "余额不足或额度已用完");
+        // 密钥
+        assert_eq!(commands::classify_failure(401, "Incorrect API key provided"), "密钥无效或无权限");
+        // 限流
+        assert_eq!(commands::classify_failure(429, ""), "请求过于频繁（已被限流）");
+        // 模型名
+        assert_eq!(commands::classify_failure(404, "model not found"), "模型名不存在或已下线");
+        // 上游故障 / 未知文案带原文
+        assert_eq!(commands::classify_failure(503, ""), "服务端故障（上游 5xx）");
+        assert!(commands::classify_failure(418, "teapot").contains("teapot"));
     }
 
     #[test]
