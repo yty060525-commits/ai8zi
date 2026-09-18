@@ -3,7 +3,7 @@ import { getSetting, readCache, writeCache, setSetting } from './db.mjs';
 export const PROVIDERS = [
   { id: 'deepseek', label: 'DeepSeek V4.1', endpoint: 'https://api.deepseek.com/chat/completions', model: 'deepseek-flash' },
   { id: 'kimi', label: 'Kimi(Moonshot)', endpoint: 'https://api.moonshot.cn/v1/chat/completions', model: 'kimi-k2.6' },
-  { id: 'qwen', label: 'Qwen3.8-Flash', endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model: 'qwen3.8-flash' },
+  { id: 'qwen', label: 'Qwen3.8-Flash', endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model: 'qwen3.8-flash', disableThinking: true },
 ];
 export const currentProviderId = (db) => getSetting(db, 'ai.provider', 'deepseek');
 export const providerOf = (id) => PROVIDERS.find((p) => p.id === id) ?? PROVIDERS[0];
@@ -159,6 +159,13 @@ export function classifyFailure(status, bodyText) {
 /** 调一次上游(单 provider，最多 transport 重试一次)；失败返回 {error}。 */
 async function callProvider(provider, key, messages, effort) {
   const body = { model: provider.model, messages, max_tokens: 32768 };
+  // V4.1：思考模式默认开启；按任务类型控制思考力度(本命/后天调整=high，时段=low 以省时省钱)
+  if (provider.id === 'deepseek' && effort) body.reasoning_effort = effort;
+  // Qwen3.8-Flash 默认带思考(实测慢 ~3.8 倍且对我们的结构化 JSON 无增益)，显式关闭可大幅提速
+  if (provider.disableThinking) body.enable_thinking = false;
+  // Kimi 需要 temperature=1；已关闭思考的 Qwen 用低温度更稳定
+  if (provider.id === 'kimi') body.temperature = 1;
+  if (provider.id === 'qwen') body.temperature = 0.3;
   // V4.1：思考模式默认开启；按任务类型控制思考力度(本命/后天调整=high，时段=low 以省时省钱)
   if (provider.id === 'deepseek' && effort) body.reasoning_effort = effort;
   if (provider.id !== 'deepseek') body.temperature = 1;
