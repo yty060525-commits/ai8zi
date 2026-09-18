@@ -19,7 +19,7 @@ import type { BaziRecord, Gender, NonAiChart, RelationshipFacts, RelationshipDet
  *     阴阳(干序奇偶)决定正偏。
  *  4) 地支关系：六合 (a+b)%12=1；六冲 |a-b|=6；六害 (a+b)%12=7；
  *     三合 a%4=b%4(申子辰0 巳酉丑1 寅午戌2 亥卯未3)；六破/三刑为规范对与同余类。
- *  5) 大运 = 月柱序数沿顺逆每次 ±1(十年一柱)，起运沿用「三天一岁」传统算法。
+ *  5) 大运 = 月柱序数沿顺逆每次 ±1(十年一柱)，起点按出生年到当前年所经历的整十年锚定；不做起运年龄/日期推算。
  *  6) 流年干支：立春锚定当前纪年序数，此后公历年每年 +1(mod 60)。
  *  7) 流月：每年 12 个节月(立春=寅月…)，月干由年干五虎遁：
  *     寅月干 = (年干序%5)*2+2，逐月 +1 —— 与 lunar-javascript buildLiuYue 同式。
@@ -197,30 +197,12 @@ function fortuneFacts(forecast: string, natal: string[]): RelationshipFacts {
   return out;
 }
 
-/* ------------------------------------------------------------ 起运估算 */
-interface StartEstimate {
-  forward: boolean;
-  boundary: string;
-  start: string;
-  components: { days: number; hours: number; years: number; months: number; extraDays: number };
+/* ------------------------------------------------ 大运方向(阳男阴女顺、阴男阳女逆) */
+/** 只判定顺排/逆排：这是大运干支排列唯一需要的信息。年龄/日期起运推算已移除。 */
+function fortuneDirection(yearStem: string, gender: Gender): boolean {
+  return YANG.includes(yearStem) === (gender === 'male');
 }
-function startEstimate(candidate: ReturnType<typeof Solar.fromYmdHms>, gender: Gender, yearStem: string): StartEstimate {
-  // 传统「三天一岁」：3天=1年，1天=4月，1时辰=10天；出生信息只到“日”，以正午为锚 → estimated。
-  const birth = Solar.fromYmdHms(candidate.getYear(), candidate.getMonth(), candidate.getDay(), 12, 0, 0);
-  const forward = YANG.includes(yearStem) === (gender === 'male'); // 阳男阴女顺、阴男阳女逆
-  const boundary = (forward ? birth.getLunar().getNextJieQi(false) : birth.getLunar().getPrevJieQi(false)).getSolar();
-  const diffHours = Math.abs(Date.parse(boundary.toYmd() + 'T12:00:00+08:00') - Date.parse(candidate.toYmd() + 'T12:00:00+08:00')) / 3600000;
-  const days = Math.floor(diffHours / 24);
-  const hours = Math.floor(diffHours % 24);
-  const years = Math.floor(days / 3);
-  const months = Math.floor((days % 3) * 4);
-  const extraDays = Math.floor((hours / 2) * 10); // 1 时辰≈2h → 10 天
-  const start = new Date(Date.parse(candidate.toYmd() + 'T12:00:00+08:00'));
-  start.setUTCFullYear(start.getUTCFullYear() + years);
-  start.setUTCMonth(start.getUTCMonth() + months);
-  start.setUTCDate(start.getUTCDate() + extraDays);
-  return { forward, boundary: boundary.toYmd(), start: start.toISOString().slice(0, 10), components: { days, hours, years, months, extraDays } };
-}
+
 
 const asList = (value: unknown): string[] => Array.isArray(value) ? value.map(String) : [String(value ?? '')];
 
@@ -295,7 +277,7 @@ export function calculateNonAi(
   const lunar = candidate.getLunar();
   const eight = lunar.getEightChar();
   const day = eight.getDayGan();
-  const estimate = startEstimate(candidate, gender, input.yearPillar[0]);
+  const forward = fortuneDirection(input.yearPillar[0], gender);
   const chenggu = calculateChenggu(lunar.getYearInGanZhiExact(), lunar.getMonth(), lunar.getDay(), input.hourPillar[1]);
 
   // 五行计数：四天干 + 四地支本气 = 8 个观测，比例和为 1。
@@ -343,11 +325,17 @@ export function calculateNonAi(
     });
   });
 
-  // 大运：月柱序数沿顺逆每次 ±1，十年一柱。
+  // 大运：月柱序数沿顺逆每次 ±1(十年一柱)。
+  // 不做起运年龄推算 —— 改为把大运段对齐到「当前所处的公历十年」：
+  //   第 0 步覆盖 [窗口首年, 窗口末年]，其后每步 +10 年，干支同步沿六十甲子 ±1。
+  //   这样未来十年的大运任务必然存在且连续，且不依赖任何估算量。
   const monthIndex = gzIndex(input.monthPillar);
+  const step = forward ? 1 : -1;
+  const windowStart = currentYear;                       // 预测窗口首年(立春年)
+  const alignedStart = Math.floor(windowStart / 10) * 10; // 对齐到十年边界，稳定可复现
   const greatFortunes = Array.from({ length: GREAT }, (_, k) => {
-    const ganZhi = gzAt(monthIndex + (estimate.forward ? 1 : -1) * (k + 1));
-    const startYear = Number(estimate.start.slice(0, 4)) + k * 10;
+    const ganZhi = gzAt(monthIndex + step * (k + 1));
+    const startYear = alignedStart + k * 10;
     const participants = [...natalItems, { value: ganZhi, layer: 'great-fortune' as const, name: String(startYear) }];
     return { ganZhi, startYear, endYear: startYear + 9, tenGod: tenGodOf(day, ganZhi[0]), relationships: fortuneFacts(ganZhi, pillars), relationshipDetails: pairHits(participants) };
   });
@@ -363,12 +351,12 @@ export function calculateNonAi(
     tenGods: [eight.getYearShiShenGan(), eight.getMonthShiShenGan(), eight.getDayShiShenGan(), eight.getTimeShiShenGan()],
     naYin: [eight.getYearNaYin(), eight.getMonthNaYin(), eight.getDayNaYin(), eight.getTimeNaYin()],
     dayMaster: day,
-    fortuneStart: estimate.start,
+
     currentTime: now,
     forecastRange: annualFortunes.map((item) => item.year),
     relationships,
     relationshipDetails,
-    fortuneMethod: { method: 'three-days-one-year', estimated: true, boundary: estimate.boundary, components: estimate.components },
+
     tenGodDetails,
     greatFortunes,
     annualFortunes,

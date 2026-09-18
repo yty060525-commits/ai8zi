@@ -166,3 +166,5 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .channel-block.current { border-color: #1f7a3d; box-shadow: inset 3px 0 0 #1f7a3d; }
 .channel-current { font-size: 12px; padding: 2px 8px; background: #1f7a3d; color: #fff; }
 .channel-use { margin-bottom: 0; }
+
+.channel-notice { font-size: 12px; padding: 2px 8px; background: #eef4ff; border: 1px solid #9bb6e8; color: #1b3f8b; }

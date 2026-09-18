@@ -229,7 +229,7 @@ pub struct AiTaskInput {
     pub task_id: String,
     #[serde(rename = "type")] pub task_type: String,
     pub year: Option<i32>, pub month: Option<i32>,
-    pub annual: Option<Value>, pub monthly: Option<Value>, pub baseline: Option<Value>,
+    pub annual: Option<Value>, pub monthly: Option<Value>, pub decade: Option<Value>, pub baseline: Option<Value>,
     pub guide: Option<Value>, // 行动改变/职业适配：喜用五行对应的资料
     pub tone: Option<i32>, // 措辞语气 0..100（滑杆），None 视为 80
 }
@@ -302,6 +302,25 @@ pub(crate) fn apply_reasoner_settings(api_payload: &mut Value) {
     api_payload["messages"] = Value::Array(messages);
 }
 
+/// 神煞压缩为「名称@柱位」列表：保留模型需要的信号，去掉 basis/来源等冗余字段(实测省约 89%)。
+pub(crate) fn compact_shen_sha(shen_sha: &Value) -> Value {
+    if shen_sha.is_null() { return Value::Null; }
+    let names = ["年", "月", "日", "时"];
+    let items = shen_sha.get("items").and_then(|v| v.as_array()).map(|arr| {
+        arr.iter().filter_map(|it| {
+            let name = it.get("name")?.as_str()?;
+            let pi = it.get("pillarIndex").and_then(|v| v.as_u64()).unwrap_or(99) as usize;
+            let pos = if it.get("position").and_then(|v| v.as_str()) == Some("天干") { "干" } else { "支" };
+            Some(format!("{}@{}{}", name, names.get(pi).copied().unwrap_or("?"), pos))
+        }).collect::<Vec<_>>()
+    }).unwrap_or_default();
+    serde_json::json!({
+        "吉": shen_sha.get("auspicious").cloned().unwrap_or_else(|| Value::Array(vec![])),
+        "凶": shen_sha.get("inauspicious").cloned().unwrap_or_else(|| Value::Array(vec![])),
+        "明细": items,
+    })
+}
+
 fn pick_by_year(rows: &Value, year: i32) -> Value {
     rows.as_array().and_then(|arr| arr.iter().find(|row| row.get("year").and_then(|v| v.as_i64()).map(|v| v as i32) == Some(year)).cloned()).unwrap_or(Value::Null)
 }
@@ -372,11 +391,11 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
         "birthYear": record.birth_year,
         "pillars": { "year": record.year_pillar, "month": record.month_pillar, "day": record.day_pillar, "hour": record.hour_pillar },
         "solarDate": val("solarDate"), "lunarDate": val("lunarDate"), "zodiac": val("zodiac"), "dayMaster": val("dayMaster"),
-        "fortuneStart": val("fortuneStart"),
+
         "elements": val("elements"), "elementRatio": val("elementRatio"),
         "hiddenStems": val("hiddenStems"), "tenGods": val("tenGods"), "tenGodDetails": val("tenGodDetails"),
         "naYin": val("naYin"), "twelveLongevity": val("twelveLongevity"),
-        "shenSha": val("shenSha"), "relationships": val("relationships"),
+        "shenSha": compact_shen_sha(&val("shenSha")), "relationships": val("relationships"),
     });
     // 行动改变与职业适配(喜用五行知识库)：附加 baseline 摘要与 guide 资料
     if task.task_type == "adjustment" {
@@ -400,11 +419,11 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
     }
     let mut scope = serde_json::json!({});
     if let Some(y) = task.year {
-        scope["age"] = (y - record.birth_year).into();
+        if task.task_type != "decade" { scope["age"] = (y - record.birth_year).into(); }
         match task.task_type.as_str() {
-            // 大运任务：只给该大运段 + 年龄(不掺入年度/月份行)
+            // 大运任务：只给该大运段(不掺入年度/月份行，也不带年龄)
             "decade" => {
-                let decade = pick_decade(&parsed["greatFortunes"], y);
+                let decade = task.decade.as_ref().filter(|v| v.get("ganZhi").and_then(|g| g.as_str()).is_some()).cloned().unwrap_or_else(|| pick_decade(&parsed["greatFortunes"], y));
                 if decade != Value::Null {
                     scope["decade"] = decade.clone();
                     let gz = decade.get("ganZhi").and_then(|v| v.as_str()).unwrap_or("");
@@ -412,13 +431,13 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
                 }
             }
             _ => {
-                let annual = pick_by_year(&parsed["annualFortunes"], y);
+                let annual = task.annual.as_ref().filter(|v| v.get("ganZhi").and_then(|g| g.as_str()).is_some()).cloned().unwrap_or_else(|| pick_by_year(&parsed["annualFortunes"], y));
                 if annual != Value::Null {
                     scope["annual"] = annual.clone();
                     let gz = annual.get("ganZhi").and_then(|v| v.as_str()).unwrap_or("");
                     if !gz.is_empty() { scope["annualHits"] = serde_json::to_value(summarize_hits(&annual, gz)).unwrap_or(Value::Null); }
                 }
-                let decade = pick_decade(&parsed["greatFortunes"], y);
+                let decade = task.decade.as_ref().filter(|v| v.get("ganZhi").and_then(|g| g.as_str()).is_some()).cloned().unwrap_or_else(|| pick_decade(&parsed["greatFortunes"], y));
                 if decade != Value::Null {
                     scope["decade"] = decade.clone();
                     let gz = decade.get("ganZhi").and_then(|v| v.as_str()).unwrap_or("");
@@ -450,8 +469,8 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
             _ => "本命/全局".to_string(),
         },
     };
-    let age_seg = task.year.map(|y| format!("(年龄约 {})", y - record.birth_year)).unwrap_or_default();
-let is_scope = matches!(task.task_type.as_str(), "annual" | "monthly" | "decade");
+    let is_scope = matches!(task.task_type.as_str(), "annual" | "monthly" | "decade");
+    let age_seg = if task.task_type == "decade" { String::new() } else { task.year.map(|y| format!("(年龄约 {})", y - record.birth_year)).unwrap_or_default() };
     let prompt = if is_scope {
         format!(
             "你是资深子平命理师，仅分析时段运势。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行或关系。禁止输出/* */注释、HTML注释或任何代码块/围栏标记，只给最终正文。本命的身强身弱/格局/喜忌已在 natal 结论中单独确定，你不要再输出强弱/格局/喜忌判断。用 JSON(仅 JSON)返回，schema：{{\"title\":\"两行式标题(可选)\",\"explanation\":长文}}。title 需有古风韵味并只能引用下列古籍原文/口诀(标注出处，禁止自创伪古文)：六合(《三命通会》六合歌)：子与丑合、寅与亥合、卯与戌合、辰与酉合、巳与申合、午与未合；六冲(《渊海子平》冲诀，地支七位为冲)：子午、丑未、寅申、卯酉、辰戌、巳亥相冲；三刑(《三命通会·论三刑》)：子刑卯卯刑子为无礼之刑，寅刑巳巳刑申申刑寅为恃势之刑，丑刑戌戌刑未未刑丑为无恩之刑，辰午酉亥自刑；六害(穿害口诀)：子未害丑午害寅巳害卯辰害申亥害酉戌害；六破(破口诀)：子酉破丑辰破寅亥破卯午破巳申破未戌破。若无对应原文则标题用干支+四字直书(如：卯戌六合·和合之象)，不得编造引文。explanation 必须依次各出现一次【健康】【事业】【财运】【爱情】【刑冲克害批注】，顺序一致，不得合并、省略或改名；【刑冲克害批注】依据 scope 的 annualHits/monthlyHits/decadeHits 逐条编号，每行格式：数字. 关系（干支实例说明）：一句影响，例如：1. 三合（巳酉丑半合）：…；2. 六害（丙戌）：…；每条一句话，把 合/冲/刑/害/破/克 的对象与含义写清楚；若没有任何命中，该段写一条 1. 本期无重大刑冲克害（仅提示）。各主题全文只出现一次，勿先短句后长文重复。每个主题内部必须分点陈述：每条单独一行、行首用 1. 2. 3. 编号，一句话一条，不要整段连排文字。"
@@ -647,7 +666,7 @@ mod tests {
             "elementRatio": { "木": 0.25, "火": 0.5, "土": 0.0, "金": 0.25, "水": 0.0 },
             "hiddenStems": [["癸"], ["甲", "丙", "戊"], ["丁", "己"], ["壬", "甲"]],
             "tenGods": ["伤官", "偏财", "日主", "食神"], "naYin": ["海中金", "炉中火", "路旁土", "大海水"],
-            "dayMaster": "庚", "fortuneStart": "1987-01-01", "forecastRange": [2025, 2026],
+            "dayMaster": "庚", "forecastRange": [2025, 2026],
             "greatFortunes": [
                 { "ganZhi": "丁卯", "startYear": 1987, "endYear": 1996 },
                 { "ganZhi": "辛未", "startYear": 2017, "endYear": 2026 }
@@ -665,7 +684,7 @@ mod tests {
     #[test]
     fn ai_payload_keeps_structured_facts_and_stable_task_fields() {
         let record = BaziRecord { id: Some("r1".into()), name: "名".into(), gender: "male".into(), birth_year: 1984, birth_month: 2, created_at: "2025-01-01".into(), year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "庚午".into(), hour_pillar: "壬午".into(), non_ai_result: Some(r#"{"zodiac":"鼠"}"#.into()), ai_status: "pending".into(), ai_analysis: None, ai_overview: None, ai_error: None, ai_tasks: None };
-        let task = commands::AiTaskInput { task_id: "task-03".into(), task_type: "annual".into(), year: Some(2025), month: None, annual: None, monthly: None, baseline: None, guide: None, tone: None };
+        let task = commands::AiTaskInput { task_id: "task-03".into(), task_type: "annual".into(), year: Some(2025), month: None, annual: None, monthly: None, decade: None, baseline: None, guide: None, tone: None };
         let payload = commands::build_ai_request_payload(&record, &task).unwrap();
         assert_eq!(payload["taskId"], "task-03");
         assert_eq!(payload["type"], "annual");
@@ -725,7 +744,7 @@ mod tests {
             ]
         });
         let record = BaziRecord { id: Some("r1".into()), name: "名".into(), gender: "male".into(), birth_year: 1984, birth_month: 2, created_at: "2025-01-01".into(), year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "庚午".into(), hour_pillar: "壬午".into(), non_ai_result: Some(big.to_string()), ai_status: "pending".into(), ai_analysis: None, ai_overview: None, ai_error: None, ai_tasks: None };
-        let task = commands::AiTaskInput { task_id: "task-03".into(), task_type: "annual".into(), year: Some(2025), month: None, annual: None, monthly: None, baseline: None, guide: None, tone: None };
+        let task = commands::AiTaskInput { task_id: "task-03".into(), task_type: "annual".into(), year: Some(2025), month: None, annual: None, monthly: None, decade: None, baseline: None, guide: None, tone: None };
         let payload = commands::build_ai_request_payload(&record, &task).unwrap();
         assert_eq!(payload["nonAiResult"]["natal"]["zodiac"], "鼠");
         assert_eq!(payload["nonAiResult"]["natal"]["dayMaster"], "庚");
@@ -746,11 +765,11 @@ mod tests {
             "greatFortunes": [{ "ganZhi": "辛未", "startYear": 2017, "endYear": 2026 }]
         });
         let record = BaziRecord { id: Some("r1".into()), name: "名".into(), gender: "male".into(), birth_year: 1984, birth_month: 2, created_at: "2025-01-01".into(), year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "庚午".into(), hour_pillar: "壬午".into(), non_ai_result: Some(big.to_string()), ai_status: "pending".into(), ai_analysis: None, ai_overview: None, ai_error: None, ai_tasks: None };
-        let task = commands::AiTaskInput { task_id: "task-26".into(), task_type: "decade".into(), year: Some(2017), month: None, annual: None, monthly: None, baseline: None, guide: None, tone: None };
+        let task = commands::AiTaskInput { task_id: "task-26".into(), task_type: "decade".into(), year: Some(2017), month: None, annual: None, monthly: None, decade: None, baseline: None, guide: None, tone: None };
         let payload = commands::build_ai_request_payload(&record, &task).unwrap();
         let scope = &payload["nonAiResult"]["scope"];
         assert_eq!(scope["decade"]["ganZhi"], "辛未");
-        assert_eq!(scope["age"], 33); // 2017-1984
+        assert!(scope.get("age").is_none()); // 大运不再推算年龄
         assert!(scope.get("annual").is_none()); // 大运任务不带年度行
         assert!(scope.get("monthly").is_none());
     }
@@ -781,6 +800,26 @@ mod tests {
     }
 
     #[test]
+    fn compact_shen_sha_keeps_signal_and_drops_verbose_basis() {
+        let raw = serde_json::json!({
+            "auspicious": ["月德贵人"], "inauspicious": ["孤辰"],
+            "items": [
+                { "name": "驿马", "pillarIndex": 1, "position": "地支", "category": "中", "basis": "年支子见寅" },
+                { "name": "天德贵人", "pillarIndex": 2, "position": "天干", "category": "吉", "basis": "月支午见乾" }
+            ],
+            "ruleVersion": "classic-v1 + lunar-javascript-1.7.7-day-gods",
+            "source": "long provenance text that the model does not need"
+        });
+        let out = commands::compact_shen_sha(&raw);
+        assert_eq!(out["明细"][0], "驿马@月支");
+        assert_eq!(out["明细"][1], "天德贵人@日干");
+        assert_eq!(out["吉"].as_array().unwrap().len(), 1);
+        let s = out.to_string();
+        assert!(!s.contains("basis") && !s.contains("ruleVersion") && !s.contains("provenance"));
+        assert!(s.len() * 3 < raw.to_string().len());
+    }
+
+    #[test]
     fn summarize_hits_only_keeps_relations_of_the_own_gan_zhi() {
         let row = serde_json::json!({
             "ganZhi": "乙巳",
@@ -800,7 +839,7 @@ mod tests {
     #[test]
     fn ai_cache_key_is_deterministic_and_scope_sensitive() {
         let record = BaziRecord { id: Some("r1".into()), name: "名".into(), gender: "male".into(), birth_year: 1984, birth_month: 2, created_at: "2025-01-01".into(), year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "庚午".into(), hour_pillar: "壬午".into(), non_ai_result: None, ai_status: "pending".into(), ai_analysis: None, ai_overview: None, ai_error: None, ai_tasks: None };
-        let mk = |y: Option<i32>, m: Option<i32>| commands::AiTaskInput { task_id: "t".into(), task_type: "monthly".into(), year: y, month: m, annual: None, monthly: None, baseline: None, guide: None, tone: None };
+        let mk = |y: Option<i32>, m: Option<i32>| commands::AiTaskInput { task_id: "t".into(), task_type: "monthly".into(), year: y, month: m, annual: None, monthly: None, decade: None, baseline: None, guide: None, tone: None };
         let k1 = commands::cache_key(&record, &mk(Some(2027), Some(5)), "deepseek-reasoner");
         let k2 = commands::cache_key(&record, &mk(Some(2027), Some(5)), "deepseek-reasoner");
         let k3 = commands::cache_key(&record, &mk(Some(2027), Some(6)), "deepseek-reasoner");

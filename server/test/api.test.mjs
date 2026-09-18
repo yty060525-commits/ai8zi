@@ -158,3 +158,44 @@ describe('通道首选(客户端“当前使用”)', () => {
   });
 });
 
+describe('提示词结构(前缀缓存与年龄字段)', () => {
+  const rec = {
+    gender: 'male', birthYear: 1984, birthMonth: 2, yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午',
+    nonAiResult: { solarDate: '1984-02-06', dayMaster: '庚', greatFortunes: [{ ganZhi: '丁卯', startYear: 2020, endYear: 2029 }], annualFortunes: [{ year: 2026, ganZhi: '丙午' }], monthlyFortunes: [] },
+  };
+  const anchor = { summary: '格局：正印格 · 强弱：身强　喜：火、土　忌：水、木' };
+
+  test('时段任务把“当前分析目标”放在最末，共同前缀在前(利于前缀缓存命中)', async () => {
+    const { buildTaskPayload } = await import('../ai.mjs');
+    for (const task of [{ type: 'annual', year: 2026, baseline: anchor }, { type: 'monthly', year: 2026, month: 3, baseline: anchor }, { type: 'decade', year: 2020, baseline: anchor }]) {
+      const c = buildTaskPayload(rec, task, 80).messages[1].content;
+      assert.ok(c.includes('# 当前分析目标'), task.type + ' 缺少分析目标段');
+      assert.ok(c.lastIndexOf('# 当前分析目标') > c.lastIndexOf('# 本时段数据'), task.type + ' 目标应在时段数据之后(变化后置)');
+      assert.ok(c.indexOf('# 本命事实数据') < c.indexOf('# 本时段数据'), task.type + ' 本命事实应先于可变部分');
+    }
+  });
+
+  test('大运不再带年龄，流年流月仍带', async () => {
+    const { buildTaskPayload } = await import('../ai.mjs');
+    const dec = buildTaskPayload(rec, { type: 'decade', year: 2020, baseline: anchor }, 80).messages[1].content;
+    assert.equal(dec.includes('年龄约'), false);
+    const ann = buildTaskPayload(rec, { type: 'annual', year: 2026, baseline: anchor }, 80).messages[1].content;
+    assert.equal(ann.includes('年龄约'), true);
+  });
+
+  test('记录已瘦身时，流年/流月/大运仍从任务内联行拿到本柱数据', async () => {
+    const { buildTaskPayload } = await import('../ai.mjs');
+    // 与真实存储一致：三个数组都被 prune 清空
+    const slim = { ...rec, nonAiResult: { solarDate: '1984-02-06', dayMaster: '庚', greatFortunes: [], annualFortunes: [], monthlyFortunes: [] } };
+    const cases = [
+      ['annual', { type: 'annual', year: 2026, baseline: anchor, annual: { year: 2026, ganZhi: '丙午', relationshipDetails: [] } }, '丙午'],
+      ['monthly', { type: 'monthly', year: 2026, month: 3, baseline: anchor, monthly: { year: 2026, month: 3, ganZhi: '庚辰', relationshipDetails: [] } }, '庚辰'],
+      ['decade', { type: 'decade', year: 2020, baseline: anchor, decade: { ganZhi: '丁卯', startYear: 2020, endYear: 2029, relationshipDetails: [] } }, '丁卯'],
+    ];
+    for (const [type, task, needle] of cases) {
+      const c = buildTaskPayload(slim, task, 80).messages[1].content;
+      assert.ok(c.includes(needle), type + ' 丢失了本柱干支数据(内联行未被采用)');
+    }
+  });
+});
+
