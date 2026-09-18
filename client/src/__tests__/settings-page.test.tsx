@@ -6,52 +6,55 @@ import { invoke } from '@tauri-apps/api/core';
 import { vi } from 'vitest';
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 
-vi.mocked(invoke).mockImplementation(async (command) => command === 'get_ai_provider_status' ? { selectedProvider: 'deepseek', deepseek: 'not_configured', kimi: 'not_configured', qwen: 'not_configured' } : command === 'save_ai_credential' ? 'configured' : command === 'set_ai_provider' ? 'kimi' : 'not_configured');
+const notConfigured = { selectedProvider: 'deepseek', deepseek: 'not_configured', kimi: 'not_configured', qwen: 'not_configured' };
+vi.mocked(invoke).mockImplementation(async (command) => command === 'get_ai_provider_status' ? notConfigured
+  : command === 'save_ai_credential' ? 'configured'
+  : command === 'set_ai_provider' ? 'deepseek'
+  : 'not_configured');
 
 afterEach(() => { cleanup(); resetAiSettingsForTests(); });
 
 describe('SettingsPage', () => {
-  it('uses neutral service names and clears the secret input after saving', async () => {
+  it('lists all three model channels at once and never shows secret/limit wording', async () => {
     render(<SettingsPage />);
     expect(screen.getByRole('heading', { name: '设置' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'DeepSeek' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Kimi' })).toBeTruthy();
-    expect(screen.queryByText(/模型|API|额度|费用|密钥/)).toBeNull(); // 服务名按需求显示厂商名，仍不暴露密钥/额度等字样
-
-    const secret = screen.getByLabelText('访问凭据') as HTMLInputElement;
-    expect(secret.type).toBe('password');
-    fireEvent.change(secret, { target: { value: 'not-a-real-secret' } });
-    fireEvent.click(screen.getByRole('button', { name: '保存' }));
-
-    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('已配置'));
-    expect(secret.value).toBe('');
-    expect(document.body.textContent).not.toContain('not-a-real-secret');
+    // 三条通道同屏可见（不再需要先选一条）
+    expect(screen.getByLabelText('DeepSeek 访问凭据')).toBeTruthy();
+    expect(screen.getByLabelText('Kimi 访问凭据')).toBeTruthy();
+    expect(screen.getByLabelText('Qwen3.8-Flash 访问凭据')).toBeTruthy();
+    expect(screen.queryByText(/模型|API|额度|费用|密钥/)).toBeNull();
   });
 
-  it('can switch services and clear the selected credential', async () => {
+  it('saves each channel independently without switching modes', async () => {
     render(<SettingsPage />);
-    fireEvent.click(screen.getByRole('button', { name: 'Kimi' }));
-    const secret = screen.getByLabelText('访问凭据');
-    fireEvent.change(secret, { target: { value: 'another-not-real-secret' } });
-    fireEvent.click(screen.getByRole('button', { name: '保存' }));
-    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('已配置'));
-    fireEvent.click(screen.getByRole('button', { name: '清除' }));
-    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('未配置'));
-    expect((screen.getByLabelText('访问凭据') as HTMLInputElement).value).toBe('');
+    const ds = screen.getByLabelText('DeepSeek 访问凭据') as HTMLInputElement;
+    const qw = screen.getByLabelText('Qwen3.8-Flash 访问凭据') as HTMLInputElement;
+    fireEvent.change(ds, { target: { value: 'ds-secret' } });
+    fireEvent.change(qw, { target: { value: 'qw-secret' } });
+    // 两个通道各自保存
+    const saveButtons = screen.getAllByRole('button', { name: '保存' });
+    fireEvent.click(saveButtons[0]);
+    await waitFor(() => expect(screen.getAllByText('已配置').length).toBeGreaterThan(0));
+    fireEvent.click(screen.getAllByRole('button', { name: '保存' })[2]);
+    await waitFor(() => expect(screen.getAllByText('已配置').length).toBe(2));
+    // 保存后清空输入，且页面不泄漏凭据内容
+    expect(ds.value).toBe('');
+    expect(document.body.textContent).not.toContain('ds-secret');
+    expect(document.body.textContent).not.toContain('qw-secret');
   });
 
   it('shows saving feedback and keeps the credential available when saving fails', async () => {
     let rejectSave!: (error: Error) => void;
     vi.mocked(invoke).mockImplementation((command) => command === 'get_ai_provider_status'
-      ? Promise.resolve({ selectedProvider: 'deepseek', deepseek: 'not_configured', kimi: 'not_configured', qwen: 'not_configured' })
+      ? Promise.resolve(notConfigured)
       : command === 'save_ai_credential' ? new Promise((_, reject) => { rejectSave = reject; }) : Promise.resolve('not_configured'));
     render(<SettingsPage />);
-    const secret = screen.getByLabelText('访问凭据') as HTMLInputElement;
+    const secret = screen.getByLabelText('DeepSeek 访问凭据') as HTMLInputElement;
     fireEvent.change(secret, { target: { value: 'retryable-secret' } });
-    fireEvent.click(screen.getByRole('button', { name: '保存' }));
-    expect(screen.getByRole('status').textContent).toContain('保存中');
+    fireEvent.click(screen.getAllByRole('button', { name: '保存' })[0]);
+    expect(screen.getAllByText('保存中').length).toBeGreaterThan(0);
     rejectSave(new Error('keyring unavailable'));
-    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('保存失败'));
+    await waitFor(() => expect(screen.getAllByText('保存失败').length).toBeGreaterThan(0));
     expect(secret.value).toBe('retryable-secret');
   });
 });

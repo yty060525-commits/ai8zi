@@ -148,3 +148,16 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   .person-open { grid-template-columns: 1fr auto; gap: 7px 12px; }
   .records-selectbar { padding: 8px 10px; }
 }
+
+
+/* ---- 模型通道：三条可同时配置 ---- */
+.channel-block { border: 1px solid #ddd; padding: 12px 14px; margin-bottom: 12px; background: #fff; }
+.channel-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.channel-head strong { font-size: 15px; }
+.channel-status { font-size: 12px; padding: 2px 8px; border: 1px solid #bbb; color: #666; }
+.channel-status.ok { border-color: #1f7a3d; color: #1f7a3d; }
+.channel-status.bad { border-color: #a11; color: #a11; }
+.channel-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; }
+.channel-row input { min-height: 38px; }
+.channel-row .primary-button, .channel-row .text-button { margin-bottom: 0; }
+@media (max-width: 560px) { .channel-row { grid-template-columns: 1fr; } }

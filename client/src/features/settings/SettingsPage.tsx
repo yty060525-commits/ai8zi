@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
-import { getServiceStatus, clearServiceCredential, saveServiceCredential, setSelectedService, type ServiceId } from '../../data/aiSettings';
+import { getServiceStatus, clearServiceCredential, saveServiceCredential, type ServiceId } from '../../data/aiSettings';
 import { compactRecords, getStorageStats, runAiSelfTest, type AiSelfTest } from '../../data/storageInfo';
 import { listBaziRecords, reloadLocalForSession } from '../../data/clientRepository';
 import { exportRecordsSQLite, exportRecordsSQLText } from '../../data/sqliteExport';
@@ -15,9 +15,9 @@ const services: Array<{ id: ServiceId; label: string }> = [
 ];
 
 export function SettingsPage() {
-  const [selected, setSelected] = useState<ServiceId>('serviceOne');
   const [statuses, setStatuses] = useState<Record<ServiceId, DisplayStatus>>({ serviceOne: '未配置', serviceTwo: '未配置', serviceThree: '未配置' });
-  const [secret, setSecret] = useState('');
+  const [secrets, setSecrets] = useState<Record<ServiceId, string>>({ serviceOne: '', serviceTwo: '', serviceThree: '' });
+  const [busyService, setBusyService] = useState<ServiceId | null>(null);
   const [status, setStatus] = useState<DisplayStatus>('未配置');
   const [storage, setStorage] = useState<{ records: number; cache: number; bytes: number } | null>(null);
   const [compacting, setCompacting] = useState(false);
@@ -39,9 +39,12 @@ export function SettingsPage() {
     let active = true;
     void getServiceStatus().then((current) => {
       if (!active) return;
-      const next = { serviceOne: current.serviceOne === 'configured' ? '已配置' : '未配置', serviceTwo: current.serviceTwo === 'configured' ? '已配置' : '未配置' } as Record<ServiceId, DisplayStatus>;
-      setSelected(current.selectedService); setStatuses(next); setStatus(next[current.selectedService]);
-    }).catch(() => { if (active) setStatus('保存失败'); });
+      setStatuses({
+        serviceOne: current.serviceOne === 'configured' ? '已配置' : '未配置',
+        serviceTwo: current.serviceTwo === 'configured' ? '已配置' : '未配置',
+        serviceThree: current.serviceThree === 'configured' ? '已配置' : '未配置',
+      });
+    }).catch(() => { if (active) setStatuses({ serviceOne: '保存失败', serviceTwo: '保存失败', serviceThree: '保存失败' }); });
     return () => { active = false; };
   }, []);
   const refreshStorage = async () => {
@@ -120,28 +123,30 @@ export function SettingsPage() {
     finally { setTesting(false); }
   }
 
-  async function selectService(service: ServiceId) {
-    try { await setSelectedService(service); setSelected(service); setStatus(statuses[service]); }
-    catch { setStatus('保存失败'); }
-  }
-  async function save() {
-    if (!secret) { setStatus('保存失败'); return; }
-    setStatus('保存中');
+  /** 每个通道独立保存：同一屏可把 DeepSeek / Kimi / Qwen 三条通道都配好，无需先选再存。 */
+  async function saveOne(service: ServiceId) {
+    const value = secrets[service];
+    if (!value) { setStatuses((c) => ({ ...c, [service]: '保存失败' })); return; }
+    setBusyService(service);
+    setStatuses((c) => ({ ...c, [service]: '保存中' }));
     try {
-      const result = await saveServiceCredential(selected, secret);
-      const nextStatus = result === 'configured' ? '已配置' : '未配置';
-      setStatuses((current) => ({ ...current, [selected]: nextStatus })); setStatus(nextStatus);
-      setSecret('');
-    } catch { setStatus('保存失败'); }
+      const result = await saveServiceCredential(service, value);
+      const nextStatus: DisplayStatus = result === 'configured' ? '已配置' : '未配置';
+      setStatuses((c) => ({ ...c, [service]: nextStatus }));
+      setSecrets((c) => ({ ...c, [service]: '' }));
+    } catch { setStatuses((c) => ({ ...c, [service]: '保存失败' })); }
+    finally { setBusyService(null); }
   }
-  async function clear() {
+  async function clearOne(service: ServiceId) {
+    setBusyService(service);
     try {
-      const result = await clearServiceCredential(selected);
-      const nextStatus = result === 'configured' ? '已配置' : '未配置';
-      setStatuses((current) => ({ ...current, [selected]: nextStatus })); setStatus(nextStatus);
-    } catch { setStatus('保存失败'); }
-    finally { setSecret(''); }
+      const result = await clearServiceCredential(service);
+      setStatuses((c) => ({ ...c, [service]: result === 'configured' ? '已配置' : '未配置' }));
+    } catch { setStatuses((c) => ({ ...c, [service]: '保存失败' })); }
+    finally { setBusyService(null); setSecrets((c) => ({ ...c, [service]: '' })); }
   }
+  const configuredCount = services.filter((s) => statuses[s.id] === '已配置').length;
+
 
   function syncAfterLoginChange() {
     setSession(getServerSession());
@@ -184,12 +189,23 @@ export function SettingsPage() {
 
   return <main className="settings-page">
     <header className="page-heading"><p className="eyebrow">LOCAL SETTINGS</p><h1>设置</h1><p className="page-description">管理内部服务的访问配置。</p></header>
-    <section aria-label="服务选择"><h2>当前服务</h2><div className="button-group">{services.map((service) => <button key={service.id} type="button" className={selected === service.id ? 'choice-button selected' : 'choice-button'} onClick={() => void selectService(service.id)} aria-pressed={selected === service.id}>{service.label}</button>)}</div></section>
-    <form className="settings-form" onSubmit={(event) => { event.preventDefault(); void save(); }}>
-      <label>访问凭据<input aria-label="访问凭据" type="password" autoComplete="off" value={secret} onChange={(event) => setSecret(event.target.value)} /></label>
-      <div className="button-group"><button className="primary-button" type="submit">保存</button><button className="text-button" type="button" onClick={() => void clear()}>清除</button></div>
-    </form>
-    <p className="ai-status" role="status">配置状态：{status}　·　数据库：{storage ? `${storage.records} 条记录 / 缓存 ${storage.cache} 条 / ${(storage.bytes / 1024).toFixed(0)} KB` : '读取中…'}</p>
+    <section aria-label="模型通道"><h2>AI 通道（三条可同时配置）</h2>
+      <p className="page-description">三条通道各自独立保存，互不影响：全部填好即可随意切换；当前默认优先使用已配置的第一条，失败时自动依次回退。<b>当前已配置 {configuredCount} / {services.length} 条</b>。</p>
+      {services.map((service) => {
+        const st = statuses[service.id];
+        const busy = busyService === service.id;
+        return <div className="channel-block" key={service.id} aria-label={service.label + ' 通道'}>
+          <div className="channel-head"><strong>{service.label}</strong><span className={st === '已配置' ? 'channel-status ok' : st === '保存失败' ? 'channel-status bad' : 'channel-status'}>{st}</span></div>
+          <div className="channel-row">
+            <input aria-label={service.label + ' 访问凭据'} type="password" autoComplete="off" placeholder={st === '已配置' ? '已保存（重新填写可覆盖）' : '粘贴访问凭据'} value={secrets[service.id]} disabled={busy}
+              onChange={(event) => { const v = event.target.value; setSecrets((c) => ({ ...c, [service.id]: v })); }} />
+            <button className="primary-button" type="button" disabled={busy} onClick={() => void saveOne(service.id)}>{busy ? '处理中…' : '保存'}</button>
+            <button className="text-button" type="button" disabled={busy} onClick={() => void clearOne(service.id)}>清除</button>
+          </div>
+        </div>;
+      })}
+    </section>
+    <p className="ai-status" role="status">数据库：{storage ? `${storage.records} 条记录 / 缓存 ${storage.cache} 条 / ${(storage.bytes / 1024).toFixed(0)} KB` : '读取中…'}</p>
     <div className="button-group"><button className="text-button" type="button" disabled={compacting || !storage} onClick={() => void compress()}>{compacting ? '压缩中…' : '压缩旧记录（缩小数据库）'}</button><button className="text-button" type="button" disabled={testing} onClick={() => void selfTest()}>{testing ? '自检中…' : 'AI 连通自检（微小消耗）'}</button><button className="text-button" type="button" onClick={() => void exportSQLite()}>导出数据库(.sqlite)</button><button className="text-button" type="button" onClick={() => void exportJson()}>导出JSON备份</button><button className="text-button" type="button" onClick={() => void exportSqlText()}>导出SQL文本(.sql)</button></div>
     {exportNote && <p role="status">{exportNote}</p>}
     <section aria-label="数据导入"><h2>数据导入（.sqlite / .sqlite3 / .sql / .json 备份）</h2>

@@ -11,6 +11,21 @@ export function configureAiTaskRunner(runner?: SecureRunner): void { secureRunne
 const inTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 const abortResult = (): DeepSeekResult => ({ status: 'failed', error: 'cancelled' });
 
+/** 失败原因分类(与服务器/桌面端口径一致)：网络延迟、余额不足、密钥无效、限流、模型不存在等。 */
+export function classifyFailure(status: number, bodyText?: string): string {
+  const text = String(bodyText || '');
+  const lower = text.toLowerCase();
+  if (status === 402 || /insufficient|balance|quota|arrears|余额|额度|配额/i.test(text)) return '余额不足或额度已用完';
+  if (status === 401 || status === 403 || /invalid.*(api.?key|token)|authentication|unauthorized|incorrect api key|密钥无效|鉴权/i.test(text)) return '密钥无效或无权限';
+  if (status === 429 || /rate.?limit|too many requests|限流|频繁/i.test(lower)) return '请求过于频繁（已被限流）';
+  if (status === 404 || /model.*(not found|not exist)|no such model|模型不存在/i.test(lower)) return '模型名不存在或已下线';
+  if (status === 400) return '请求参数不被接受';
+  if (status >= 500) return '服务端故障（上游 5xx）';
+  if (status === 0) return '网络不可达或延迟过高';
+  const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 160);
+  return snippet ? ('上游报错：' + snippet) : ('HTTP ' + status);
+}
+
 /** 客户端措辞语气提示(备用直连也遵循滑杆)。 */
 export function toneInstructionText(tone: number | undefined): string {
   const t = Number.isFinite(tone) ? Math.max(0, Math.min(100, Math.round(Number(tone)))) : 80;
@@ -138,14 +153,19 @@ async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask, opts: 
   ] };
   try {
     const res = await fetch('https://api.deepseek.com/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + secret }, body: JSON.stringify(payload), signal: opts.signal });
-    if (!res.ok) return { status: 'failed', error: 'HTTP ' + res.status };
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      return { status: 'failed', error: classifyFailure(res.status, errText) + '（HTTP ' + res.status + '）' };
+    }
     const body = await res.json();
     const raw = String(body?.choices?.[0]?.message?.content ?? '').trim();
+    if (!raw) return { status: 'failed', error: '上游返回空正文（可能被内容过滤或达到输出上限）' };
     const cleaned = raw.replace(/^```json?\s*/i, '').replace(/```\s*$/, '');
     const analysis = JSON.parse(cleaned) as BaziAIAnalysis;
     return { status: 'completed', analysis };
   } catch (error) {
     if (opts.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) return abortResult();
-    return { status: 'failed', error: error instanceof Error ? error.message : 'request failed' };
+    const msg = error instanceof Error ? error.message : 'request failed';
+    return { status: 'failed', error: /abort|timeout|timed out/i.test(msg) ? '网络超时或不可达' : msg };
   }
 }

@@ -129,8 +129,9 @@ function NonAiAnalysis({ result, record }: { result?: NonAiChart; record: BaziRe
 }
 const safeAiError = (error: string) => error
   .replace(/sk-[a-z0-9_-]+/gi, '[已隐藏]')
-  .replace(/bearer\s+[^\s]+/gi, '[已隐藏]')
-  .replace(/deepseek|moonshot|kimi|api\s*key|模型|厂商/gi, '[已隐藏]');
+  .replace(/github_pat_[a-z0-9_]+/gi, '[已隐藏]')
+  .replace(/bearer\s+[^\s，。）]+/gi, '[已隐藏]')
+  .replace(/(api[_-]?key\s*[:=]\s*)\S+/gi, '$1[已隐藏]');
 
 /* ---------------- 复制筛选（范围 x 维度） ---------------- */
 const DIM_KEYS = ['chong', 'health', 'love', 'career', 'wealth'] as const;
@@ -463,7 +464,7 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
     </div>}
     {record.aiStatus === 'pending' && <p role="status">按任务逐个调用 AI（本命 → 每年 → 每月 → 大运 → 后天调整），每个任务数秒到数十秒；失败会自动重试一次，进度即时保存，中断后可随时继续。</p>}
     {record.aiStatus === 'not_configured' && <p role="status">AI 尚未可用：请先点页面左上角「设置」，在服务一/服务二中任选一个填写访问凭据并保存，再回来点 AI 分析。</p>}
-    {record.aiStatus === 'failed' && <p role="status">个别任务自动重试多轮后仍未成功：请先到「设置」确认密钥有效、网络可用，再点 AI 分析（只补失败项，不重复花钱）。</p>}
+    {record.aiStatus === 'failed' && <p role="status">个别任务自动重试多轮后仍未成功。常见原因：余额不足或额度已用完 / 密钥无效 / 请求过于频繁（限流）/ 网络超时或不可达 / 所选服务不可用。请按下方原因处理后，再点 AI 分析（只补失败项，不重复花钱）。</p>}
     {record.aiError && <p role="alert">原因：{safeAiError(record.aiError)}</p>}
     {record.aiAnalysis && <div className="long-text"><strong>格局与强弱</strong><p>{record.aiAnalysis.pattern || '—'} · {record.aiAnalysis.strength || '—'}</p><p>喜：{(record.aiAnalysis.usefulElements ?? []).join('、') || '—'}　忌：{(record.aiAnalysis.avoidElements ?? []).join('、') || '—'}</p><PointsView text={record.aiAnalysis.explanation} /></div>}
     {record.aiOverview && <div className="long-text"><strong>最终结论：八字总览、工作与生活方式</strong><p>格局：{record.aiOverview.pattern || '—'}　强弱：{record.aiOverview.strength || '—'}</p><p>喜：{(record.aiOverview.usefulElements ?? []).join('、') || '—'}　忌：{(record.aiOverview.avoidElements ?? []).join('、') || '—'}</p><PointsView text={record.aiOverview.explanation} /></div>}

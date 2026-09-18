@@ -139,6 +139,23 @@ export function cacheKey(record, task, model, tone = DEFAULT_TONE) {
   return ['v7', model, record.gender, record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar, task.type, task.year ?? 0, task.month ?? 0, record.birthYear, toneBucket].join('|');
 }
 
+/* ---------- 失败原因分类：把上游错误翻译成用户能看懂的原因 ---------- */
+/** 依据 HTTP 状态码 + 响应体文案判定失败类型。 */
+export function classifyFailure(status, bodyText) {
+  const text = String(bodyText || '');
+  const lower = text.toLowerCase();
+  // 余额/额度类：各家文案不同，命中即判
+  if (status === 402 || /insufficient|balance|quota|arrears|欠费|余额|额度|配额|exceeded your current quota|free tier/i.test(text)) return '余额不足或额度已用完';
+  if (status === 401 || status === 403 || /invalid.*(api.?key|token)|authentication|unauthorized|incorrect api key|api key.*invalid|密钥无效|鉴权/i.test(text)) return '密钥无效或无权限';
+  if (status === 429 || /rate.?limit|too many requests|requests per|限流|频繁/i.test(lower)) return '请求过于频繁（已被限流）';
+  if (status === 404 || /model.*(not found|not exist)|no such model|模型不存在/i.test(lower)) return '模型名不存在或已下线';
+  if (status === 400 || /invalid.*request|bad request|参数/i.test(lower)) return '请求参数不被接受';
+  if (status >= 500) return '服务端故障（上游 5xx）';
+  if (status === 0) return '网络不可达或延迟过高';
+  const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 160);
+  return snippet ? ('上游报错：' + snippet) : ('HTTP ' + status);
+}
+
 /** 调一次上游(单 provider，最多 transport 重试一次)；失败返回 {error}。 */
 async function callProvider(provider, key, messages, effort) {
   const body = { model: provider.model, messages, max_tokens: 32768 };
@@ -146,33 +163,50 @@ async function callProvider(provider, key, messages, effort) {
   if (provider.id === 'deepseek' && effort) body.reasoning_effort = effort;
   if (provider.id !== 'deepseek') body.temperature = 1;
   const controller = new AbortController();
+  const startedAt = Date.now();
   const timer = setTimeout(() => controller.abort(), 150_000);
   try {
     for (let attempt = 0; attempt < 2; attempt++) {
-      const res = await fetch(provider.endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        if (attempt === 0 && (res.status === 429 || res.status >= 500)) continue;
-        return { error: 'HTTP ' + res.status };
+      let res;
+      try {
+        res = await fetch(provider.endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+      } catch (netErr) {
+        // 网络层失败：区分超时与不可达，并给出耗时便于判断
+        if (netErr?.name === 'AbortError') return { error: '网络超时：上游 ' + Math.round((Date.now() - startedAt) / 1000) + ' 秒未响应（' + provider.label + '）' };
+        if (attempt === 0) continue;
+        return { error: '网络不可达或延迟过高（' + provider.label + '）：' + String(netErr?.message || netErr) };
       }
-      const data = await res.json();
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        // 限流/上游抖动重试一次
+        if (attempt === 0 && (res.status === 429 || res.status >= 500)) continue;
+        return { error: classifyFailure(res.status, errText) + '（HTTP ' + res.status + ' · ' + provider.label + '）' };
+      }
+      let data;
+      try { data = await res.json(); }
+      catch { return { error: '上游返回内容无法解析（' + provider.label + '）' }; }
       const raw = String(data?.choices?.[0]?.message?.content ?? '').trim();
-      if (!raw) return { error: 'empty response' };
+      if (!raw) {
+        const finish = String(data?.choices?.[0]?.finish_reason ?? '');
+        return { error: '上游返回空正文' + (finish ? '（finish_reason=' + finish + '）' : '') + '（' + provider.label + '）' };
+      }
       const cleaned = raw.replace(/^\`\`\`json?\s*/i, '').replace(/\`\`\`\s*$/, '').trim();
       try { return { analysis: JSON.parse(cleaned) }; }
-      catch { return { error: 'invalid response JSON' }; }
+      catch { return { error: '模型输出不是合法 JSON（' + provider.label + '）' }; }
     }
-    return { error: 'transport retries exhausted' };
+    return { error: '多次重试仍失败（' + provider.label + '）' };
   } catch (err) {
-    return { error: err?.name === 'AbortError' ? 'timeout' : String(err?.message || err) };
+    return { error: (err?.name === 'AbortError' ? '网络超时' : '调用异常') + '（' + provider.label + '）：' + String(err?.message || err) };
   } finally {
     clearTimeout(timer);
   }
 }
+
 
 /** 执行单个任务：命中服务器缓存 -> 调用所选/备用 provider -> 写缓存。 */
 export async function runOneTask(db, record, task, tone = DEFAULT_TONE) {
