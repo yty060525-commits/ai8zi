@@ -9,13 +9,14 @@ import { apiAuth, getServerSession, getServerUrl, setServerSession, setServerUrl
 type DisplayStatus = '已配置' | '未配置' | '保存中' | '保存失败';
 
 const services: Array<{ id: ServiceId; label: string }> = [
-  { id: 'serviceOne', label: '服务一' },
-  { id: 'serviceTwo', label: '服务二' },
+  { id: 'serviceOne', label: 'DeepSeek' },
+  { id: 'serviceTwo', label: 'Kimi' },
+  { id: 'serviceThree', label: 'Qwen3.8-Flash' },
 ];
 
 export function SettingsPage() {
   const [selected, setSelected] = useState<ServiceId>('serviceOne');
-  const [statuses, setStatuses] = useState<Record<ServiceId, DisplayStatus>>({ serviceOne: '未配置', serviceTwo: '未配置' });
+  const [statuses, setStatuses] = useState<Record<ServiceId, DisplayStatus>>({ serviceOne: '未配置', serviceTwo: '未配置', serviceThree: '未配置' });
   const [secret, setSecret] = useState('');
   const [status, setStatus] = useState<DisplayStatus>('未配置');
   const [storage, setStorage] = useState<{ records: number; cache: number; bytes: number } | null>(null);
