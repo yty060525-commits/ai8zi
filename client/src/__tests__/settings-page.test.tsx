@@ -57,4 +57,15 @@ describe('SettingsPage', () => {
     await waitFor(() => expect(screen.getAllByText('保存失败').length).toBeGreaterThan(0));
     expect(secret.value).toBe('retryable-secret');
   });
+
+  it('shows which channel is currently in use and lets you switch it', async () => {
+    render(<SettingsPage />);
+    // 初始：DeepSeek 使用中
+    expect(screen.getByText('使用中')).toBeTruthy();
+    expect(screen.getByText(/当前使用：/).textContent).toContain('DeepSeek');
+    // 切换到 Qwen
+    const useButtons = screen.getAllByRole('button', { name: '设为使用' });
+    fireEvent.click(useButtons[useButtons.length - 1]);
+    await waitFor(() => expect(screen.getByText(/当前使用：/).textContent).toContain('Qwen3.8-Flash'));
+  });
 });
