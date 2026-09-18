@@ -103,16 +103,28 @@ export async function analyzeBazi(record: BaziRecord, task?: BaziAnalysisTask, o
 }
 
 /** 本机备用直连(服务器断线/未设置服务器时用，遵守语气滑杆)。 */
-export async function browserFallback(record: BaziRecord, task: BaziAnalysisTask | undefined, tone: number | undefined, secret: string, signal?: AbortSignal): Promise<{ ok: boolean } | { ok: false; reason: string }> {
+export async function browserFallback(record: BaziRecord, task: BaziAnalysisTask | undefined, tone: number | undefined, secret: string | undefined, signal?: AbortSignal) {
   const result = await browserDirect(record, task, { signal, tone, secret });
   if (result.status === 'completed' && result.analysis) return { ok: true };
   return { ok: false, reason: (result.status === 'failed' || result.status === 'not_configured') ? (result.error || '备用直连失败') : '备用直连失败' };
 }
 
 /** PWA/网页直连（密钥本机保存，仅作为无服务器时的备用通道）。 */
-async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask, opts: AnalyzeOptions & { secret?: string } = {}): Promise<DeepSeekResult> {
-  const secret = opts.secret ?? getBrowserCredential('deepseek');
-  if (!secret) return { status: 'not_configured' };
+/** 通道定义：端点/模型/参数与服务器端、桌面端保持一致。 */
+interface ChannelSpec { id: 'deepseek' | 'kimi' | 'qwen'; label: string; endpoint: string; model: string; temperature?: number; disableThinking?: boolean }
+const CHANNELS: ChannelSpec[] = [
+  { id: 'deepseek', label: 'DeepSeek', endpoint: 'https://api.deepseek.com/chat/completions', model: 'deepseek-flash' },
+  { id: 'kimi', label: 'Kimi', endpoint: 'https://api.moonshot.cn/v1/chat/completions', model: 'kimi-k2.6', temperature: 1 },
+  { id: 'qwen', label: 'Qwen3.8-Flash', endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model: 'qwen3.8-flash', temperature: 0.3, disableThinking: true },
+];
+/** 当前优先通道 + 其余已配置通道（依次回退），与设置页的“使用中/已配置”一致。 */
+function channelOrder(forced?: string): ChannelSpec[] {
+  const selected = forced ?? (() => { try { return localStorage.getItem('mingli.provider') ?? 'deepseek'; } catch { return 'deepseek'; } })();
+  const head = CHANNELS.filter((c) => c.id === selected);
+  return [...head, ...CHANNELS.filter((c) => c.id !== selected)];
+}
+
+export async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask, opts: AnalyzeOptions & { secret?: string } = {}): Promise<DeepSeekResult> {
   const nonAi = record.nonAiResult;
   const natal = {
     pillars: { year: record.yearPillar, month: record.monthPillar, day: record.dayPillar, hour: record.hourPillar },
@@ -147,25 +159,36 @@ async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask, opts: 
   const scopeTypes = !task || task.type === 'annual' || task.type === 'monthly' || task.type === 'decade';
   const content = instruction + '\n\n# 本命事实数据(JSON)\n' + JSON.stringify(natal)
     + (scopeTypes ? '\n\n# 本时段数据(JSON)\n' + JSON.stringify(scope) + '\n\n# 当前分析目标\n' + when : '');
-  const payload: Record<string, unknown> = { model: 'deepseek-flash', reasoning_effort: (isBaseline || isAdjustment) ? 'high' : 'low', max_tokens: 32768, messages: [
-    { role: 'system', content: '请把思考压缩到最短，直接输出符合要求的JSON正文。' },
-    { role: 'user', content },
-  ] };
-  try {
-    const res = await fetch('https://api.deepseek.com/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + secret }, body: JSON.stringify(payload), signal: opts.signal });
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '');
-      return { status: 'failed', error: classifyFailure(res.status, errText) + '（HTTP ' + res.status + '）' };
+  // 按“当前使用通道 → 其余已配置通道”依次尝试；每个通道用各自的端点/模型/参数
+  const errors: string[] = [];
+  for (const channel of channelOrder()) {
+    const secret = opts.secret ?? getBrowserCredential(channel.id);
+    if (!secret) { errors.push(channel.label + '：未配置凭据'); continue; }
+    const payload: Record<string, unknown> = { model: channel.model, max_tokens: 32768, messages: [
+      { role: 'system', content: '请把思考压缩到最短，直接输出符合要求的JSON正文。' },
+      { role: 'user', content },
+    ] };
+    if (channel.id === 'deepseek') payload.reasoning_effort = (isBaseline || isAdjustment) ? 'high' : 'low';
+    if (channel.disableThinking) payload.enable_thinking = false;
+    if (channel.temperature !== undefined) payload.temperature = channel.temperature;
+    try {
+      const res = await fetch(channel.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + secret }, body: JSON.stringify(payload), signal: opts.signal });
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        errors.push(channel.label + '：' + classifyFailure(res.status, errText) + '（HTTP ' + res.status + '）');
+        continue;
+      }
+      const body = await res.json();
+      const raw = String(body?.choices?.[0]?.message?.content ?? '').trim();
+      if (!raw) { errors.push(channel.label + '：上游返回空正文（可能被内容过滤或达到输出上限）'); continue; }
+      const cleaned = raw.replace(/^```json?\\s*/i, '').replace(/```\\s*$/, '');
+      try { return { status: 'completed', analysis: JSON.parse(cleaned) as BaziAIAnalysis }; }
+      catch { errors.push(channel.label + '：输出不是合法 JSON'); continue; }
+    } catch (error) {
+      if (opts.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) return abortResult();
+      const msg = error instanceof Error ? error.message : '请求失败';
+      errors.push(channel.label + '：' + (/abort|timeout|timed out/i.test(msg) ? '网络超时或不可达' : msg));
     }
-    const body = await res.json();
-    const raw = String(body?.choices?.[0]?.message?.content ?? '').trim();
-    if (!raw) return { status: 'failed', error: '上游返回空正文（可能被内容过滤或达到输出上限）' };
-    const cleaned = raw.replace(/^```json?\s*/i, '').replace(/```\s*$/, '');
-    const analysis = JSON.parse(cleaned) as BaziAIAnalysis;
-    return { status: 'completed', analysis };
-  } catch (error) {
-    if (opts.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) return abortResult();
-    const msg = error instanceof Error ? error.message : 'request failed';
-    return { status: 'failed', error: /abort|timeout|timed out/i.test(msg) ? '网络超时或不可达' : msg };
   }
+  return { status: 'failed', error: errors.join('；') || '没有可用的通道凭据，请先在设置里配置' };
 }

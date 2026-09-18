@@ -126,3 +126,35 @@ describe('记录更新', () => {
     assert.equal(again.data.records[0].aiStatus, 'completed');
   });
 });
+
+describe('通道首选(客户端“当前使用”)', () => {
+  test('带 provider 的 ai/task 请求会被正常受理(不会因未知通道 500)', async () => {
+    const reg = await api('POST', 'auth/register', { body: { username: 'qwen-admin', password: 'pw123456' } });
+    const token = reg.data.token;
+    const saved = await api('POST', 'records', { token, body: recordBody({ id: 'rq1' }) });
+    const id = saved.data.record.id;
+    // 共享内存库里前面的用例可能已写入密钥，所以只断言被正常受理且返回合法状态
+    const r = await api('POST', 'records/' + id + '/ai/task', { token, body: { task: { type: 'baseline' }, tone: 80, provider: 'qwen' } });
+    assert.equal(r.status, 200);
+    assert.ok(['completed', 'failed', 'not_configured'].includes(r.data.result.status));
+  });
+
+
+  test('providerOrder 优先使用传入的 preferred 通道', async () => {
+    const { providerOrder, saveProviderKey } = await import('../ai.mjs');
+    const d = openDatabase(':memory:');
+    saveProviderKey(d, 'deepseek', 'k1');
+    saveProviderKey(d, 'kimi', 'k2');
+    saveProviderKey(d, 'qwen', 'k3');
+    assert.equal(providerOrder(d, 'qwen')[0].id, 'qwen');
+    assert.equal(providerOrder(d, 'kimi')[0].id, 'kimi');
+    // preferred 通道未配置密钥时，自动跳过并回退到已配置的通道
+    const d2 = openDatabase(':memory:');
+    saveProviderKey(d2, 'deepseek', 'k1');
+    const order = providerOrder(d2, 'qwen');
+    assert.equal(order.length, 1);
+    assert.equal(order[0].id, 'deepseek');
+    d.close(); d2.close();
+  });
+});
+

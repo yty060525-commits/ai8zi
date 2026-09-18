@@ -10,11 +10,12 @@ export const providerOf = (id) => PROVIDERS.find((p) => p.id === id) ?? PROVIDER
 export const providerKey = (db, id) => getSetting(db, 'ai.key.' + id, '');
 export const saveProviderKey = (db, id, key) => { if (key && key.trim()) setSetting(db, 'ai.key.' + id, key.trim()); };
 export const saveProviderId = (db, id) => setSetting(db, 'ai.provider', id);
-export const providerOrder = (db) => {
-  const selected = currentProviderId(db);
+export const providerOrder = (db, preferred) => {
+  const selected = preferred && PROVIDERS.some((p) => p.id === preferred) ? preferred : currentProviderId(db);
   const others = PROVIDERS.filter((p) => p.id !== selected);
   return [providerOf(selected), ...others].filter((p) => providerKey(db, p.id));
 };
+
 
 /* ---------- 语气(犀利↔温柔)滑杆：0 犀利 / 50 中立 / 100 温柔夸夸，默认 80(八成好话+两成委婉点不足) ---------- */
 export const DEFAULT_TONE = 80;
@@ -215,11 +216,10 @@ async function callProvider(provider, key, messages, effort) {
 }
 
 
-/** 执行单个任务：命中服务器缓存 -> 调用所选/备用 provider -> 写缓存。 */
-export async function runOneTask(db, record, task, tone = DEFAULT_TONE) {
+export async function runOneTask(db, record, task, tone = DEFAULT_TONE, preferred) {
   const t = clampTone(tone);
   const { messages, effort } = buildTaskPayload(record, task, t);
-  const order = providerOrder(db);
+  const order = providerOrder(db, preferred);
   if (order.length === 0) return { status: 'not_configured', error: '服务器未配置 AI 密钥，请在服务器设置中填写后保存' };
   const errors = [];
   for (const provider of order) {

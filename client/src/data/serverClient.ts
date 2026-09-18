@@ -94,18 +94,20 @@ export const apiAdmin = {
 
 /* ---------------- AI：默认走服务器；断网时退回本机备用密钥直接分析 ---------------- */
 export async function runTaskOnServer(record: BaziRecord, task: BaziAnalysisTask, tone: number | undefined, signal?: AbortSignal): Promise<{ status: 'completed' | 'failed' | 'not_configured'; analysis?: unknown; error?: string }> {
+  // 带上本机“当前使用通道”：服务器优先用它，未配置时才回退到服务器自己的顺序
+  let provider: string | undefined;
+  try { provider = localStorage.getItem('mingli.provider') ?? undefined; } catch { provider = undefined; }
   const { data } = await serverFetch<{ result: { status: string; analysis?: unknown; error?: string } }>(
     '/records/' + encodeURIComponent(record.id) + '/ai/task',
-    { method: 'POST', body: { task, tone, record }, signal },
+    { method: 'POST', body: { task, tone, record, provider }, signal },
   );
   return { status: data.result.status as 'completed' | 'failed' | 'not_configured', analysis: data.result.analysis, error: data.result.error };
 }
 
+
 /** 本机备用直连(无服务器 / 服务器断线时用)：优先 DeepSeek 浏览器凭据。 */
 export async function runLocalFallback(record: BaziRecord, task: BaziAnalysisTask | undefined, tone: number | undefined, signal?: AbortSignal): Promise<{ ok: boolean } | { ok: false; reason: string }> {
-  const secret = getBrowserCredential('deepseek');
-  if (!secret) return { ok: false, reason: '本机未保存备用 AI 密钥' };
-  // 复用浏览器直连实现，避免重复维护提示词(在 deepseekAdapter 内)
+  // 不再写死 DeepSeek：交给直连实现按“当前使用通道 → 其余已配置通道”依次尝试
   const { browserFallback } = await import('./deepseekAdapter');
-  return browserFallback(record, task, tone, secret, signal);
+  return browserFallback(record, task, tone, undefined, signal);
 }
