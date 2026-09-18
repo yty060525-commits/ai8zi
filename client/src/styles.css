@@ -161,3 +161,8 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .channel-row input { min-height: 38px; }
 .channel-row .primary-button, .channel-row .text-button { margin-bottom: 0; }
 @media (max-width: 560px) { .channel-row { grid-template-columns: 1fr; } }
+
+.current-channel { margin: 6px 0 14px; padding: 8px 12px; background: #f2f7f2; border: 1px solid #bcd6bc; }
+.channel-block.current { border-color: #1f7a3d; box-shadow: inset 3px 0 0 #1f7a3d; }
+.channel-current { font-size: 12px; padding: 2px 8px; background: #1f7a3d; color: #fff; }
+.channel-use { margin-bottom: 0; }
