@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { getServiceStatus, clearServiceCredential, saveServiceCredential, setSelectedService, serviceProvider, serviceOf, PROVIDER_LABEL, type ServiceId } from '../../data/aiSettings';
 import { compactRecords, getStorageStats, runAiSelfTest, type AiSelfTest } from '../../data/storageInfo';
-import { listBaziRecords, reloadLocalForSession } from '../../data/clientRepository';
+import { exportableRecords, reloadLocalForSession } from '../../data/clientRepository';
 import { exportRecordsSQLite, exportRecordsSQLText } from '../../data/sqliteExport';
 import { importRecords, parseBackupFile, type ImportMode } from '../../data/sqlImport';
 import { apiAuth, getServerSession, getServerUrl, setServerSession, setServerUrl, type ServerSession } from '../../data/serverClient';
@@ -75,7 +75,7 @@ export function SettingsPage() {
   };
   async function exportSQLite() {
     try {
-      const records = await listBaziRecords();
+      const records = await exportableRecords();
       const bytes = await exportRecordsSQLite(records);
       const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
       downloadBlob(new Blob([ab], { type: 'application/x-sqlite3' }), 'mingli-data-' + new Date().toISOString().slice(0, 10) + '.sqlite');
@@ -86,7 +86,7 @@ export function SettingsPage() {
   }
   async function exportJson() {
     try {
-      const records = await listBaziRecords();
+      const records = await exportableRecords();
       downloadBlob(new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), records }, null, 2)], { type: 'application/json' }), 'mingli-data-' + new Date().toISOString().slice(0, 10) + '.json');
       setExportNote('已导出 JSON 备份，共 ' + records.length + ' 条记录。');
     } catch (error) {
@@ -113,7 +113,7 @@ export function SettingsPage() {
   }
   async function exportSqlText() {
     try {
-      const records = await listBaziRecords();
+      const records = await exportableRecords();
       const text = exportRecordsSQLText(records);
       downloadBlob(new Blob([text], { type: 'text/plain;charset=utf-8' }), 'mingli-data-' + new Date().toISOString().slice(0, 10) + '.sql');
       setExportNote('已导出 SQL 文本(.sql)，共 ' + records.length + ' 条记录——与 .sqlite 同一套表结构。');
