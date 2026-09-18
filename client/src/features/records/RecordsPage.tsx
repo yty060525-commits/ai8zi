@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { listBaziRecords, syncAdminAll } from '../../data/clientRepository';
+import { exportableRecords, listBaziRecords, syncAdminAll } from '../../data/clientRepository';
 import { exportRecordsSQLite, exportRecordsSQLText } from '../../data/sqliteExport';
 import { getServerSession, isServerMode } from '../../data/serverClient';
 import type { BaziRecord } from '../../types/domain';
@@ -68,18 +68,22 @@ export function RecordsPage({ onOpenPerson, refreshKey = 0 }: RecordsPageProps) 
   const openPanel = () => { setIncludedIds(new Set(selectedIds)); setPanelOpen(true); };
   const doExport = async (kind: 'sqlite' | 'sql' | 'json') => {
     if (chosenRecords.length === 0) { showNote('请先勾选至少一位人物再导出。'); return; }
+      // 存储是瘦身的：导出前还原成完整盘，分享出去的文件才可自解释
+      const full = await exportableRecords();
+      const byId = new Map(full.map((r) => [r.id, r]));
+      const payloadRecords = chosenRecords.map((r) => byId.get(r.id) ?? r);
     setExporting(true);
     try {
       const date = stamp();
       if (kind === 'json') {
-        downloadBlob(new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), records: chosenRecords }, null, 2)], { type: 'application/json' }), 'mingli-export-' + date + '.json');
+        downloadBlob(new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), records: payloadRecords }, null, 2)], { type: 'application/json' }), 'mingli-export-' + date + '.json');
         showNote('已导出所选 ' + chosenRecords.length + ' 人的 JSON 备份。');
       } else if (kind === 'sql') {
-        const text = exportRecordsSQLText(chosenRecords);
+        const text = exportRecordsSQLText(payloadRecords);
         downloadBlob(new Blob([text], { type: 'text/plain;charset=utf-8' }), 'mingli-export-' + date + '.sql');
         showNote('已导出所选 ' + chosenRecords.length + ' 人的 SQL 文本(.sql)，可在任何文本工具/数据库软件打开。');
       } else {
-        const bytes = await exportRecordsSQLite(chosenRecords);
+        const bytes = await exportRecordsSQLite(payloadRecords);
         const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
         downloadBlob(new Blob([ab], { type: 'application/x-sqlite3' }), 'mingli-export-' + date + '.sqlite');
         showNote('已导出所选 ' + chosenRecords.length + ' 人的 SQLite(.sqlite)，每人整条记录完整保存，可在设置页导入还原。');

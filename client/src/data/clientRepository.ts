@@ -164,6 +164,12 @@ export const listBaziRecords = async (): Promise<BaziRecord[]> => {
   await pullAndMergeLocal();
   return baziRepository.listBaziRecords();
 };
+
+/** 导出用：把瘦身存储还原成完整盘，保证分享出去的 .sqlite/.sql/.json 自解释、可被第三方直接读懂。 */
+export async function exportableRecords(): Promise<BaziRecord[]> {
+  const records = await listBaziRecords();
+  return await Promise.all(records.map((record) => hydrateRecord(record)));
+}
 export const getBaziRecord = async (id: string): Promise<BaziRecord | undefined> => {
   let record = await baziRepository.getBaziRecord(id);
   if (!record && serverActive()) {
