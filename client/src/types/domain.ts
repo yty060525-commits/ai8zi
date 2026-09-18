@@ -103,7 +103,15 @@ export interface BaziAIAnalysis {
 }
 export type BaziTaskType = 'baseline' | 'overview' | 'annual' | 'monthly' | 'synthesis' | 'decade' | 'adjustment';
 export interface BaziGuide { element: '木' | '火' | '土' | '金' | '水'; lifestyle: string; career: string; health: string; }
-export interface BaziAnalysisTask { taskId: string; type: BaziTaskType; year?: number; month?: number; annual?: FortunePeriod; monthly?: FortunePeriod; decade?: NonAiChart['greatFortunes'][number]; baseline?: BaziTaskResult; guide?: BaziGuide; }
+export interface BaziAnalysisTask { taskId: string; type: BaziTaskType; year?: number; month?: number; annual?: FortunePeriod; monthly?: FortunePeriod; decade?: NonAiChart['greatFortunes'][number]; baseline?: BaziTaskResult; guide?: BaziGuide; /** 全盘总结任务用：各时段已算出的要点集合 */ findings?: AiFindings; }
+/** 交给「全盘总结」的输入：本命结论 + 各时段(大运/流年/流月)已完成的分析要点。 */
+export interface AiFindings {
+  horizon: { from: number; to: number };
+  baselineSummary: string;
+  decades: Array<{ key: string; heading: string; text: string }>;
+  annuals: Array<{ key: string; heading: string; text: string }>;
+  monthlies: Array<{ key: string; heading: string; text: string }>;
+}
 export interface BaziTaskResult { task: BaziAnalysisTask; status: 'completed' | 'failed' | 'not_configured'; analysis?: BaziAIAnalysis; error?: string; }
 
 export interface Person {

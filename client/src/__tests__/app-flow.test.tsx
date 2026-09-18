@@ -137,7 +137,13 @@ describe('simplified chart application flow', () => {
   });
 
   it('shows completed AI analysis after the detail action finishes', async () => {
-    vi.mocked(analyzeBazi).mockResolvedValue({ status: 'completed', analysis: { pattern: '从财格', strength: '身弱', usefulElements: ['木'], avoidElements: ['金'], explanation: '完成的分析结果' } });
+    vi.mocked(analyzeBazi).mockImplementation(async (_record, task) => ({
+      status: 'completed',
+      // 全盘总结任务返回它自己的三段结构，其它任务返回通用正文
+      analysis: task?.type === 'overview'
+        ? { pattern: '', strength: '', usefulElements: [], avoidElements: [], title: '丙午得禄·乘风可上', explanation: '【核心结论】1. 命局以木为用。\n【值得关注的时间节点】1. 2029年(乙巳)：机会窗口，宜主动争取。\n【行动建议】1. 上半年落地关键谈判。' }
+        : { pattern: '从财格', strength: '身弱', usefulElements: ['木'], avoidElements: ['金'], explanation: '完成的分析结果' },
+    }));
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: '记录' }));
     fireEvent.click(await screen.findByRole('button', { name: '查看张伟' }));
@@ -145,6 +151,10 @@ describe('simplified chart application flow', () => {
 
     expect((await screen.findAllByText('完成的分析结果')).length).toBeGreaterThan(0);
     expect(screen.getByText('状态：已完成')).toBeTruthy();
+    // 全盘总结：有提要入口，正文与标题各只出现一次(不重复渲染)
+    expect(await screen.findByText(/全盘总结已完成/)).toBeTruthy();
+    expect(screen.getAllByText('丙午得禄·乘风可上')).toHaveLength(1);
+    expect(screen.getByText('1. 2029年(乙巳)：机会窗口，宜主动争取。')).toBeTruthy();
   });
 
   it('recalculates non-AI data in place and clears prior AI state without calling AI', async () => {

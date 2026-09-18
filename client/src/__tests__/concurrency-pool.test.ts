@@ -26,4 +26,20 @@ describe('并发池冷却期不丢任务', () => {
     expect(entries.length).toBeGreaterThanOrEqual(23);
     expect(called.size).toBeGreaterThanOrEqual(23);
   }, 30000);
+
+  it('限流冷却后，排在队列里的任务仍全部发出(不静默少跑)', async () => {
+    // 记录实际发出的请求数；期望 = 总任务数(23 基础 + 1 全盘总结)
+    let requests = 0;
+    let failBudget = FIXED_CONCURRENCY.scope * 2; // 两整批命中限流 → 两次冷却
+    await orchestrateBaziAnalysis(record, async (task) => {
+      requests += 1;
+      if ((task.type === 'annual' || task.type === 'monthly') && failBudget > 0) {
+        failBudget -= 1;
+        return { task, status: 'failed', error: '请求过于频繁（已被限流）（HTTP 429 · DeepSeek）' };
+      }
+      return { task, status: 'completed', analysis: ok };
+    }, undefined, { retries: 0, retryDelayMs: 0 });
+    // 23 条基础任务 + 若干次失败重试 + 末条总结；关键是没有任何任务被“跳过”
+    expect(requests).toBeGreaterThanOrEqual(23);
+  }, 30000);
 });

@@ -199,3 +199,29 @@ describe('提示词结构(前缀缓存与年龄字段)', () => {
   });
 });
 
+describe('全盘总结任务(服务器通道)', () => {
+  const rec2 = { gender: 'male', birthYear: 1984, yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午',
+    nonAiResult: { solarDate: '1984-02-06', dayMaster: '庚', greatFortunes: [], annualFortunes: [], monthlyFortunes: [] } };
+  const findings = { horizon: { from: 2026, to: 2035 }, baselineSummary: '', decades: [{ key: 'task-24', heading: '丁卯 大运段(2020-2029)', text: '【健康】1. 注意心血管。' }], annuals: [{ key: 'task-03', heading: '2027年(丙午)', text: '【事业】1. 官星得力，有升迁机会。' }], monthlies: [{ key: 'task-14', heading: '2027年3月(辛卯)', text: '【财运】1. 六冲，忌大额投资。' }] };
+  const anchor = { summary: '格局：正印格 · 强弱：身强　喜：火、土　忌：水、木' };
+
+  test('要点与三段要求齐备，且变化部分后置', async () => {
+    const { buildTaskPayload } = await import('../ai.mjs');
+    const p = buildTaskPayload(rec2, { type: 'overview', baseline: anchor, findings }, 80);
+    const c = p.messages[1].content;
+    for (const needle of ['全盘总结', '本命结论', '正印格', '各时段分析要点', '官星得力', '注意心血管', '忌大额投资', '核心结论', '值得关注的时间节点', '行动建议']) {
+      assert.ok(c.includes(needle), '总结提示词缺少 ' + needle);
+    }
+    assert.ok(c.indexOf('# 各时段分析要点') > c.indexOf('# 本命事实数据'), '要点应在本命事实之后');
+    assert.ok(c.lastIndexOf('# 当前分析目标') > c.indexOf('# 各时段分析要点'), '目标应排在最后(变化后置)');
+    assert.equal(p.effort, 'high'); // 判断类任务用高思考力度
+  });
+
+  test('缓存键区分总结任务，不会与本命任务串味', async () => {
+    const { cacheKey } = await import('../ai.mjs');
+    const kOverview = cacheKey(rec2, { type: 'overview' }, 'deepseek-flash', 80);
+    const kBaseline = cacheKey(rec2, { type: 'baseline' }, 'deepseek-flash', 80);
+    assert.notEqual(kOverview, kBaseline);
+    assert.ok(kOverview.includes('overview'));
+  });
+});

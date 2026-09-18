@@ -70,3 +70,22 @@ describe('正文分点化(toPointBlocks / 复制)', () => {
     expect(full).toContain('• 多沟通。');
   });
 });
+
+describe('复制：全盘总结在维度筛选下不丢失', () => {
+  const overview: BaziAIAnalysis = { pattern: '', strength: '', usefulElements: [], avoidElements: [], explanation: '【核心结论】1. 命局以木为用。\n【值得关注的时间节点】1. 2029年(乙巳)：机会窗口。\n【行动建议】1. 上半年落地谈判。' };
+  const annual: BaziAIAnalysis = { pattern: '', strength: '', usefulElements: [], avoidElements: [], explanation: '【健康】1. 作息规律。\n【事业】1. 有升迁机会。' };
+
+  it('勾选单个维度时总结整篇带出，流年仍按维度过滤', () => {
+    const picked = formatCopyBody(overview, ['health'], true);
+    expect(picked).toContain('值得关注的时间节点');
+    expect(picked).toContain('行动建议');
+    const body = formatCopyBody(annual, ['health'], false);
+    expect(body).toContain('作息规律');
+    expect(body).not.toContain('升迁机会');
+  });
+
+  it('全选(null)时两者都完整输出', () => {
+    expect(formatCopyBody(overview, null)).toContain('核心结论');
+    expect(formatCopyBody(annual, null)).toContain('升迁机会');
+  });
+});
