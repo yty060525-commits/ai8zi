@@ -1,15 +1,16 @@
 import { invoke } from '@tauri-apps/api/core';
 
-export type AiProvider = 'deepseek' | 'kimi';
-export type ServiceId = 'serviceOne' | 'serviceTwo';
+export type AiProvider = 'deepseek' | 'kimi' | 'qwen';
+export type ServiceId = 'serviceOne' | 'serviceTwo' | 'serviceThree';
 export type CredentialStatus = 'configured' | 'not_configured';
 export interface AiProviderStatus {
   selectedProvider: AiProvider;
   deepseek: CredentialStatus;
   kimi: CredentialStatus;
+  qwen: CredentialStatus;
 }
 
-const defaultStatus = (): AiProviderStatus => ({ selectedProvider: 'deepseek', deepseek: 'not_configured', kimi: 'not_configured' });
+const defaultStatus = (): AiProviderStatus => ({ selectedProvider: 'deepseek', deepseek: 'not_configured', kimi: 'not_configured', qwen: 'not_configured' });
 let memoryStatus = defaultStatus();
 
 const inTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -30,7 +31,7 @@ export async function clearAiCredential(provider: AiProvider): Promise<Credentia
 
 export async function getAiProviderStatus(): Promise<AiProviderStatus> {
   if (isProdBrowser()) {
-    return { selectedProvider: (localStorage.getItem('mingli.provider') as AiProvider) ?? 'deepseek', deepseek: getBrowserCredential('deepseek') ? 'configured' : 'not_configured', kimi: getBrowserCredential('kimi') ? 'configured' : 'not_configured' };
+    return { selectedProvider: (localStorage.getItem('mingli.provider') as AiProvider) ?? 'deepseek', deepseek: getBrowserCredential('deepseek') ? 'configured' : 'not_configured', kimi: getBrowserCredential('kimi') ? 'configured' : 'not_configured', qwen: getBrowserCredential('qwen') ? 'configured' : 'not_configured' };
   }
   return invoke<AiProviderStatus>('get_ai_provider_status');
 }
@@ -40,11 +41,12 @@ export async function setAiProvider(provider: AiProvider): Promise<AiProvider> {
   return invoke<AiProvider>('set_ai_provider', { provider });
 }
 
-const serviceProvider = (service: ServiceId): AiProvider => service === 'serviceOne' ? 'deepseek' : 'kimi';
+const serviceProvider = (service: ServiceId): AiProvider => service === 'serviceOne' ? 'deepseek' : service === 'serviceTwo' ? 'kimi' : 'qwen';
+const serviceOf = (provider: AiProvider): ServiceId => provider === 'deepseek' ? 'serviceOne' : provider === 'kimi' ? 'serviceTwo' : 'serviceThree';
 
-export async function getServiceStatus(): Promise<{ selectedService: ServiceId; serviceOne: CredentialStatus; serviceTwo: CredentialStatus }> {
+export async function getServiceStatus(): Promise<{ selectedService: ServiceId; serviceOne: CredentialStatus; serviceTwo: CredentialStatus; serviceThree: CredentialStatus }> {
   const status = await getAiProviderStatus();
-  return { selectedService: status.selectedProvider === 'deepseek' ? 'serviceOne' : 'serviceTwo', serviceOne: status.deepseek, serviceTwo: status.kimi };
+  return { selectedService: serviceOf(status.selectedProvider), serviceOne: status.deepseek, serviceTwo: status.kimi, serviceThree: status.qwen };
 }
 
 export async function saveServiceCredential(service: ServiceId, secret: string): Promise<CredentialStatus> {

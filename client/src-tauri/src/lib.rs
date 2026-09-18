@@ -47,15 +47,15 @@ const SELECTED_PROVIDER_USER: &str = "selected-provider";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum AiProvider { Deepseek, Kimi }
+pub enum AiProvider { Deepseek, Kimi, Qwen }
 
 impl AiProvider {
-    fn key(&self) -> &'static str { match self { Self::Deepseek => "deepseek", Self::Kimi => "kimi" } }
+    fn key(&self) -> &'static str { match self { Self::Deepseek => "deepseek", Self::Kimi => "kimi", Self::Qwen => "qwen" } }
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AiProviderStatus { pub selected_provider: AiProvider, pub deepseek: &'static str, pub kimi: &'static str }
+pub struct AiProviderStatus { pub selected_provider: AiProvider, pub deepseek: &'static str, pub kimi: &'static str, pub qwen: &'static str }
 
 pub(crate) fn credential_entry(provider: &AiProvider) -> Result<keyring::Entry, String> {
     keyring::Entry::new(KEYRING_SERVICE, provider.key()).map_err(|error| error.to_string())
@@ -64,7 +64,7 @@ pub(crate) fn credential_entry(provider: &AiProvider) -> Result<keyring::Entry, 
 fn selected_provider() -> AiProvider {
     keyring::Entry::new(KEYRING_SERVICE, SELECTED_PROVIDER_USER).ok()
         .and_then(|entry| entry.get_password().ok())
-        .and_then(|value| match value.as_str() { "kimi" => Some(AiProvider::Kimi), "deepseek" => Some(AiProvider::Deepseek), _ => None })
+        .and_then(|value| match value.as_str() { "kimi" => Some(AiProvider::Kimi), "deepseek" => Some(AiProvider::Deepseek), "qwen" => Some(AiProvider::Qwen), _ => None })
         .unwrap_or(AiProvider::Deepseek)
 }
 
@@ -84,7 +84,7 @@ pub fn clear_ai_credential(provider: AiProvider) -> Result<&'static str, String>
 #[tauri::command]
 pub fn get_ai_provider_status() -> Result<AiProviderStatus, String> {
     let configured = |provider: AiProvider| credential_entry(&provider).map(|entry| entry.get_password().is_ok()).unwrap_or(false);
-    Ok(AiProviderStatus { selected_provider: selected_provider(), deepseek: if configured(AiProvider::Deepseek) { "configured" } else { "not_configured" }, kimi: if configured(AiProvider::Kimi) { "configured" } else { "not_configured" } })
+    Ok(AiProviderStatus { selected_provider: selected_provider(), deepseek: if configured(AiProvider::Deepseek) { "configured" } else { "not_configured" }, kimi: if configured(AiProvider::Kimi) { "configured" } else { "not_configured" }, qwen: if configured(AiProvider::Qwen) { "configured" } else { "not_configured" } })
 }
 
 #[tauri::command]
@@ -199,8 +199,8 @@ pub async fn ai_self_test() -> Result<Value, String> {
             Ok(secret) => secret,
             Err(_) => { errors.push(format!("{} 未配置密钥", provider.key())); continue; }
         };
-        let endpoint = match provider { AiProvider::Deepseek => "https://api.deepseek.com/chat/completions", AiProvider::Kimi => "https://api.moonshot.cn/v1/chat/completions" };
-        let model = match provider { AiProvider::Deepseek => "deepseek-flash", AiProvider::Kimi => "kimi-k2.6" };
+        let endpoint = match provider { AiProvider::Deepseek => "https://api.deepseek.com/chat/completions", AiProvider::Kimi => "https://api.moonshot.cn/v1/chat/completions", AiProvider::Qwen => "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions" };
+        let model = match provider { AiProvider::Deepseek => "deepseek-flash", AiProvider::Kimi => "kimi-k2.6", AiProvider::Qwen => "qwen3.8-flash" };
         let request = serde_json::json!({ "model": model, "temperature": 0, "messages": [{ "role": "user", "content": "只回复两个字母：ok" }] });
         let started = std::time::Instant::now();
         let response = match reqwest::Client::new().post(endpoint).bearer_auth(&secret).json(&request).send().await {
@@ -237,20 +237,20 @@ pub struct AiTaskInput {
 #[derive(Debug, Serialize)]
 pub struct AiTaskOutput { pub task: AiTaskInput, pub status: String, pub analysis: Option<Value>, pub error: Option<String> }
 
-pub(crate) fn provider_order(selected: &AiProvider) -> [AiProvider; 2] {
-    match selected {
-        AiProvider::Deepseek => [AiProvider::Deepseek, AiProvider::Kimi],
-        AiProvider::Kimi => [AiProvider::Kimi, AiProvider::Deepseek],
-    }
+pub(crate) fn provider_order(selected: &AiProvider) -> Vec<AiProvider> {
+    let all = [AiProvider::Deepseek, AiProvider::Kimi, AiProvider::Qwen];
+    let mut order = vec![selected.clone()];
+    for p in all { if p != *selected { order.push(p); } }
+    order
 }
 
 pub(crate) fn provider_model(provider: &AiProvider) -> &'static str {
     // DeepSeek V4.1-Flash(deepseek-flash)：思考模式默认开启，用 reasoning_effort 控制力度；思考模式下 temperature 无效。
-    match provider { AiProvider::Deepseek => "deepseek-flash", AiProvider::Kimi => "kimi-k2.6" }
+    match provider { AiProvider::Deepseek => "deepseek-flash", AiProvider::Kimi => "kimi-k2.6", AiProvider::Qwen => "qwen3.8-flash" }
 }
 
 pub(crate) fn provider_temperature(provider: &AiProvider) -> Option<i32> {
-    match provider { AiProvider::Deepseek => None, AiProvider::Kimi => Some(1) }
+    match provider { AiProvider::Deepseek => None, AiProvider::Kimi => Some(1), AiProvider::Qwen => Some(1) }
 }
 
 fn clamp_tone(tone: Option<i32>) -> i32 { match tone { Some(n) => n.clamp(0, 100), None => 80 } }
@@ -506,7 +506,7 @@ pub async fn run_ai_task(state: State<'_, Database>, record: BaziRecord, task: A
             Ok(secret) => secret,
             Err(_) => { errors.push(format!("{} credential unavailable", provider.key())); continue; }
         };
-        let endpoint = match provider { AiProvider::Deepseek => "https://api.deepseek.com/chat/completions", AiProvider::Kimi => "https://api.moonshot.cn/v1/chat/completions" };
+        let endpoint = match provider { AiProvider::Deepseek => "https://api.deepseek.com/chat/completions", AiProvider::Kimi => "https://api.moonshot.cn/v1/chat/completions", AiProvider::Qwen => "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions" };
         let payload = build_ai_request_payload(&record, &task)?;
         let mut api_payload = api_request_payload(&payload, model, provider_temperature(&provider));
         if model.starts_with("deepseek") { apply_reasoner_settings(&mut api_payload); } // 高上限+思考从简，避免正文为空
@@ -658,16 +658,19 @@ mod tests {
 
     #[test]
     fn provider_order_prefers_selected_service_and_falls_back_to_the_other() {
-        assert_eq!(commands::provider_order(&commands::AiProvider::Deepseek), [commands::AiProvider::Deepseek, commands::AiProvider::Kimi]);
-        assert_eq!(commands::provider_order(&commands::AiProvider::Kimi), [commands::AiProvider::Kimi, commands::AiProvider::Deepseek]);
+        assert_eq!(commands::provider_order(&commands::AiProvider::Deepseek), vec![commands::AiProvider::Deepseek, commands::AiProvider::Kimi, commands::AiProvider::Qwen]);
+        assert_eq!(commands::provider_order(&commands::AiProvider::Kimi), vec![commands::AiProvider::Kimi, commands::AiProvider::Deepseek, commands::AiProvider::Qwen]);
+        assert_eq!(commands::provider_order(&commands::AiProvider::Qwen), vec![commands::AiProvider::Qwen, commands::AiProvider::Deepseek, commands::AiProvider::Kimi]);
     }
 
     #[test]
     fn provider_models_match_current_service_api() {
         assert_eq!(commands::provider_model(&commands::AiProvider::Deepseek), "deepseek-flash");
         assert_eq!(commands::provider_model(&commands::AiProvider::Kimi), "kimi-k2.6");
+        assert_eq!(commands::provider_model(&commands::AiProvider::Qwen), "qwen3.8-flash");
         assert_eq!(commands::provider_temperature(&commands::AiProvider::Deepseek), None);
         assert_eq!(commands::provider_temperature(&commands::AiProvider::Kimi), Some(1));
+        assert_eq!(commands::provider_temperature(&commands::AiProvider::Qwen), Some(1));
     }
 
     #[test]

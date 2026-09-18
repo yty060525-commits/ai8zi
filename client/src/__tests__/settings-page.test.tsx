@@ -6,7 +6,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { vi } from 'vitest';
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 
-vi.mocked(invoke).mockImplementation(async (command) => command === 'get_ai_provider_status' ? { selectedProvider: 'deepseek', deepseek: 'not_configured', kimi: 'not_configured' } : command === 'save_ai_credential' ? 'configured' : command === 'set_ai_provider' ? 'kimi' : 'not_configured');
+vi.mocked(invoke).mockImplementation(async (command) => command === 'get_ai_provider_status' ? { selectedProvider: 'deepseek', deepseek: 'not_configured', kimi: 'not_configured', qwen: 'not_configured' } : command === 'save_ai_credential' ? 'configured' : command === 'set_ai_provider' ? 'kimi' : 'not_configured');
 
 afterEach(() => { cleanup(); resetAiSettingsForTests(); });
 
@@ -14,9 +14,9 @@ describe('SettingsPage', () => {
   it('uses neutral service names and clears the secret input after saving', async () => {
     render(<SettingsPage />);
     expect(screen.getByRole('heading', { name: '设置' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: '服务一' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: '服务二' })).toBeTruthy();
-    expect(screen.queryByText(/DeepSeek|Kimi|模型|API|额度|费用|密钥/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'DeepSeek' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Kimi' })).toBeTruthy();
+    expect(screen.queryByText(/模型|API|额度|费用|密钥/)).toBeNull(); // 服务名按需求显示厂商名，仍不暴露密钥/额度等字样
 
     const secret = screen.getByLabelText('访问凭据') as HTMLInputElement;
     expect(secret.type).toBe('password');
@@ -30,7 +30,7 @@ describe('SettingsPage', () => {
 
   it('can switch services and clear the selected credential', async () => {
     render(<SettingsPage />);
-    fireEvent.click(screen.getByRole('button', { name: '服务二' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Kimi' }));
     const secret = screen.getByLabelText('访问凭据');
     fireEvent.change(secret, { target: { value: 'another-not-real-secret' } });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
@@ -43,7 +43,7 @@ describe('SettingsPage', () => {
   it('shows saving feedback and keeps the credential available when saving fails', async () => {
     let rejectSave!: (error: Error) => void;
     vi.mocked(invoke).mockImplementation((command) => command === 'get_ai_provider_status'
-      ? Promise.resolve({ selectedProvider: 'deepseek', deepseek: 'not_configured', kimi: 'not_configured' })
+      ? Promise.resolve({ selectedProvider: 'deepseek', deepseek: 'not_configured', kimi: 'not_configured', qwen: 'not_configured' })
       : command === 'save_ai_credential' ? new Promise((_, reject) => { rejectSave = reject; }) : Promise.resolve('not_configured'));
     render(<SettingsPage />);
     const secret = screen.getByLabelText('访问凭据') as HTMLInputElement;

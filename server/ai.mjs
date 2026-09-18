@@ -3,6 +3,7 @@ import { getSetting, readCache, writeCache, setSetting } from './db.mjs';
 export const PROVIDERS = [
   { id: 'deepseek', label: 'DeepSeek V4.1', endpoint: 'https://api.deepseek.com/chat/completions', model: 'deepseek-flash' },
   { id: 'kimi', label: 'Kimi(Moonshot)', endpoint: 'https://api.moonshot.cn/v1/chat/completions', model: 'kimi-k2.6' },
+  { id: 'qwen', label: 'Qwen3.8-Flash', endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model: 'qwen3.8-flash' },
 ];
 export const currentProviderId = (db) => getSetting(db, 'ai.provider', 'deepseek');
 export const providerOf = (id) => PROVIDERS.find((p) => p.id === id) ?? PROVIDERS[0];
