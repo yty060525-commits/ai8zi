@@ -45,8 +45,12 @@ export const REQUIRED_SECTIONS: Record<string, string[]> = {
 export const FIXED_CONCURRENCY = { scope: 6, decade: 3, repair: 5 } as const;
 const COOLDOWN_MS = 3000;
 
-const THROTTLE_RE = /429|rate\s*limit|限流|HTTP\s*5\d\d|timeout|timed out|network|econn|超时/i;
-export const isThrottleFailure = (error?: string): boolean => !!error && THROTTLE_RE.test(error);
+// 只有「我们自己发太快」才需要冷却等待；上游 5xx/超时属于服务故障，重试即可，不应拖慢整体收尾。
+const RATE_LIMIT_RE = /429|rate\s*limit|限流|too many requests|requests per|频繁/i;
+const TRANSIENT_RE = /HTTP\s*5\d\d|timeout|timed out|network|econn|网络|超时/i;
+export const isThrottleFailure = (error?: string): boolean => !!error && (RATE_LIMIT_RE.test(error) || TRANSIENT_RE.test(error));
+/** 仅“限流”值得进入冷却窗口(避免继续撞墙)；5xx/网络抖动只重试不冷却。 */
+export const isRateLimited = (error?: string): boolean => !!error && RATE_LIMIT_RE.test(error);
 
 async function fixedMapLimit<T>(items: T[], concurrency: number, worker: (item: T) => Promise<{ status?: string; error?: string } | void>): Promise<void> {
   const queue = [...items];
@@ -58,10 +62,15 @@ async function fixedMapLimit<T>(items: T[], concurrency: number, worker: (item: 
   let timer: ReturnType<typeof setTimeout> | null = null;
   await new Promise<void>((resolve, reject) => {
     const finish = () => { if (settled) return; settled = true; if (timer) { clearTimeout(timer); timer = null; } if (abortReason) reject(abortReason); else resolve(); };
+    // 只有「没有任务在跑」且「队列已空」才算完成；冷却期仍有排队时绝不能提前收尾(否则会静默丢任务)
+    const checkDone = () => { if (!settled && running === 0 && queue.length === 0) finish(); };
     const pump = () => {
       if (settled || abortReason) return;
       const now = Date.now();
-      if (now < cooledUntil) { if (timer === null) timer = setTimeout(() => { timer = null; pump(); }, Math.min(1000, cooledUntil - now)); return; }
+      if (now < cooledUntil) {
+        if (timer === null) timer = setTimeout(() => { timer = null; pump(); }, Math.min(1000, cooledUntil - now));
+        return;
+      }
       while (!settled && running < c && queue.length > 0) {
         const item = queue.shift()!;
         running += 1;
@@ -71,13 +80,13 @@ async function fixedMapLimit<T>(items: T[], concurrency: number, worker: (item: 
           catch (error) { abortReason = abortReason ?? error; outcome = undefined; }
           finally {
             running -= 1;
-            if (outcome && outcome.status === 'failed' && isThrottleFailure(outcome.error)) cooledUntil = Date.now() + COOLDOWN_MS;
+            if (outcome && outcome.status === 'failed' && isRateLimited(outcome.error)) cooledUntil = Date.now() + COOLDOWN_MS;
             pump();
-            if (running === 0) finish();
+            checkDone();
           }
         })();
       }
-      if (running === 0 && queue.length === 0) finish();
+      checkDone();
     };
     pump();
   });
