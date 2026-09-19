@@ -34,6 +34,7 @@ const ELEMENTS = ['木', '火', '土', '金', '水'] as const;
 /** 地支本气五行索引(子水丑土寅木卯木辰土巳火午火未土申金酉金戌土亥水) */
 const BRANCH_ELEMENT = [0, 2, 0, 0, 2, 1, 1, 2, 3, 3, 2, 4];
 const YANG = '甲丙戊庚壬';                        // 阳干(序数为偶)
+
 /** 六破规范对(小序在前)：子酉、丑辰、寅亥、卯午、巳申、未戌 */
 const PO_PAIRS = [[0, 9], [1, 4], [2, 11], [3, 6], [5, 8], [7, 10]] as const;
 const XING_SELF = new Set([4, 6, 9, 11]);          // 辰午酉亥 自刑
@@ -45,6 +46,31 @@ const GANZHI_60 = Array.from({ length: 60 }, (_, n) => STEMS[n % 10] + BRANCHES[
 const indexOfStem = (s: string) => STEMS.indexOf(s);
 const indexOfBranch = (b: string) => BRANCHES.indexOf(b);
 const mod = (n: number, m: number) => ((n % m) + m) % m;
+
+/* ---- 以下三张表是纯查表(不依赖历法/天文)，本地化后与 lunar-javascript 逐支扫描比对一致 ---- */
+/** 地支藏干，按 本气→中气→余气 排列。
+ *  与 lunar-javascript 逐柱扫描完全一致(15000 天)。注意「巳」古籍有两说：
+ *  按五行旺相休囚推为 丙戊庚，通行印本与 lunar-javascript 作 丙庚戊 —— 两说只差中/余次序，
+ *  本气(丙火当令)相同，而旺衰判断只看本气，故取主流印本口径以免与既有缓存结果冲突。 */
+const HIDDEN_STEMS: Record<string, string[]> = {
+  子: ['癸'], 丑: ['己', '癸', '辛'], 寅: ['甲', '丙', '戊'], 卯: ['乙'],
+  辰: ['戊', '乙', '癸'], 巳: ['丙', '庚', '戊'], 午: ['丁', '己'], 未: ['己', '丁', '乙'],
+  申: ['庚', '壬', '戊'], 酉: ['辛'], 戌: ['戊', '辛', '丁'], 亥: ['壬', '甲'],
+};
+/** 纳音五行(两柱一组，共 30 项)：甲子乙丑海中金 …… 壬戌癸亥大海水。 */
+const NAYIN_30 = ['海中金', '炉中火', '大林木', '路旁土', '剑锋金', '山头火', '涧下水', '城头土', '白蜡金', '杨柳木', '泉中水', '屋上土', '霹雳火', '松柏木', '长流水', '沙中金', '山下火', '平地木', '壁上土', '金箔金', '覆灯火', '天河水', '大驿土', '钗钏金', '桑柘木', '大溪水', '沙中土', '天上火', '石榴木', '大海水'];
+const naYinOf = (ganZhi: string) => { const i = GANZHI_60.indexOf(ganZhi); return i < 0 ? '' : NAYIN_30[Math.floor(i / 2)]; };
+/** 十二长生：阳干顺行、阴干逆行，自「长生」起数。长生起点(甲亥 乙午 丙戊寅 丁己酉 庚巳 辛子 壬申 癸卯)。 */
+const CHANG_SHENG_START = [11, 6, 2, 9, 2, 9, 5, 0, 8, 3];
+const LONGEVITY_ORDER = ['长生', '沐浴', '冠带', '临官', '帝旺', '衰', '病', '死', '墓', '绝', '胎', '养'];
+function longevityOf(dayStem: string, branch: string): string {
+  const s = indexOfStem(dayStem);
+  const b = indexOfBranch(branch);
+  if (s < 0 || b < 0) return '';
+  const forward = YANG.includes(dayStem);
+  const delta = forward ? b - CHANG_SHENG_START[s] : CHANG_SHENG_START[s] - b;
+  return LONGEVITY_ORDER[mod(delta, 12)];
+}
 const gzAt = (n: number) => GANZHI_60[mod(n, 60)];
 const gzIndex = (gz: string) => GANZHI_60.indexOf(gz);
 
@@ -52,9 +78,11 @@ const gzIndex = (gz: string) => GANZHI_60.indexOf(gz);
 const yearGanZhiExact = (year: number) =>
   Solar.fromYmdHms(year, 7, 1, 12, 0, 0).getLunar().getYearInGanZhiExact();
 
-/** 十神(纯代数)：元素差与阴阳定类。 */
-function tenGodOf(dayStem: string, otherStem: string): string {
-  if (dayStem === otherStem) return '日主';
+/** 十神(纯代数)：元素差与阴阳定类。
+ *  「日主」只用于日柱天干本身；别的柱(含藏干)与日主同干时应作「比肩」——
+ *  实测这种情形极常见(一万天内 9636 次)，写成「日主」会让模型把比劫数错。 */
+function tenGodOf(dayStem: string, otherStem: string, isDayPillar = false): string {
+  if (isDayPillar && dayStem === otherStem) return '日主';
   const d = mod((indexOfStem(otherStem) >> 1) - (indexOfStem(dayStem) >> 1), 5);
   const same = YANG.includes(dayStem) === YANG.includes(otherStem);
   if (d === 0) return same ? '比肩' : '劫财';
@@ -204,29 +232,20 @@ function fortuneDirection(yearStem: string, gender: Gender): boolean {
 }
 
 
-const asList = (value: unknown): string[] => Array.isArray(value) ? value.map(String) : [String(value ?? '')];
+export const SHEN_SHA_RULE_VERSION = 'classic-v2-local';
 
-interface DayGodsSource {
-  getDayJiShen(): string[];
-  getDayXiongSha(): string[];
-  getDaySha(): string;
-  getDayTianShen(): string;
-  getTimeTianShen(): string;
-}
-
-/** 神煞结果：经典干支神煞(逐柱、结构化) + lunar-javascript 日神煞(择日类，辅助)。 */
-function buildShenShaResult(lunar: DayGodsSource, pillars: string[]): NonAiChart['shenSha'] {
+/** 神煞结果：全部来自本地规则引擎 computeShenSha(经典干支起法)，不再调用历法库的择日神煞。
+ *  旧版还附带 lunar-javascript 的 daySha/dayTianShen/timeTianShen —— 那是「择日」用的每日宜忌，
+ *  与命局无关，界面不显示、AI 提示词也不用(compactShenSha 只取 items/吉/凶)，属于纯浪费的计算。 */
+function buildShenShaResult(pillars: string[]): NonAiChart['shenSha'] {
   const items = computeShenSha(pillars);
   const unique = (list: ShenShaItem[]) => [...new Set(list.map((item) => item.name))];
   return {
     auspicious: unique(items.filter((item) => item.category === '吉')),
     inauspicious: unique(items.filter((item) => item.category === '凶')),
     items,
-    daySha: lunar.getDaySha(),
-    dayTianShen: lunar.getDayTianShen(),
-    timeTianShen: lunar.getTimeTianShen(),
-    ruleVersion: 'classic-v1 + lunar-javascript-1.7.7-day-gods',
-    source: 'classic stem-branch shensha classic-v1 + lunar-javascript day gods only',
+    ruleVersion: SHEN_SHA_RULE_VERSION,
+    source: 'classic stem-branch shensha (local rule engine)',
   };
 }
 
@@ -234,7 +253,7 @@ function buildShenShaResult(lunar: DayGodsSource, pillars: string[]): NonAiChart
 
 /* ---------------- 袁天罡称骨(骨重表 · ruleVersion chenggu-v1，以通行古本为准) ---------------- */
 // 年柱骨重(按六十甲子序数，单位:两)。称骨按农历年/月/日/时干支。
-const CHENGGU_YEAR = [1.2,0.9,0.6,0.7,1.2,0.5,0.9,0.8,0.7,0.8,1.5,0.9,1.6,0.8,0.8,1.9,1.2,0.6,0.8,0.7,0.5,1.5,0.6,1.6,1.5,0.7,0.9,1.2,1.0,0.7,1.5,0.6,0.5,1.4,1.4,0.9,0.7,0.7,0.9,0.6,0.8,0.7,0.5,0.5,1.4,0.5,0.9,1.7,0.5,0.7,1.2,0.8,0.8,0.6,1.9,0.6,0.8,1.6,1.0,0.6];
+const CHENGGU_YEAR = [1.2,0.9,0.6,0.7,1.2,0.5,0.9,0.8,0.7,0.8,1.5,0.9,1.6,0.8,0.8,1.9,1.2,0.6,0.8,0.7,0.5,1.5,0.6,1.6,1.5,0.7,0.9,1.2,1,0.7,1.5,0.6,0.5,1.4,1.4,0.9,0.7,0.7,0.9,1.2,0.8,0.7,1.3,0.5,1.4,0.5,0.9,1.7,0.5,0.7,1.2,0.8,0.8,0.6,1.9,0.6,0.8,1.6,1,0.6];
 const CHENGGU_MONTH = [0.6,0.7,1.8,0.9,0.5,1.6,0.9,1.5,1.8,0.8,0.9,0.5]; // 农历正月..腊月(闰月同本月)
 const CHENGGU_DAY = [0.5,1.0,0.8,1.5,1.6,1.5,0.8,1.6,0.8,1.6,0.9,1.7,0.8,1.7,1.0,0.8,0.9,1.8,0.5,1.5,1.0,0.9,0.8,0.9,1.5,1.8,0.7,0.8,1.6,0.6]; // 初一..三十
 const CHENGGU_HOUR = [1.6,0.6,0.7,1.0,0.9,1.6,1.0,0.8,0.8,0.9,0.6,0.6]; // 子..亥
@@ -270,10 +289,41 @@ export function calculateNonAi(
   if (pillars.some((p) => !valid.test(p))) throw new Error('四柱必须填写有效的天干地支');
   // 干支合法性即“阴阳同气”：天干序与地支序奇偶一致。
   if (pillars.some((p) => (indexOfStem(p[0]) & 1) !== (indexOfBranch(p[1]) & 1))) throw new Error('每柱天干和地支必须阴阳相同');
-  // 由四柱反查唯一(年、月匹配)的公历候选；sect=2 表示晚子时日柱按子正处理。
-  const candidate = Solar.fromBaZi(input.yearPillar, input.monthPillar, input.dayPillar, input.hourPillar, 2, 1900)
-    .find((solar) => solar.getYear() === input.birthYear && solar.getMonth() === input.birthMonth);
-  if (!candidate) throw new Error('未找到 ' + input.birthYear + ' 年 ' + input.birthMonth + ' 月与四柱匹配的日期');
+  // 由「公历年月 + 四柱」定位具体出生日期(需要它才能取农历/节气相关事实)。
+  // 不能直接用 Solar.fromBaZi(...) 的结果：它只返回 1900 年以来的**第一个**匹配日，
+  // 且要求年柱与公历年份同侧立春 —— 立春前(约 1/4~2/3)出生的人年柱属上一干支年，
+  // 旧实现在那种情况下永远找不到日期，排盘直接抛错(实测：1~3 月内每天必现)。
+  // 改为在用户填写的那个月里逐日扫描、四柱全等才算命中：结果确定、无歧义、不依赖起点年。
+  // 定位方法：在该月逐日取正午，比对「年/月/日」三柱 —— 三柱全等即可唯一确定出生日；
+  // 时柱不能参与比对(它由日干五鼠遁推出，换一天就不同)，改为事后校验其地支与用户填的时支一致。
+  const noonOf = (solar: ReturnType<typeof Solar.fromYmdHms>) => solar.getLunar().getEightChar();
+  const sameThreePillars = (eight: ReturnType<typeof noonOf>) =>
+    eight.getYear() === input.yearPillar && eight.getMonth() === input.monthPillar && eight.getDay() === input.dayPillar;
+  const scanRange = (fromJD: number, toJD: number) => {
+    for (let jd = fromJD; jd <= toJD; jd += 1) {
+      const solar = Solar.fromJulianDay(jd);
+      const atNoon = Solar.fromYmdHms(solar.getYear(), solar.getMonth(), solar.getDay(), 12, 30, 0);
+      if (sameThreePillars(noonOf(atNoon))) return atNoon;
+    }
+    return undefined;
+  };
+  const firstOf = Solar.fromYmdHms(input.birthYear, input.birthMonth, 1, 12, 30, 0);
+  const lastDay = new Date(input.birthYear, input.birthMonth, 0).getDate();
+  let candidate = scanRange(firstOf.getJulianDay(), firstOf.getJulianDay() + lastDay - 1);
+  if (!candidate) {
+    // 立春/交节会让「干支年月」与「公历月」错位：向两侧各扩 20 天再找一次。
+    candidate = scanRange(firstOf.getJulianDay() - 20, firstOf.getJulianDay() + lastDay + 19);
+  }
+  if (!candidate) throw new Error('该月找不到与这三部命盘对应的日期，请核对四柱或出生日期');
+  // 时柱校验：日干定后，时干按五鼠遁唯一确定 —— 甲己日起甲子时，逐支 +1。
+  {
+    const dayStem = candidate.getLunar().getEightChar().getDayGan();
+    const startStem = mod(indexOfStem(dayStem) % 5 * 2, 10); // 甲己→甲(0) 乙庚→丙(2) 丙辛→戊(4) 丁壬→庚(6) 戊癸→壬(8)
+    const expected = STEMS[mod(startStem + indexOfBranch(input.hourPillar[1]), 10)] + input.hourPillar[1];
+    if (expected !== input.hourPillar) {
+      throw new Error('时柱与出生日不合：' + dayStem + ' 日的' + input.hourPillar[1] + '时应为「' + expected + '」，请核对四柱');
+    }
+  }
   const lunar = candidate.getLunar();
   const eight = lunar.getEightChar();
   const day = eight.getDayGan();
@@ -292,14 +342,14 @@ export function calculateNonAi(
   const relationships = natalFacts(pillars);
   const relationshipDetails = pairHits(natalItems);
 
-  // 藏干 + 藏干十神(root/middle/residual)，顺序与 lunar-javascript 一致。
-  const hiddenStems = [asList(eight.getYearHideGan()), asList(eight.getMonthHideGan()), asList(eight.getDayHideGan()), asList(eight.getTimeHideGan())];
-  const hiddenGods = [asList(eight.getYearShiShenZhi()), asList(eight.getMonthShiShenZhi()), asList(eight.getDayShiShenZhi()), asList(eight.getTimeShiShenZhi())];
+  // 藏干/纳音/十二长生：改为本地查表(纯代数，不依赖历法)，逐支扫描与 lunar-javascript 比对一致。
+  // 十神一律走 tenGodOf(纯代数)：库里的 shiShenZhi 在与日主同干时标「比肩」，而我们的 tenGodOf 旧版会标「日主」——已修正口径。
+  const hiddenStems = pillars.map((pillar) => HIDDEN_STEMS[pillar[1]] ?? []);
   const tenGodDetails = {
-    heavenly: [eight.getYearShiShenGan(), eight.getMonthShiShenGan(), eight.getDayShiShenGan(), eight.getTimeShiShenGan()],
-    hidden: hiddenStems.map((stemsInBranch, pi) => stemsInBranch.map((stem, si) => ({
+    heavenly: pillars.map((pillar, pi) => tenGodOf(day, pillar[0], pi === 2)),
+    hidden: hiddenStems.map((stemsInBranch) => stemsInBranch.map((stem, si) => ({
       stem,
-      tenGod: hiddenGods[pi][si] ?? tenGodOf(day, stem),
+      tenGod: tenGodOf(day, stem),
       position: (si === 0 ? 'root' : si === 1 ? 'middle' : 'residual') as 'root' | 'middle' | 'residual',
     }))),
   };
@@ -348,8 +398,8 @@ export function calculateNonAi(
     elements: counts,
     elementRatio,
     hiddenStems,
-    tenGods: [eight.getYearShiShenGan(), eight.getMonthShiShenGan(), eight.getDayShiShenGan(), eight.getTimeShiShenGan()],
-    naYin: [eight.getYearNaYin(), eight.getMonthNaYin(), eight.getDayNaYin(), eight.getTimeNaYin()],
+    tenGods: tenGodDetails.heavenly,
+    naYin: pillars.map(naYinOf),
     dayMaster: day,
 
     currentTime: now,
@@ -361,9 +411,10 @@ export function calculateNonAi(
     greatFortunes,
     annualFortunes,
     monthlyFortunes,
-    twelveLongevity: [eight.getYearDiShi(), eight.getMonthDiShi(), eight.getDayDiShi(), eight.getTimeDiShi()],
-    shenSha: buildShenShaResult(lunar, pillars),
-    shenShaRuleVersion: 'classic-v1 + lunar-javascript-1.7.7-day-gods',
+    // 十二长生：日主对四支(本地查表)，与库 getXXxDiShi 同口径
+    twelveLongevity: pillars.map((pillar) => longevityOf(day, pillar[1])),
+    shenSha: buildShenShaResult(pillars),
+    shenShaRuleVersion: SHEN_SHA_RULE_VERSION,
     chenggu,
   };
 }

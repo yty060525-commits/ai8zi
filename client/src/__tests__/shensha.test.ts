@@ -36,6 +36,7 @@ describe('classic shensha rules (classic-v1)', () => {
     expect(result.shenSha.items!.length).toBeGreaterThan(0);
     expect(result.shenSha.auspicious).toEqual(expect.any(Array));
     expect(result.shenSha.inauspicious).toEqual(expect.any(Array));
-    expect(result.shenSha.ruleVersion).toContain('classic-v1');
+    // v2：神煞全部本地计算，不再附带历法库的择日神煞(界面与提示词都不用它)
+    expect(result.shenSha.ruleVersion).toContain('classic-v2');
   });
 });

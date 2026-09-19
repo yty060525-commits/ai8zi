@@ -158,7 +158,8 @@ export function buildTaskPayload(record, task, tone = DEFAULT_TONE) {
 
 export function cacheKey(record, task, model, tone = DEFAULT_TONE) {
   const toneBucket = Math.round(clampTone(tone) / 5) * 5; // 每 5 度一个缓存档，避免同一命盘缓存爆炸
-  return ['v7', model, record.gender, record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar, task.type, task.year ?? 0, task.month ?? 0, record.birthYear, toneBucket].join('|');
+  // v8：本命事实里的藏干十神口径修正(与日主同干的藏干应为「比肩」而非「日主」)，旧缓存据此重算一次。
+  return ['v8', model, record.gender, record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar, task.type, task.year ?? 0, task.month ?? 0, record.birthYear, toneBucket].join('|');
 }
 
 /* ---------- 失败原因分类：把上游错误翻译成用户能看懂的原因 ---------- */

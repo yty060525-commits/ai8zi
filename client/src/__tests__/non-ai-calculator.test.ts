@@ -28,7 +28,8 @@ describe('non-AI calculator', () => {
   });
 
   it('does not silently use a candidate from a different birth year', () => {
-    expect(() => calculateNonAi({ birthYear: 1900, birthMonth: 1, yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午' }, 'male')).toThrow(/未找到/);
+    // 四柱与该月对不上必须报错，绝不能悄悄借用别的年份的候选日
+    expect(() => calculateNonAi({ birthYear: 1900, birthMonth: 1, yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午' }, 'male')).toThrow(/找不到|不合/);
   });
 
   it('never calls the network', () => {
@@ -75,7 +76,10 @@ describe('non-AI calculator', () => {
     expect(result.annualFortunes[0].relationshipDetails).toEqual(expect.any(Array));
     expect(result.monthlyFortunes[0].relationshipDetails).toEqual(expect.any(Array));
     expect(result.shenSha.ruleVersion).toBeTruthy();
-    expect(result.shenSha).toEqual(expect.objectContaining({ daySha: expect.any(String), dayTianShen: expect.any(String), source: expect.stringContaining('only') }));
+    // 择日神煞(daySha/dayTianShen/timeTianShen)已移除：界面不显示、提示词不用，属纯浪费计算
+    expect(result.shenSha).not.toHaveProperty('daySha');
+    expect(result.shenSha).not.toHaveProperty('dayTianShen');
+    expect(result.shenSha.source).toContain('local');
     expect(result.relationshipDetails.filter((item) => item.type === 'sanHe')).toHaveLength(1);
     expect(result.annualFortunes[0].relationshipDetails).toEqual(expect.arrayContaining([
       expect.objectContaining({ sourceLayer: 'annual', status: expect.stringMatching(/complete|half-combination/) }),

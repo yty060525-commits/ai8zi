@@ -4,6 +4,7 @@ declare module 'lunar-javascript' {
     getMonth(): number;
     getDay(): number;
     toYmd(): string;
+    getJulianDay(): number;
     getLunar(): Lunar;
   }
   interface Lunar {
@@ -34,6 +35,8 @@ declare module 'lunar-javascript' {
   interface DaYun { getGanZhi(): string; getStartYear(): number; getEndYear(): number; }
   export const Solar: {
     fromYmdHms(year: number, month: number, day: number, hour: number, minute: number, second: number): Solar;
+    fromYmd(year: number, month: number, day: number): Solar;
+    fromJulianDay(julianDay: number): Solar;
     fromBaZi(year: string, month: string, day: string, hour: string, sect: number, baseYear: number): Solar[];
   };
 }
