@@ -22,7 +22,7 @@ describe('取格判例', () => {
     console.log('JIANLU', r.name, '|', r.basis);
     // 寅藏甲丙戊：甲比肩不取，戊(余气偏财)透于年干 → 别取偏财
     expect(r.name).toBe('建禄用偏财');
-    expect(/临官之地\(建禄\)/.test(r.basis)).toBe(true);
+    expect(/月建逢禄堂\(建禄\)/.test(r.basis)).toBe(true);
   });
   it('建禄无财官可倚 → 直以建禄论', () => {
     const r = derivePattern(['壬子','壬寅','甲子','乙亥'], '甲');
@@ -41,7 +41,7 @@ describe('取格判例', () => {
     const r = derivePattern(['壬子','丙午','丙寅','己亥'], '丙');
     console.log('YANGREN', r.name, '|', r.basis);
     expect(r.name).toContain('阳刃');
-    expect(/帝旺之地\(阳刃\)/.test(r.basis)).toBe(true);
+    expect(/禄前一位为阳刃/.test(r.basis)).toBe(true);
   });
   it('七杀格且失令：甲生申月透庚', () => {
     const p = ['戊申','庚申','甲辰','己巳'];
@@ -59,7 +59,7 @@ describe('取格判例', () => {
   it('basis 里的禄刃措辞必须与月支状态一致', () => {
     for (const p of [P, ['戊子','甲寅','甲子','戊辰'], ['壬子','丙午','丙寅','己亥'], ['戊申','庚申','甲辰','己巳']]) {
       const r = derivePattern(p, p[2][0]);
-      const claimsLu = /临官之地\(建禄\)/.test(r.basis), claimsRen = /帝旺之地\(阳刃\)/.test(r.basis);
+      const claimsLu = /月建逢禄堂\(建禄\)/.test(r.basis), claimsRen = /禄前一位为阳刃/.test(r.basis);
       expect(claimsLu && claimsRen).toBe(false);
       if (/^建禄/.test(r.name)) expect(claimsLu).toBe(true);
       if (/^阳刃/.test(r.name)) expect(claimsRen).toBe(true);

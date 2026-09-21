@@ -101,6 +101,25 @@ function tenGodOf(dayStem: string, otherStem: string, isDayPillar = false): stri
  * 反对「月令占 X%」式伪量化，故此处权重只是定性层级(本气>中气>余气、月支最重)的
  * 可复现实现，并在 detail 中逐项公开，任何一档都可回溯核对。
  * ------------------------------------------------------------------------------ */
+/* 禄与刃按传统取法直接列表，**不从十二长生逆行表推导**。
+ * 原因：十二长生有「阳顺阴逆」两套排法(乙长生在午、逆行临官在卯)，但论命取禄一律
+ * 用「阴阳同宫」的那一套 —— 乙禄在寅(不是卯)、丁己禄在巳、辛禄在申、癸禄在亥。
+ * 若照逆行表找「临官」，会把乙生寅月误判成「帝旺／阳刃」、把丁生午月误判成「建禄」。
+ * 《子平真诠》论刃：「阳刃者，劫我正财之神…禄前一位，惟五阳有之」—— 阴干无刃。 */
+/** 十干禄支(阴阳同宫)：甲寅 乙寅 丙巳 丁巳 戊巳 己巳 庚申 辛申 壬亥 癸亥。 */
+export const STEM_LU: Record<string, string> = { 甲:'寅', 乙:'寅', 丙:'巳', 丁:'巳', 戊:'巳', 己:'巳', 庚:'申', 辛:'申', 壬:'亥', 癸:'亥' };
+/** 阳刃＝禄前一位，只有阳干有；阴干古法无刃。 */
+export const YANG_REN: Record<string, string> = { 甲:'卯', 丙:'午', 戊:'午', 庚:'酉', 壬:'子' };
+
+/** 该月令是日主的「建禄(比劫当权)」还是「阳刃」，或都不是。 */
+export function luRenOf(dayStem: string, monthBranch: string): '建禄' | '阳刃' | null {
+  if (YANG_REN[dayStem] === monthBranch) return '阳刃';
+  if (STEM_LU[dayStem] === monthBranch) return '建禄';
+  // 阴干在禄支的对冲位不作刃论；月支本气与日主同类(如乙见寅中甲)亦以建禄归之。
+  const main = (HIDDEN_STEMS[monthBranch] ?? [])[0] ?? '';
+  if (main && ELEMENTS[indexOfStem(main) >> 1] === ELEMENTS[indexOfStem(dayStem) >> 1]) return '建禄';
+  return null;
+}
 /** 六冲对(小序在前)：子午、丑未、寅申、卯酉、辰戌、巳亥 —— 冲动月支即动摇提纲。 */
 const CHONG_PAIRS = [[0, 6], [1, 7], [2, 8], [3, 9], [4, 10], [5, 11]] as const;
 const isChongPair = (a: number, b: number) => CHONG_PAIRS.some(([x, y]) => (x === a && y === b) || (x === b && y === a));
@@ -170,10 +189,10 @@ export function scoreStrength(pillars: string[], dayStem: string): StrengthScore
   const index = Math.round((net / total) * 100);
   const monthStems = HIDDEN_STEMS[pillars[1]?.[1] ?? ''] ?? [];
   const monthHasSupport = monthStems.some((s) => (TEN_GOD_SIDE[tenGodOf(dayStem, s)] ?? 'drain') === 'support');
-  // 「得令」按传统口径＝日主坐月支为**临官(建禄)或帝旺(羊刃)**，即月支本身属日主五行。
-  // 不能用「月支本气是印比」：巳月藏丙戊庚，庚之偏印也会把甲木判成得令，方向就错了。
-  const monthStage = longevityOf(dayStem, pillars[1]?.[1] ?? '');
-  const inSeasonStrong = monthStage === '临官' || monthStage === '帝旺';
+  // 「得令」查 STEM_LU / YANG_REN(传统取法)，不用十二长生逆行表推的临官/帝旺：
+  // 乙生寅、丁生午这类阴干盘用逆行表会得出相反的结论。
+  const luRenMonth = luRenOf(dayStem, pillars[1]?.[1] ?? '');
+  const inSeasonStrong = luRenMonth !== null;
   const mb = indexOfBranch(pillars[1]?.[1] ?? '');
   const clashedBy = mb < 0 ? [] : [0, 2, 3].filter((k) => isChongPair(mb, indexOfBranch(pillars[k]?.[1] ?? '')));
 
@@ -206,16 +225,17 @@ export function derivePattern(pillars: string[], dayStem: string): PatternInfo {
   // ① 月支对日主的十二长生才是「月令」正身：临官＝建禄、帝旺＝阳刃。
   //    不能拿月干的十神当"月令本气"——癸巳月的癸是甲木正印，旧代码据此参与取格，
   //    把甲日主生巳月误判成建禄格(巳中本气丁火实为伤官，应为伤官格)。
+  // 建禄/阳刃一律查 STEM_LU / YANG_REN(传统取法)，不用十二长生逆行表推的「临官/帝旺」——
+  // 那套排法会把乙生寅月说成帝旺、把丁生午月说成临官，与古籍命例相反。
   const monthStage = longevityOf(dayStem, monthBranch);
-  const jianLu = monthStage === '临官';
-  // 阳刃仅阳干有之(阴干古法无刃)：乙生寅虽处帝旺，仍以建禄格论。
-  const yangRen = monthStage === '帝旺' && YANG.includes(dayStem);
+  const luRen = luRenOf(dayStem, monthBranch);
+  const jianLu = luRen === '建禄';
+  const yangRen = luRen === '阳刃';
   // 措辞按实际状态生成：巳对甲是「病」地，绝不能写成「临官之地(建禄)」——
   // 那正是把用户盘说成「建筑禄格」的来源。
   // 阴干无刃：长生表把「乙生寅」这类标成帝旺，但古法不作阳刃论，措辞随 tag 走。
-  const renOrLu = yangRen ? '帝旺之地(阳刃)' : jianLu ? '临官之地(建禄)' : monthStage + '之地';
-  const isBiJieMonth = isBiJie(tenGodOf(dayStem, stems[0] ?? ''));
-  const luRenHead = '月令' + monthGz + '为日主' + dayStem + (isBiJieMonth && !yangRen && monthStage === '帝旺' ? '临官之比劫地(建禄)' : renOrLu);
+  const luText = yangRen ? '禄前一位为阳刃(惟五阳有之)' : jianLu ? '月建逢禄堂(建禄)' : monthStage + '之地(非禄刃)';
+  const luRenHead = '月令' + monthGz + '于日主' + dayStem + '：' + luText;
   const favorOf = (tg: string) => (tg === '正官' ? '印绶护之、忌伤官见官'
     : tg === '七杀' ? '食伤制之、忌财党杀'
     : tg.includes('财') ? '官星护财、忌比劫分夺'
@@ -226,7 +246,7 @@ export function derivePattern(pillars: string[], dayStem: string): PatternInfo {
   // 注意：判据是「月支本气与日主同类」，不是「月支处于临官/帝旺」。二者通常同义，
   // 但阴干逆行会让它们分叉(乙生寅月：寅本气甲为乙之劫财，而长生表把寅说成乙之帝旺)，
   // 若只看十二长生就会把「寅中透出的丙火伤官」误当作建禄别取。
-  if (isBiJie(tenGodOf(dayStem, stems[0] ?? ''))) {
+  if (jianLu || yangRen) {
     const mainGod = tenGodOf(dayStem, stems[0] ?? '');
     if (isBiJie(mainGod)) {
       const tag = yangRen ? '阳刃' : '建禄';
