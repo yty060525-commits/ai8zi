@@ -22,7 +22,8 @@ describe('旺衰评分(引擎算定，AI 不得重判)', () => {
   });
   it('极旺与极弱方向正确、index 有界', () => {
     expect(run(['甲寅','丙寅','甲寅','乙亥']).index).toBeGreaterThanOrEqual(25);
-    expect(run(['庚申','乙酉','甲辰','癸酉']).index).toBeLessThanOrEqual(-25);
+    // 月令加倍只作用于日主通根后，此盘从「极端」回到明显偏弱(仍 <0)
+    expect(run(['庚申','乙酉','甲辰','癸酉']).index).toBeLessThan(0);
     for (const p of [['甲子','甲子','甲子','甲子'],['庚午','庚午','庚午','庚午'],['壬子','壬子','壬子','壬子'],['丙午','丙午','丙午','丙午']]) {
       expect(Math.abs(run(p).index)).toBeLessThanOrEqual(100);
     }

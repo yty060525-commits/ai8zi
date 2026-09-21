@@ -273,7 +273,7 @@ fn now_text() -> String {
 pub(crate) fn cache_key(record: &BaziRecord, task: &AiTaskInput, model: &str) -> String {
     // v6: 本命事实新增引擎算定的 patternFacts/strengthScore，提示词改为「沿用不重判」；
     //      旧缓存是模型自行判断的产物，口径不同，必须整体作废重算一次。
-    format!("v6|{model}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", record.gender,
+    format!("v7|{model}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", record.gender,
         record.year_pillar, record.month_pillar, record.day_pillar, record.hour_pillar,
         task.task_type, task.year.unwrap_or(0), task.month.unwrap_or(0), record.birth_year, tone_bucket(task.tone))
 }
@@ -460,7 +460,7 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
             let mut content = format!("你是资深子平命理师。根据【本命结论】的喜用五行与下方【资料库】中对应五行的后天调整/职业知识，输出该命局的【后天调整】与【事业职业适配】建议(长文，尽量贴合资料，不要另造体系)。禁止输出/* */注释、HTML注释或代码块标记，只给最终正文。JSON schema：{{\"explanation\":长文}}，explanation 必须依次各出现一次【后天调整】【事业适配】【健康注意】(不得合并、省略或改名)，每段至少 1 条；每个主题内部再分点：每条单独一行、行首 1. 2. 3. 编号，一句话一条，不要整段连排。\n\n# 本命结论\n{}\n\n# 资料库(喜用{})\n{}", baseline_text, guide.get("element").and_then(|e| e.as_str()).unwrap_or(""), guide_text);
             content = format!("{content}\n\n# 语气要求\n{}", tone_instruction(clamp_tone(task.tone)));
             return Ok(serde_json::json!({
-                "model": "deepseek-flash", "promptVersion": "ctx-v7", "thinking": true, "effort": "high",
+                "model": "deepseek-flash", "promptVersion": "ctx-v8", "thinking": true, "effort": "high",
                 "taskId": task.task_id, "type": task.task_type, "year": task.year, "month": task.month,
                 "nonAiResult": body,
                 "messages": [{ "role": "user", "content": content }]
@@ -539,7 +539,7 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
         let content = format!("{}\n# 本命结论(已定，必须沿用，不得重算)\n{}\n\n# 本命事实数据(JSON，只依据此数据)\n{}{}\n\n# 语气要求\n{}\n\n# 各时段分析要点(JSON)\n{}\n\n# 当前分析目标\n全盘总结：未来十年中值得关注的节点",
             OVERVIEW_PROMPT, baseline_text, natal_text, output_rules_ov, tone_instruction(clamp_tone(task.tone)), findings_text);
         return Ok(serde_json::json!({
-            "model": "deepseek-flash", "promptVersion": "ctx-v7", "thinking": true, "effort": "high",
+            "model": "deepseek-flash", "promptVersion": "ctx-v8", "thinking": true, "effort": "high",
             "taskId": task.task_id, "type": task.task_type, "year": task.year, "month": task.month,
             "nonAiResult": { "natal": natal, "findings": task.findings.clone().unwrap_or(Value::Null) },
             "messages": [{ "role": "user", "content": content }]
@@ -585,7 +585,7 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
     };
 
     Ok(serde_json::json!({
-        "model": "deepseek-flash", "promptVersion": "ctx-v7", "thinking": true, "effort": if task.task_type == "baseline" { "high" } else { "low" },
+        "model": "deepseek-flash", "promptVersion": "ctx-v8", "thinking": true, "effort": if task.task_type == "baseline" { "high" } else { "low" },
         "taskId": task.task_id, "type": task.task_type, "year": task.year, "month": task.month,
         "nonAiResult": context,
         "messages": [{ "role": "user", "content": content }]

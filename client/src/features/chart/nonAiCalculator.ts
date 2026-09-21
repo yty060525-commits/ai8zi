@@ -151,7 +151,10 @@ export function scoreStrength(pillars: string[], dayStem: string): StrengthScore
     (HIDDEN_STEMS[gz[1]] ?? []).forEach((stem, si) => {
       const tg = tenGodOf(dayStem, stem);
       const side = TEN_GOD_SIDE[tg] ?? 'drain';
-      let w = (ROOT_WEIGHT[si] ?? 3) * (isMonth ? 2 : 1);
+      // 月令加倍只作用于「日主自己的通根」：提纲所司是日主之气盛衰的总纲，
+      // 不是把该支里财官食伤也一律翻倍——否则巳中庚金(七杀)被算成 20 分，
+      // 任何甲日主生巳月都会被误判成「建禄格」(本气丁火实为伤官)。
+      let w = (ROOT_WEIGHT[si] ?? 3) * ((isMonth && ELEMENTS[indexOfStem(stem) >> 1] === dayElement) ? 2 : 1);
       let note = '';
       if (ELEMENTS[indexOfStem(stem) >> 1] === dayElement && (tg === '比肩' || tg === '劫财')) {
         if (rootlessHere) { w = 0; note = '日主坐' + dayStage + '，此支不为根'; }
@@ -167,19 +170,18 @@ export function scoreStrength(pillars: string[], dayStem: string): StrengthScore
   const index = Math.round((net / total) * 100);
   const monthStems = HIDDEN_STEMS[pillars[1]?.[1] ?? ''] ?? [];
   const monthHasSupport = monthStems.some((s) => (TEN_GOD_SIDE[tenGodOf(dayStem, s)] ?? 'drain') === 'support');
-  // 「得令」从严：只看月支**本气**。中余气带印比不算当令(否则几乎人人得令，失去区分度)。
-  const monthRootIsSupport = monthStems.length > 0 && (TEN_GOD_SIDE[tenGodOf(dayStem, monthStems[0])] ?? 'drain') === 'support';
+  // 「得令」按传统口径＝日主坐月支为**临官(建禄)或帝旺(羊刃)**，即月支本身属日主五行。
+  // 不能用「月支本气是印比」：巳月藏丙戊庚，庚之偏印也会把甲木判成得令，方向就错了。
+  const monthStage = longevityOf(dayStem, pillars[1]?.[1] ?? '');
+  const inSeasonStrong = monthStage === '临官' || monthStage === '帝旺';
   const mb = indexOfBranch(pillars[1]?.[1] ?? '');
   const clashedBy = mb < 0 ? [] : [0, 2, 3].filter((k) => isChongPair(mb, indexOfBranch(pillars[k]?.[1] ?? '')));
-  const monthStage = longevityOf(dayStem, pillars[1]?.[1] ?? '');
-  const monthRooted = !(monthStage === '死' || monthStage === '绝');
-  const inSeason = monthRootIsSupport && clashedBy.length === 0 && monthRooted;
+
+  const inSeason = inSeasonStrong && clashedBy.length === 0;
   if (monthHasSupport && clashedBy.length > 0) {
     detail.push({ pillar: '月令', stem: pillars[1][1], tenGod: '冲', side: 'drain', weight: 0, note: '月支被' + clashedBy.map((k) => names[k] + '支').join('、') + '冲开，当令之力受损(破令)' });
   }
-  if (monthRootIsSupport && !monthRooted) {
-    detail.push({ pillar: '月令', stem: pillars[1][1], tenGod: '绝', side: 'drain', weight: 0, note: '日主于月支作' + monthStage + '，虽本气同党而气不接(不得令)' });
-  }
+
   const label = index >= 25 ? '身强' : index <= -25 ? '身弱' : index > 0 ? '中和偏旺' : '中和偏弱';
   return { support: Math.round(support * 10) / 10, drain: Math.round(drain * 10) / 10, net: Math.round(net * 10) / 10, index, label, inSeason, monthHasSupport, detail };
 }
@@ -191,35 +193,83 @@ export interface PatternInfo {
 /** 取格(《子平真诠》通行法)：月令为主、透干优先、本气定名；建禄/阳刃别取。 */
 export function derivePattern(pillars: string[], dayStem: string): PatternInfo {
   const monthGz = pillars[1] ?? '';
-  const stems = HIDDEN_STEMS[monthGz[1] ?? ''] ?? [];
+  const monthBranch = monthGz[1] ?? '';
+  const stems = HIDDEN_STEMS[monthBranch] ?? [];
   const isBiJie = (t: string) => t === '比肩' || t === '劫财';
+  const layerName = (k: number) => (k === 0 ? '本气' : k === 1 ? '中气' : '余气');
+  // 透出的天干：年/月/时三干(日干恒为「日主」，不参与取格)
   const outer: Array<{ stem: string; tenGod: string; where: string }> = [
     { stem: pillars[0]?.[0] ?? '', where: '年干' },
     { stem: pillars[1]?.[0] ?? '', where: '月干' },
     { stem: pillars[3]?.[0] ?? '', where: '时干' },
   ].map((o) => ({ ...o, tenGod: o.stem ? tenGodOf(dayStem, o.stem) : '' })).filter((o) => o.tenGod && !isBiJie(o.tenGod));
-  const pickBy = (tg: string) => outer.find((o) => o.tenGod === tg);
-  const monthMainTenGod = stems.length ? tenGodOf(dayStem, stems[0]) : '';
-  if (isBiJie(monthMainTenGod)) {
-    const yangRen = YANG.includes(dayStem) && monthMainTenGod === '劫财';
-    const head = '月令' + monthGz + (yangRen ? '为日主帝旺之地(阳刃)' : '为日主临官之地(建禄)');
-    const ya = pickBy('正官') ?? pickBy('七杀');
-    if (ya) return { name: (yangRen ? '阳刃用' : '建禄用') + ya.tenGod, tenGod: ya.tenGod, basis: head + '，比劫当令不以为格；' + ya.where + ya.stem + '透而出' + ya.tenGod + '，取为格(喜' + (ya.tenGod === '正官' ? '印绶护之、忌伤官见官' : '食伤制之、忌财党杀') + ')' };
-    const cs = pickBy('正财') ?? pickBy('偏财') ?? pickBy('食神') ?? pickBy('伤官');
-    if (cs) return { name: (yangRen ? '阳刃' : '建禄') + cs.tenGod, tenGod: cs.tenGod, basis: head + '，别柱无官杀可用；' + cs.where + cs.stem + '透出' + cs.tenGod + '，取为格(喜' + (cs.tenGod.includes('财') ? '官星护财、忌比劫分夺' : '财星流通、忌枭印夺食') + ')' };
-    return { name: yangRen ? '阳刃格' : '建禄格', tenGod: '比劫', basis: head + '，四柱更无官杀财食可取，直以' + (yangRen ? '阳刃' : '建禄') + '论，喜官杀制身' };
+  // ① 月支对日主的十二长生才是「月令」正身：临官＝建禄、帝旺＝阳刃。
+  //    不能拿月干的十神当"月令本气"——癸巳月的癸是甲木正印，旧代码据此参与取格，
+  //    把甲日主生巳月误判成建禄格(巳中本气丁火实为伤官，应为伤官格)。
+  const monthStage = longevityOf(dayStem, monthBranch);
+  const jianLu = monthStage === '临官';
+  // 阳刃仅阳干有之(阴干古法无刃)：乙生寅虽处帝旺，仍以建禄格论。
+  const yangRen = monthStage === '帝旺' && YANG.includes(dayStem);
+  // 措辞按实际状态生成：巳对甲是「病」地，绝不能写成「临官之地(建禄)」——
+  // 那正是把用户盘说成「建筑禄格」的来源。
+  // 阴干无刃：长生表把「乙生寅」这类标成帝旺，但古法不作阳刃论，措辞随 tag 走。
+  const renOrLu = yangRen ? '帝旺之地(阳刃)' : jianLu ? '临官之地(建禄)' : monthStage + '之地';
+  const isBiJieMonth = isBiJie(tenGodOf(dayStem, stems[0] ?? ''));
+  const luRenHead = '月令' + monthGz + '为日主' + dayStem + (isBiJieMonth && !yangRen && monthStage === '帝旺' ? '临官之比劫地(建禄)' : renOrLu);
+  const favorOf = (tg: string) => (tg === '正官' ? '印绶护之、忌伤官见官'
+    : tg === '七杀' ? '食伤制之、忌财党杀'
+    : tg.includes('财') ? '官星护财、忌比劫分夺'
+    : '财星流通、忌枭印夺食');
+  // ①b 月令本气即比劫(建禄/阳刃)：《子平真诠》「建禄帮身，另求用神」——
+  //     先按月令所藏中余气透干者别取，其次取他柱财官，全无才直以建禄/阳刃论。
+  //     阴干古法无刃(乙生寅虽处帝旺仍以建禄论)，故 tag 只在阳干帝旺时作阳刃。
+  // 注意：判据是「月支本气与日主同类」，不是「月支处于临官/帝旺」。二者通常同义，
+  // 但阴干逆行会让它们分叉(乙生寅月：寅本气甲为乙之劫财，而长生表把寅说成乙之帝旺)，
+  // 若只看十二长生就会把「寅中透出的丙火伤官」误当作建禄别取。
+  if (isBiJie(tenGodOf(dayStem, stems[0] ?? ''))) {
+    const mainGod = tenGodOf(dayStem, stems[0] ?? '');
+    if (isBiJie(mainGod)) {
+      const tag = yangRen ? '阳刃' : '建禄';
+      const lead = luRenHead + '(本气' + (stems[0] ?? '') + '即' + mainGod + ')';
+      for (let si = 1; si < stems.length; si++) {
+        const t2 = tenGodOf(dayStem, stems[si]);
+        if (isBiJie(t2)) continue;
+        const hit2 = outer.find((o) => o.stem === stems[si]);
+        if (hit2) return { name: tag + '用' + t2, tenGod: t2, basis: lead + '，另见所藏' + stems[si] + '(' + layerName(si) + ')' + t2 + '于' + hit2.where + '透出，别取为格(喜' + favorOf(t2) + ')' };
+      }
+      const ya = outer.find((o) => o.tenGod === '正官' || o.tenGod === '七杀');
+      const cs = ['正财', '偏财', '食神', '伤官'].map((x) => outer.find((o) => o.tenGod === x)).find(Boolean);
+      const use = ya ?? cs;
+      if (use) return { name: tag + '用' + use.tenGod, tenGod: use.tenGod, basis: lead + '，月令所藏皆不透；' + use.where + use.stem + '透出' + use.tenGod + '，别取为格(喜' + favorOf(use.tenGod) + ')' };
+      return { name: tag + '格', tenGod: mainGod, basis: lead + '，四柱更无官杀财食可取，直以' + tag + '论，喜官杀制身、忌再逢比劫' };
+    }
   }
+  // ② 常规取格：月令所藏之神透出天干者，按 本气→中气→余气 次序取(《子平真诠》)。
   for (let si = 0; si < stems.length; si++) {
     const tg = tenGodOf(dayStem, stems[si]);
     if (isBiJie(tg)) continue;
     const hit = outer.find((o) => o.stem === stems[si]);
-    if (hit) return { name: tg + '格', tenGod: tg, basis: '月令' + monthGz + '藏' + stems[si] + '(' + (si === 0 ? '本气' : si === 1 ? '中气' : '余气') + ')于' + hit.where + '透出，取' + tg + '为格' };
+    if (!hit) continue;
+    if (jianLu || yangRen) {
+      const tag = yangRen ? '阳刃' : '建禄';
+      return { name: tag + '用' + tg, tenGod: tg, basis: luRenHead + '，比劫当令不以为格；月令所藏' + stems[si] + '(' + layerName(si) + ')' + tg + '于' + hit.where + '透出，别取为格(喜' + favorOf(tg) + ')' };
+    }
+    return { name: tg + '格', tenGod: tg, basis: '月令' + monthGz + '藏' + stems[si] + '(' + layerName(si) + ')' + tg + '于' + hit.where + '透出，取为格' };
   }
+  // ③ 月令所藏皆不透：建禄/阳刃另在他柱找财官可倚，否则直以建禄/阳刃论。
+  if (jianLu || yangRen) {
+    const tag = yangRen ? '阳刃' : '建禄';
+    const ya = outer.find((o) => o.tenGod === '正官' || o.tenGod === '七杀');
+    const cs = ['正财', '偏财', '食神', '伤官'].map((t) => outer.find((o) => o.tenGod === t)).find(Boolean);
+    const use = ya ?? cs;
+    if (use) return { name: tag + '用' + use.tenGod, tenGod: use.tenGod, basis: luRenHead + '，月令所藏皆不透；' + use.where + use.stem + '透出' + use.tenGod + '，权取为格(须另择用神)' };
+    return { name: tag + '格', tenGod: '比劫', basis: luRenHead + '，四柱更无官杀财食可取，直以' + tag + '论，喜官杀制身' };
+  }
+  // ④ 均不透 → 直取月令本气。
   const main = stems[0] ?? '';
-  const tg = tenGodOf(dayStem, main);
-  return { name: tg + '格', tenGod: tg, basis: '月令' + monthGz + '本气' + main + '未透天干，直取本气' + tg + '为格' };
+  const tg2 = tenGodOf(dayStem, main);
+  return { name: tg2 + '格', tenGod: tg2, basis: '月令' + monthGz + '本气' + main + '未透天干，直取本气' + tg2 + '为格' };
 }
-
 /** 变格候选提示：只给线索，最终由 AI 复核(但必须写明是否采用)。 */
 export function specialPatternHint(score: StrengthScore): string | undefined {
   if (score.index >= 75 && score.inSeason) return '专旺候选：日主极旺成势(指数' + score.index + ')，若满盘无有力财官则按专旺顺势取用';

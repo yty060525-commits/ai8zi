@@ -226,7 +226,7 @@ export function cacheKey(record, task, model, tone = DEFAULT_TONE) {
   const toneBucket = Math.round(clampTone(tone) / 5) * 5; // 每 5 度一个缓存档，避免同一命盘缓存爆炸
   // v9：本命事实新增引擎算定的 patternFacts/strengthScore，且提示词改为「沿用不重判」；
   //      旧缓存里的答案是模型自行判断的版本，与新口径不一致，必须整体作废重算一次。
-  return ['v9', model, record.gender, record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar, task.type, task.year ?? 0, task.month ?? 0, record.birthYear, toneBucket].join('|');
+  return ['v10', model, record.gender, record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar, task.type, task.year ?? 0, task.month ?? 0, record.birthYear, toneBucket].join('|');
 }
 
 /* ---------- 失败原因分类：把上游错误翻译成用户能看懂的原因 ---------- */
