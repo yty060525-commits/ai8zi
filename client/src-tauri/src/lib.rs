@@ -271,8 +271,9 @@ fn now_text() -> String {
 /// 确定性缓存键：同一 八字+性别+任务类型+年份+月份+出生年(年龄) + 模型 => 同一输出。
 /// 同一命盘(不同人同名同盘)命中同一缓存，重复分析与断点续跑不再花钱。
 pub(crate) fn cache_key(record: &BaziRecord, task: &AiTaskInput, model: &str) -> String {
-    // v5: 语气分档参与缓存键(每 5 度一档)，与服务器端口径一致；同盘同任务同语气命中同缓存
-    format!("v5|{model}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", record.gender,
+    // v6: 本命事实新增引擎算定的 patternFacts/strengthScore，提示词改为「沿用不重判」；
+    //      旧缓存是模型自行判断的产物，口径不同，必须整体作废重算一次。
+    format!("v6|{model}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", record.gender,
         record.year_pillar, record.month_pillar, record.day_pillar, record.hour_pillar,
         task.task_type, task.year.unwrap_or(0), task.month.unwrap_or(0), record.birth_year, tone_bucket(task.tone))
 }
@@ -304,6 +305,35 @@ pub(crate) fn apply_reasoner_settings(api_payload: &mut Value) {
 }
 
 /// 神煞压缩为「名称@柱位」列表：保留模型需要的信号，去掉 basis/来源等冗余字段(实测省约 89%)。
+/// 时段任务(流年/流月/大运)公共前缀 —— 与服务器 SCOPE_PREFIX、浏览器直连同一口径。
+/// 必须是常量字符串：同盘各任务逐字节一致，才能整段命中上游前缀缓存。
+const SCOPE_PREFIX: &str = concat!(
+    "你是资深子平命理师，仅分析时段运势。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行或关系。",
+    "禁止输出注释或代码块/围栏标记，只给最终正文。本命格局与旺衰已由引擎算定并写在 natal.patternFacts / natal.strengthScore 中，你不得重判、不得改口径；本期吉凶只在既定喜忌下衡量该期干支的作用。",
+    "用 JSON(仅 JSON)返回，schema：{\"title\":\"古风四字或对仗标题(可选)\",\"explanation\":长文}。",
+    "title 只能用干支+四字直书(如：卯戌六合·和合之象)或古典口诀风格，不得编造伪古文引文。",
+    "explanation 必须依次各出现一次【健康】【事业】【财运】【爱情】【刑冲克害批注】，顺序一致，不得合并、省略或改名。",
+    "\n\n# 时段判断标准(硬性)\n",
+    "1. 先读 natal.strengthScore.label 与 natal 中的喜忌方向：本期干支(含大运)属喜用则论顺、属忌神则论逆，生扶/克制关系以 natal.hiddenStems、scope.*Hits 为准，禁止自造五行关系。\n",
+    "2. 【刑冲克害批注】只依据 scope 里的 annualHits/monthlyHits/decadeHits 逐条编号，每行格式：数字. 关系（干支实例）：一句影响，例如 1. 三合（巳酉丑半合）：…；若数组为空则写一条：1. 本期无重大刑冲克害（仅提示）。不得把 natal.relationships 里已有之说成本期新发生的作用。\n",
+    "3. 四个主题(健康/事业/财运/爱情)每段至少 1 条编号要点，须点明「本期相对本命是加力还是减力」并给出依据(哪个十神、什么作用)。\n",
+    "4. 各主题全文只出现一次，禁止先短句后长文重复两遍。每个主题内部必须分点陈述：每条单独一行、行首用 1. 2. 3. 编号，一句话一条，不要整段连排。"
+);
+
+/// 本命任务前缀：判定标准写死，模型不再自行判断强弱/取格。
+const BASELINE_PREFIX: &str = concat!(
+    "你是资深子平命理师。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行、藏干或关系。",
+    "当前分析目标：本命。用 JSON(仅 JSON)返回，schema：{\"pattern\":格局,\"strength\":身强/身弱/中和偏旺/中和偏弱,\"usefulElements\":[喜用],\"avoidElements\":[忌用],\"explanation\":长文}。",
+    "\n\n# 判定标准(硬性，逐条遵守)\n",
+    "1. 格局：直接采用 natal.patternFacts.name，不得另立格局名、不得改写；patternFacts.basis 是取格依据，须原样解释给用户。若 patternFacts.special 给出变格候选，须先复核(从格须日主无有力之根且印比虚浮受制；专旺须满盘一气成势)，复核不成立要写明「不按变格论，仍以正格X取用」。\n",
+    "2. 旺衰：直接采用 natal.strengthScore.label，不得改判。strengthScore 由三层加权算成——天干透出(轻)、地支藏干按本气/中气/余气(重)、月令加倍(提纲秉令)，并按日主在该支的十二长生调整通根之力；index 归一化到 -100..100，>=25 身强、<=-25 身弱，其间为中和。inSeason 表示是否真得月令(只看月支本气，被冲或作死绝之地则不算)。\n",
+    "3. explanation 必须以【身强身弱与喜忌】开头，随后按顺序各出现一次【健康】【事业】【财运】【爱情】(不得合并、省略或改名)，末尾可加【总评/行为建议】。\n",
+    "4. 【身强身弱与喜忌】一段必须引用 strengthScore 的数字与明细来写，至少包含：得令与否(inSeason)、助身方得分(support)与克泄耗方得分(drain)、净分(index)与档位(label)；再点出命局最关键的病处(如某十神太旺/太弱、何物伤格)。禁止只写「日主偏弱」这类无数据结论。\n",
+    "5. 喜忌推导规则(通则，须写明所依通则)：身弱→喜印比、忌克泄耗；身强→喜克泄耗、忌印比；中和偏旺/偏弱→以调候与通关需要为主，兼顾抑扬。若格局本身另有要求(如阳刃喜官杀制、建禄喜财官、从格须顺势、专旺须顺生)，以格局要求优先并在文中说明为何与扶抑通则一致或冲突。\n",
+    "6. usefulElements / avoidElements 只能填 木/火/土/金/水 五项中的若干项，且必须与第 5 条推出的喜忌一致，不得凭印象填写。\n",
+    "7. 每个主题内部必须分点：每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。禁止在 JSON 顶层重复输出 overall/health/career/wealth/love/notice 等字段，也不要先给短句摘要再写长文。"
+);
+
 pub(crate) fn compact_shen_sha(shen_sha: &Value) -> Value {
     if shen_sha.is_null() { return Value::Null; }
     let names = ["年", "月", "日", "时"];
@@ -398,6 +428,8 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
         "elements": val("elements"), "elementRatio": val("elementRatio"),
         "hiddenStems": val("hiddenStems"), "tenGods": val("tenGods"), "tenGodDetails": val("tenGodDetails"),
         "naYin": val("naYin"), "twelveLongevity": val("twelveLongevity"),
+        // 引擎算定的格局与旺衰：模型只解读不重判(与服务器/浏览器直连同口径)
+        "patternFacts": val("patternFacts"), "strengthScore": val("strengthScore"),
         "shenSha": compact_shen_sha(&val("shenSha")), "relationships": val("relationships"),
     });
     // 行动改变与职业适配(喜用五行知识库)：附加 baseline 摘要与 guide 资料
@@ -428,7 +460,7 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
             let mut content = format!("你是资深子平命理师。根据【本命结论】的喜用五行与下方【资料库】中对应五行的后天调整/职业知识，输出该命局的【后天调整】与【事业职业适配】建议(长文，尽量贴合资料，不要另造体系)。禁止输出/* */注释、HTML注释或代码块标记，只给最终正文。JSON schema：{{\"explanation\":长文}}，explanation 必须依次各出现一次【后天调整】【事业适配】【健康注意】(不得合并、省略或改名)，每段至少 1 条；每个主题内部再分点：每条单独一行、行首 1. 2. 3. 编号，一句话一条，不要整段连排。\n\n# 本命结论\n{}\n\n# 资料库(喜用{})\n{}", baseline_text, guide.get("element").and_then(|e| e.as_str()).unwrap_or(""), guide_text);
             content = format!("{content}\n\n# 语气要求\n{}", tone_instruction(clamp_tone(task.tone)));
             return Ok(serde_json::json!({
-                "model": "deepseek-flash", "promptVersion": "ctx-v6", "thinking": true, "effort": "high",
+                "model": "deepseek-flash", "promptVersion": "ctx-v7", "thinking": true, "effort": "high",
                 "taskId": task.task_id, "type": task.task_type, "year": task.year, "month": task.month,
                 "nonAiResult": body,
                 "messages": [{ "role": "user", "content": content }]
@@ -507,7 +539,7 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
         let content = format!("{}\n# 本命结论(已定，必须沿用，不得重算)\n{}\n\n# 本命事实数据(JSON，只依据此数据)\n{}{}\n\n# 语气要求\n{}\n\n# 各时段分析要点(JSON)\n{}\n\n# 当前分析目标\n全盘总结：未来十年中值得关注的节点",
             OVERVIEW_PROMPT, baseline_text, natal_text, output_rules_ov, tone_instruction(clamp_tone(task.tone)), findings_text);
         return Ok(serde_json::json!({
-            "model": "deepseek-flash", "promptVersion": "ctx-v6", "thinking": true, "effort": "high",
+            "model": "deepseek-flash", "promptVersion": "ctx-v7", "thinking": true, "effort": "high",
             "taskId": task.task_id, "type": task.task_type, "year": task.year, "month": task.month,
             "nonAiResult": { "natal": natal, "findings": task.findings.clone().unwrap_or(Value::Null) },
             "messages": [{ "role": "user", "content": content }]
@@ -515,33 +547,45 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
     }
     let is_scope = matches!(task.task_type.as_str(), "annual" | "monthly" | "decade");
     let age_seg = if task.task_type == "decade" { String::new() } else { task.year.map(|y| format!("(年龄约 {})", y - record.birth_year)).unwrap_or_default() };
-    let prompt = if is_scope {
-        format!(
-            "你是资深子平命理师，仅分析时段运势。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行或关系。禁止输出/* */注释、HTML注释或任何代码块/围栏标记，只给最终正文。本命的身强身弱/格局/喜忌已在 natal 结论中单独确定，你不要再输出强弱/格局/喜忌判断。用 JSON(仅 JSON)返回，schema：{{\"title\":\"两行式标题(可选)\",\"explanation\":长文}}。title 需有古风韵味并只能引用下列古籍原文/口诀(标注出处，禁止自创伪古文)：六合(《三命通会》六合歌)：子与丑合、寅与亥合、卯与戌合、辰与酉合、巳与申合、午与未合；六冲(《渊海子平》冲诀，地支七位为冲)：子午、丑未、寅申、卯酉、辰戌、巳亥相冲；三刑(《三命通会·论三刑》)：子刑卯卯刑子为无礼之刑，寅刑巳巳刑申申刑寅为恃势之刑，丑刑戌戌刑未未刑丑为无恩之刑，辰午酉亥自刑；六害(穿害口诀)：子未害丑午害寅巳害卯辰害申亥害酉戌害；六破(破口诀)：子酉破丑辰破寅亥破卯午破巳申破未戌破。若无对应原文则标题用干支+四字直书(如：卯戌六合·和合之象)，不得编造引文。explanation 必须依次各出现一次【健康】【事业】【财运】【爱情】【刑冲克害批注】，顺序一致，不得合并、省略或改名；【刑冲克害批注】依据 scope 的 annualHits/monthlyHits/decadeHits 逐条编号，每行格式：数字. 关系（干支实例说明）：一句影响，例如：1. 三合（巳酉丑半合）：…；2. 六害（丙戌）：…；每条一句话，把 合/冲/刑/害/破/克 的对象与含义写清楚；若没有任何命中，该段写一条 1. 本期无重大刑冲克害（仅提示）。各主题全文只出现一次，勿先短句后长文重复。每个主题内部必须分点陈述：每条单独一行、行首用 1. 2. 3. 编号，一句话一条，不要整段连排文字。"
-        )
-    } else {
-        format!(
-            "你是资深子平命理师。严格依据下方【事实数据(JSON)】中的确定性命理数据作答，禁止自行推算干支、十神、五行、藏干或干支关系。禁止输出/* */注释、HTML注释或任何代码块/围栏标记，只给最终正文。当前分析目标：本命{age_seg}。用 JSON(仅 JSON)返回，schema：{{\"pattern\":格局,\"strength\":身强/身弱/中和,\"usefulElements\":[喜用],\"avoidElements\":[忌用],\"explanation\":长文}}。explanation 必须以【身强身弱与喜忌】开头，随后按顺序各出现一次【健康】【事业】【财运】【爱情】(不得合并、省略或改名)，末尾可以加【总评/行为建议】收尾。判断身强身弱按四步逐条写明依据：①得令：日主是否得月令生旺(月支藏干旺衰与日主于月支的十二长生)；②得地：四支及藏干是否有日主印比禄刃根气；③得势：四柱印星比劫(生我、同我)出现几次(以五行个数/十神统计为准)；④克泄耗：食伤财官杀(我生、我克、克我)出现几次；权衡后下结论。喜忌按通则推导并写明：身弱喜印比、忌克泄耗，身强反之，中和看调候通关。禁止在 JSON 顶层重复 overall/health/career/wealth/love/notice 等字段，也不要先给短句摘要再写长文。每个主题内部必须分点陈述：每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。"
-        )
-    };
+    let prompt = if is_scope { SCOPE_PREFIX } else { BASELINE_PREFIX };
     // 关键：把“事实数据 JSON”直接嵌入消息正文 —— 模型只能看到 messages，
     // 顶层字段(如 nonAiResult)对模型不可见(此前因此返回“未提供结构化输入”)。
     let context = serde_json::json!({ "natal": natal, "scope": scope });
-    let scope_text = serde_json::to_string(&scope).unwrap_or_else(|_| "{}".into());
+    // ── 命中率优先的分段：把「随任务变化的文字」尽量后移并按变化频率分层。
+    //    年度段(该年流年+所处大运) → 同年所有流月与流年共享到此处；月度段单独再往后。
+    //    实测与服务器端一致：全局公共前缀 ≈ 91%，同年内再多共享 ~263 字符。
+    let mut year_part = serde_json::Map::new();
+    let mut month_part = serde_json::Map::new();
+    for key in ["annual", "decade", "annualHits", "decadeHits"] {
+        if let Some(v) = scope.get(key) { if !v.is_null() { year_part.insert(key.into(), v.clone()); } }
+    }
+    for key in ["monthly", "monthlyHits"] {
+        if let Some(v) = scope.get(key) { if !v.is_null() { month_part.insert(key.into(), v.clone()); } }
+    }
+    if let Some(age) = scope.get("age") {
+        if task.month.is_some() { month_part.insert("age".into(), age.clone()); }
+        else { year_part.insert("age".into(), age.clone()); }
+    }
+    let year_text = serde_json::to_string(&serde_json::Value::Object(year_part)).unwrap_or_else(|_| "{}".into());
+    let month_text = serde_json::to_string(&serde_json::Value::Object(month_part)).unwrap_or_else(|_| "{}".into());
     let natal_note = if is_scope {
         task.baseline.as_ref().and_then(|b| b.get("summary")).and_then(|s| s.as_str())
-            .map(|s| format!("\n# 本命结论(已定，必须沿用，不得推翻或重算)\n{s}\n")).unwrap_or_default()
+            .map(|s| format!("\n\n# 本命结论(引擎已定，必须沿用，不得推翻或重算)\n{s}\n")).unwrap_or_default()
     } else { String::new() };
     let output_rules = "\n\n# 输出硬性要求(违反即整篇作废重写)\n1. 全篇一律使用简体中文(UTF-8)，禁止任何繁体字、异体字混入。\n2. explanation 的【】小节必须按本任务规定逐段出现、各只出现一次，顺序一致，不得合并、省略或改名。\n3. 每个小节至少 1 条编号要点；每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。\n\n# 语气要求\n";
     let content = if is_scope {
-        format!("{prompt}{natal_note}\n\n# 本命事实数据(JSON，只依据此数据)\n{natal_text}{output_rules}{tone}\n\n# 本时段数据(JSON)\n{scope_text}\n\n# 当前分析目标\n{when}{age_seg}", tone = tone_instruction(clamp_tone(task.tone)))
+        {
+            // 只有流月任务才追加「本月」段；流年/大运到此为止，前缀更短也更能与同年任务对齐。
+            let month_block = if task.month.is_some() { format!("\n\n# 本月运势数据(JSON)\n{month_text}") } else { String::new() };
+            format!("{prompt}\n\n# 本命事实数据(JSON，只依据此数据)\n{natal_text}{output_rules}{tone}{natal_note}\n\n# 本年度运势数据(JSON)\n{year_text}{month_block}\n\n# 当前分析目标\n{when}{age_seg}", tone = tone_instruction(clamp_tone(task.tone)))
+        }
     } else {
         let base = format!("{prompt}{natal_note}\n\n# 事实数据(JSON，务必只依据此数据，禁止自行推算干支/十神/五行/藏干或关系)\n{natal_text}");
         format!("{base}{output_rules}{tone}", tone = tone_instruction(clamp_tone(task.tone)))
     };
 
     Ok(serde_json::json!({
-        "model": "deepseek-flash", "promptVersion": "ctx-v6", "thinking": true, "effort": if task.task_type == "baseline" { "high" } else { "low" },
+        "model": "deepseek-flash", "promptVersion": "ctx-v7", "thinking": true, "effort": if task.task_type == "baseline" { "high" } else { "low" },
         "taskId": task.task_id, "type": task.task_type, "year": task.year, "month": task.month,
         "nonAiResult": context,
         "messages": [{ "role": "user", "content": content }]

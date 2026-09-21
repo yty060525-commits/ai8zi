@@ -92,6 +92,141 @@ function tenGodOf(dayStem: string, otherStem: string, isDayPillar = false): stri
   return same ? '偏印' : '正印';
 }
 
+/* ---- 旺衰评分与取格(本地确定性算法) ------------------------------------------------
+ * 目的：把「身强身弱」「什么格局」从模型的主观判断变成引擎算好的确定事实。
+ * 提示词随后要求模型「沿用不重判」，同盘多次分析才会给出一致答案(命中率)。
+ * 口径依《子平真诠》《滴天髓》通行规则：助身方=比劫+印星，克泄耗方=食伤+财星+官杀；
+ * 力量分三层——天干透出(轻)、地支藏干按本气/中气/余气(重)、月令加倍(提纲秉令)，
+ * 再按十二长生调整日主在该支的通根之力。参考跃渊 yueyuan-bazi skill v1.8 的告诫：
+ * 反对「月令占 X%」式伪量化，故此处权重只是定性层级(本气>中气>余气、月支最重)的
+ * 可复现实现，并在 detail 中逐项公开，任何一档都可回溯核对。
+ * ------------------------------------------------------------------------------ */
+/** 六冲对(小序在前)：子午、丑未、寅申、卯酉、辰戌、巳亥 —— 冲动月支即动摇提纲。 */
+const CHONG_PAIRS = [[0, 6], [1, 7], [2, 8], [3, 9], [4, 10], [5, 11]] as const;
+const isChongPair = (a: number, b: number) => CHONG_PAIRS.some(([x, y]) => (x === a && y === b) || (x === b && y === a));
+const ROOT_WEIGHT = [10, 5, 3] as const;
+const STEM_WEIGHT = 6;
+/** 十二长生对「日主通根」的乘数：旺相之地加倍，死绝之地不为根。 */
+const STAGE_FACTOR: Record<string, number> = {
+  长生: 1.0, 沐浴: 0.7, 冠带: 0.9, 临官: 1.2, 帝旺: 1.4, 衰: 0.7,
+  病: 0.5, 死: 0.4, 墓: 0.6, 绝: 0.3, 胎: 0.4, 养: 0.5,
+};
+const TEN_GOD_SIDE: Record<string, 'support' | 'drain'> = {
+  比肩: 'support', 劫财: 'support', 偏印: 'support', 正印: 'support', 日主: 'support',
+  食神: 'drain', 伤官: 'drain', 偏财: 'drain', 正财: 'drain', 七杀: 'drain', 正官: 'drain',
+};
+
+export interface StrengthScore {
+  support: number; drain: number; net: number; index: number;
+  /** 身强 / 身弱 / 中和偏旺 / 中和偏弱 */
+  label: string;
+  /** 是否真得太旺之气：月支本气为印比，且未被冲、未作日主死绝之地 */
+  inSeason: boolean;
+  /** 月支藏干里出现助身方(含中余气)时置真，范围比 inSeason 宽得多 */
+  monthHasSupport: boolean;
+  /** 逐项明细：AI 引用此表即可，不必自己数 */
+  detail: Array<{ pillar: string; stem: string; tenGod: string; side: string; weight: number; note?: string }>;
+}
+
+/** 旺衰评分：纯查表+纯代数，无历法依赖，任意环境可复现。 */
+export function scoreStrength(pillars: string[], dayStem: string): StrengthScore {
+  let support = 0, drain = 0;
+  const detail: StrengthScore['detail'] = [];
+  const names = ['年', '月', '日', '时'];
+  for (let pi = 0; pi < pillars.length; pi++) {
+    const gz = pillars[pi];
+    if (!gz) continue;
+    const isMonth = pi === 1;
+    const hg = tenGodOf(dayStem, gz[0], pi === 2);
+    const hSide = TEN_GOD_SIDE[hg] ?? 'drain';
+    const hw = Math.round(STEM_WEIGHT * (isMonth ? 1.5 : 1) * 10) / 10;
+    detail.push({ pillar: names[pi] + '干', stem: gz[0], tenGod: hg, side: hSide, weight: hw });
+    if (hSide === 'support') support += hw; else drain += hw;
+    // 十二长生乘数只作用于「与日主同类」的藏干(即日主在该支的通根)；其余藏干是该支
+    // 自己的气(财官食伤)，其强弱不该被日主旺衰改写——早先乘到全部藏干上会把
+    // 「甲日主生申月」误判成身强：申中庚金(七杀)被衰病系数削掉，等于替克我者减重。
+    const dayElement = ELEMENTS[indexOfStem(dayStem) >> 1];
+    const dayStage = longevityOf(dayStem, gz[1]);
+    const rootlessHere = dayStage === '死' || dayStage === '绝';
+    (HIDDEN_STEMS[gz[1]] ?? []).forEach((stem, si) => {
+      const tg = tenGodOf(dayStem, stem);
+      const side = TEN_GOD_SIDE[tg] ?? 'drain';
+      let w = (ROOT_WEIGHT[si] ?? 3) * (isMonth ? 2 : 1);
+      let note = '';
+      if (ELEMENTS[indexOfStem(stem) >> 1] === dayElement && (tg === '比肩' || tg === '劫财')) {
+        if (rootlessHere) { w = 0; note = '日主坐' + dayStage + '，此支不为根'; }
+        else { const f = STAGE_FACTOR[dayStage] ?? 0.7; w *= f; note = '通根' + dayStage + '×' + f; }
+      }
+      w = Math.round(w * 10) / 10;
+      detail.push({ pillar: names[pi] + '支·' + (si === 0 ? '本气' : si === 1 ? '中气' : '余气'), stem, tenGod: tg, side, weight: w, note });
+      if (side === 'support') support += w; else drain += w;
+    });
+  }
+  const net = support - drain;
+  const total = support + drain || 1;
+  const index = Math.round((net / total) * 100);
+  const monthStems = HIDDEN_STEMS[pillars[1]?.[1] ?? ''] ?? [];
+  const monthHasSupport = monthStems.some((s) => (TEN_GOD_SIDE[tenGodOf(dayStem, s)] ?? 'drain') === 'support');
+  // 「得令」从严：只看月支**本气**。中余气带印比不算当令(否则几乎人人得令，失去区分度)。
+  const monthRootIsSupport = monthStems.length > 0 && (TEN_GOD_SIDE[tenGodOf(dayStem, monthStems[0])] ?? 'drain') === 'support';
+  const mb = indexOfBranch(pillars[1]?.[1] ?? '');
+  const clashedBy = mb < 0 ? [] : [0, 2, 3].filter((k) => isChongPair(mb, indexOfBranch(pillars[k]?.[1] ?? '')));
+  const monthStage = longevityOf(dayStem, pillars[1]?.[1] ?? '');
+  const monthRooted = !(monthStage === '死' || monthStage === '绝');
+  const inSeason = monthRootIsSupport && clashedBy.length === 0 && monthRooted;
+  if (monthHasSupport && clashedBy.length > 0) {
+    detail.push({ pillar: '月令', stem: pillars[1][1], tenGod: '冲', side: 'drain', weight: 0, note: '月支被' + clashedBy.map((k) => names[k] + '支').join('、') + '冲开，当令之力受损(破令)' });
+  }
+  if (monthRootIsSupport && !monthRooted) {
+    detail.push({ pillar: '月令', stem: pillars[1][1], tenGod: '绝', side: 'drain', weight: 0, note: '日主于月支作' + monthStage + '，虽本气同党而气不接(不得令)' });
+  }
+  const label = index >= 25 ? '身强' : index <= -25 ? '身弱' : index > 0 ? '中和偏旺' : '中和偏弱';
+  return { support: Math.round(support * 10) / 10, drain: Math.round(drain * 10) / 10, net: Math.round(net * 10) / 10, index, label, inSeason, monthHasSupport, detail };
+}
+
+export interface PatternInfo {
+  name: string; tenGod: string; basis: string; special?: string;
+}
+
+/** 取格(《子平真诠》通行法)：月令为主、透干优先、本气定名；建禄/阳刃别取。 */
+export function derivePattern(pillars: string[], dayStem: string): PatternInfo {
+  const monthGz = pillars[1] ?? '';
+  const stems = HIDDEN_STEMS[monthGz[1] ?? ''] ?? [];
+  const isBiJie = (t: string) => t === '比肩' || t === '劫财';
+  const outer: Array<{ stem: string; tenGod: string; where: string }> = [
+    { stem: pillars[0]?.[0] ?? '', where: '年干' },
+    { stem: pillars[1]?.[0] ?? '', where: '月干' },
+    { stem: pillars[3]?.[0] ?? '', where: '时干' },
+  ].map((o) => ({ ...o, tenGod: o.stem ? tenGodOf(dayStem, o.stem) : '' })).filter((o) => o.tenGod && !isBiJie(o.tenGod));
+  const pickBy = (tg: string) => outer.find((o) => o.tenGod === tg);
+  const monthMainTenGod = stems.length ? tenGodOf(dayStem, stems[0]) : '';
+  if (isBiJie(monthMainTenGod)) {
+    const yangRen = YANG.includes(dayStem) && monthMainTenGod === '劫财';
+    const head = '月令' + monthGz + (yangRen ? '为日主帝旺之地(阳刃)' : '为日主临官之地(建禄)');
+    const ya = pickBy('正官') ?? pickBy('七杀');
+    if (ya) return { name: (yangRen ? '阳刃用' : '建禄用') + ya.tenGod, tenGod: ya.tenGod, basis: head + '，比劫当令不以为格；' + ya.where + ya.stem + '透而出' + ya.tenGod + '，取为格(喜' + (ya.tenGod === '正官' ? '印绶护之、忌伤官见官' : '食伤制之、忌财党杀') + ')' };
+    const cs = pickBy('正财') ?? pickBy('偏财') ?? pickBy('食神') ?? pickBy('伤官');
+    if (cs) return { name: (yangRen ? '阳刃' : '建禄') + cs.tenGod, tenGod: cs.tenGod, basis: head + '，别柱无官杀可用；' + cs.where + cs.stem + '透出' + cs.tenGod + '，取为格(喜' + (cs.tenGod.includes('财') ? '官星护财、忌比劫分夺' : '财星流通、忌枭印夺食') + ')' };
+    return { name: yangRen ? '阳刃格' : '建禄格', tenGod: '比劫', basis: head + '，四柱更无官杀财食可取，直以' + (yangRen ? '阳刃' : '建禄') + '论，喜官杀制身' };
+  }
+  for (let si = 0; si < stems.length; si++) {
+    const tg = tenGodOf(dayStem, stems[si]);
+    if (isBiJie(tg)) continue;
+    const hit = outer.find((o) => o.stem === stems[si]);
+    if (hit) return { name: tg + '格', tenGod: tg, basis: '月令' + monthGz + '藏' + stems[si] + '(' + (si === 0 ? '本气' : si === 1 ? '中气' : '余气') + ')于' + hit.where + '透出，取' + tg + '为格' };
+  }
+  const main = stems[0] ?? '';
+  const tg = tenGodOf(dayStem, main);
+  return { name: tg + '格', tenGod: tg, basis: '月令' + monthGz + '本气' + main + '未透天干，直取本气' + tg + '为格' };
+}
+
+/** 变格候选提示：只给线索，最终由 AI 复核(但必须写明是否采用)。 */
+export function specialPatternHint(score: StrengthScore): string | undefined {
+  if (score.index >= 75 && score.inSeason) return '专旺候选：日主极旺成势(指数' + score.index + ')，若满盘无有力财官则按专旺顺势取用';
+  if (score.index <= -75 && !score.monthHasSupport) return '从格候选：日主极弱无根(指数' + score.index + ')，若印比皆虚浮受制则按从格顺势取用';
+  return undefined;
+}
+
 const emptyFacts = (): RelationshipFacts => ({ sanHe: [], liuHe: [], chong: [], xing: [], hai: [], po: [], ke: [] });
 
 /* ------------------------------------------------------------ 关系数学内核 */
@@ -390,6 +525,8 @@ export function calculateNonAi(
     return { ganZhi, startYear, endYear: startYear + 9, tenGod: tenGodOf(day, ganZhi[0]), relationships: fortuneFacts(ganZhi, pillars), relationshipDetails: pairHits(participants) };
   });
 
+  // 旺衰评分只算一次，供 patternFacts 与返回对象共用
+  const strengthScore = scoreStrength(pillars, day);
   return {
     pillars: { year: eight.getYear(), month: eight.getMonth(), day: eight.getDay(), hour: eight.getTime() },
     solarDate: candidate.toYmd(),
@@ -413,6 +550,9 @@ export function calculateNonAi(
     monthlyFortunes,
     // 十二长生：日主对四支(本地查表)，与库 getXXxDiShi 同口径
     twelveLongevity: pillars.map((pillar) => longevityOf(day, pillar[1])),
+    // 旺衰与格局：引擎算定的确定结论，提示词要求 AI 沿用不重判
+    strengthScore: strengthScore,
+    patternFacts: Object.assign({}, derivePattern(pillars, day), { special: specialPatternHint(strengthScore) }),
     shenSha: buildShenShaResult(pillars),
     shenShaRuleVersion: SHEN_SHA_RULE_VERSION,
     chenggu,

@@ -170,9 +170,33 @@ describe('提示词结构(前缀缓存与年龄字段)', () => {
     for (const task of [{ type: 'annual', year: 2026, baseline: anchor }, { type: 'monthly', year: 2026, month: 3, baseline: anchor }, { type: 'decade', year: 2020, baseline: anchor }]) {
       const c = buildTaskPayload(rec, task, 80).messages[1].content;
       assert.ok(c.includes('# 当前分析目标'), task.type + ' 缺少分析目标段');
-      assert.ok(c.lastIndexOf('# 当前分析目标') > c.lastIndexOf('# 本时段数据'), task.type + ' 目标应在时段数据之后(变化后置)');
-      assert.ok(c.indexOf('# 本命事实数据') < c.indexOf('# 本时段数据'), task.type + ' 本命事实应先于可变部分');
+      assert.ok(c.lastIndexOf('# 当前分析目标') > c.lastIndexOf('# 本年度运势数据'), task.type + ' 目标应在时段数据之后(变化后置)');
+      assert.ok(c.indexOf('# 本命事实数据') < c.indexOf('# 本年度运势数据'), task.type + ' 本命事实应先于可变部分');
     }
+  });
+
+  test('同一年份的流年与该年流月共享更长的前缀(年度段先于月度段)', async () => {
+    const { buildTaskPayload } = await import('../ai.mjs');
+    const lcp = (a, b) => { let n = Math.min(a.length, b.length), i = 0; while (i < n && a[i] === b[i]) i++; return i; };
+    const annual = buildTaskPayload(rec, { type: 'annual', year: 2026, baseline: anchor }, 80).messages[1].content;
+    const monthly = buildTaskPayload(rec, { type: 'monthly', year: 2026, month: 3, baseline: anchor }, 80).messages[1].content;
+    const otherYear = buildTaskPayload(rec, { type: 'annual', year: 2027, baseline: anchor }, 80).messages[1].content;
+    const same = lcp(annual, monthly), diff = lcp(annual, otherYear);
+    assert.ok(same > diff, '同年应比跨年多共享前缀：same=' + same + ' diff=' + diff);
+    assert.ok(annual.includes('# 本年度运势数据') && !annual.includes('# 本月运势数据'), '流年不应带月度段');
+    assert.ok(monthly.includes('# 本月运势数据'), '流月必须带月度段');
+  });
+
+  test('旺衰与格局由引擎算定并进入公共前缀(natal)，模型不得重判', async () => {
+    const { buildTaskPayload } = await import('../ai.mjs');
+    const withFacts = { ...rec, nonAiResult: { ...rec.nonAiResult, patternFacts: { name: '正官格', tenGod: '正官', basis: '月令酉藏辛透出' }, strengthScore: { index: -52, label: '身弱', inSeason: false, support: 27.5, drain: 88, detail: [] } } };
+    const c = buildTaskPayload(withFacts, { type: 'annual', year: 2026, baseline: anchor }, 80).messages[1].content;
+    assert.ok(c.includes('\"patternFacts\"'), 'natal 应携带引擎格局');
+    assert.ok(c.includes('\"strengthScore\"'), 'natal 应携带引擎旺衰评分');
+    assert.ok(c.includes('不得重判'), '提示词须要求模型沿用而不重判');
+    // 公共前缀占比：到「本命事实」结束处为止都应与其它任务一致
+    const cut = c.indexOf('# 本年度运势数据');
+    assert.ok(cut / c.length > 0.5, '固定前缀应过半：' + (cut / c.length).toFixed(2));
   });
 
   test('大运不再带年龄，流年流月仍带', async () => {

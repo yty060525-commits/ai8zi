@@ -4,6 +4,7 @@
     "useDefineForClassFields": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "allowJs": false,
+    "types": ["vite/client", "node"],
     "skipLibCheck": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
@@ -14,6 +15,7 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
+    "outDir": "node_modules/.dts-build",
     "jsx": "react-jsx"
   },
   "include": ["src"],

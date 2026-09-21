@@ -55,6 +55,14 @@ export interface NonAiChart {
   annualFortunes: FortunePeriod[];
   monthlyFortunes: FortunePeriod[];
   twelveLongevity: string[];
+  /** 引擎按《子平真诠》取格法算定的格局：AI 必须沿用，不得另立格局名。 */
+  patternFacts?: { name: string; tenGod: string; basis: string; special?: string };
+  /** 引擎算定的旺衰评分：AI 必须沿用此档位，不得自行重判身强身弱。 */
+  strengthScore?: {
+    support: number; drain: number; net: number; index: number;
+    label: string; inSeason: boolean; monthHasSupport: boolean;
+    detail: Array<{ pillar: string; stem: string; tenGod: string; side: string; weight: number; note?: string }>;
+  };
   shenSha: { auspicious: string[]; inauspicious: string[]; items?: ShenShaItem[]; daySha?: string; dayTianShen?: string; timeTianShen?: string; ruleVersion?: string; source?: string };
 
   tenGodDetails: { heavenly: string[]; hidden: Array<Array<{ stem: string; tenGod: string; position: 'root' | 'middle' | 'residual' }>> };

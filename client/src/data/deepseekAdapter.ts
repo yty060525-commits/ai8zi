@@ -124,6 +124,48 @@ function channelOrder(forced?: string): ChannelSpec[] {
   return [...head, ...CHANNELS.filter((c) => c.id !== selected)];
 }
 
+/** 系统提示词：全通道共用同一条，逐字节一致(前缀缓存的第一层)。 */
+const SYSTEM_SCOPE = '请把思考压缩到最短，直接输出符合要求的简体中文 JSON 正文；全篇不得出现繁体字。';
+/** 输出硬性要求：与任务类型无关的公共约束，紧跟 natal 之后。 */
+const OUTPUT_RULES_TEXT = '\n\n# 输出硬性要求(违反即整篇作废重写)\n'
+  + '1. 全篇一律使用简体中文(UTF-8)，禁止任何繁体字、异体字混入。\n'
+  + '2. explanation 的【】小节必须按本任务规定逐段出现、各只出现一次，顺序一致，不得合并、省略或改名。\n'
+  + '3. 每个小节至少 1 条编号要点；每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。\n'
+  + '4. 禁止输出注释、代码块或任何围栏标记，只给最终正文。';
+
+const SCOPE_PREFIX = '你是资深子平命理师，仅分析时段运势。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行或关系。'
+  + '禁止输出注释或代码块/围栏标记，只给最终正文。本命格局与旺衰已由引擎算定并写在 natal.patternFacts / natal.strengthScore 中，你不得重判、不得改口径；本期吉凶只在既定喜忌下衡量该期干支的作用。'
+  + '用 JSON(仅 JSON)返回，schema：{"title":"古风四字或对仗标题(可选)","explanation":长文}。'
+  + 'title 只能用干支+四字直书(如：卯戌六合·和合之象)或古典口诀风格，不得编造伪古文引文。'
+  + 'explanation 必须依次各出现一次【健康】【事业】【财运】【爱情】【刑冲克害批注】，顺序一致，不得合并、省略或改名。'
+  + '\n\n# 时段判断标准(硬性)\n'
+  + '1. 先读 natal.strengthScore.label 与 natal 中的喜忌方向：本期干支(含大运)属喜用则论顺、属忌神则论逆，生扶/克制关系以 natal.hiddenStems、scope.*Hits 为准，禁止自造五行关系。\n'
+  + '2. 【刑冲克害批注】只依据 scope 里的 annualHits/monthlyHits/decadeHits 逐条编号，每行格式：数字. 关系（干支实例）：一句影响，例如 1. 三合（巳酉丑半合）：…；若数组为空则写一条：1. 本期无重大刑冲克害（仅提示）。不得把 natal.relationships 里已有之说成本期新发生的作用。\n'
+  + '3. 四个主题(健康/事业/财运/爱情)每段至少 1 条编号要点，须点明「本期相对本命是加力还是减力」并给出依据(哪个十神、什么作用)。\n'
+  + '4. 各主题全文只出现一次，禁止先短句后长文重复两遍。每个主题内部必须分点陈述：每条单独一行、行首用 1. 2. 3. 编号，一句话一条，不要整段连排。';
+
+const BASELINE_PREFIX = '你是资深子平命理师。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行、藏干或关系。'
+  + '当前分析目标：本命。用 JSON(仅 JSON)返回，schema：{"pattern":格局,"strength":身强/身弱/中和偏旺/中和偏弱,"usefulElements":[喜用],"avoidElements":[忌用],"explanation":长文}。'
+  // —— 关键口径：格局与旺衰已由引擎按确定算法算出，写在 natal.patternFacts / natal.strengthScore 里，
+  //    模型只负责「解读」与「定喜用」，不负责「重判」。这是消除同盘不同答案(命中率)的根本手段。
+  + '\n\n# 判定标准(硬性，逐条遵守)\n'
+  + '1. 格局：直接采用 natal.patternFacts.name，不得另立格局名、不得改写；patternFacts.basis 是取格依据，须原样解释给用户。若 patternFacts.special 给出变格候选，须先复核(从格须日主无有力之根且印比虚浮受制；专旺须满盘一气成势)，复核不成立要写明「不按变格论，仍以正格X取用」。\n'
+  + '2. 旺衰：直接采用 natal.strengthScore.label，不得改判。strengthScore 由三层加权算成——天干透出(轻)、地支藏干按本气/中气/余气(重)、月令加倍(提纲秉令)，并按日主在该支的十二长生调整通根之力；index 归一化到 -100..100，>=25 身强、<=-25 身弱，其间为中和。inSeason 表示是否真得月令(只看月支本气，被冲或作死绝之地则不算)。\n'
+  + '3. explanation 必须以【身强身弱与喜忌】开头，随后按顺序各出现一次【健康】【事业】【财运】【爱情】(不得合并、省略或改名)，末尾可加【总评/行为建议】。\n'
+  + '4. 【身强身弱与喜忌】一段必须引用 strengthScore 的数字与明细来写，至少包含：得令与否(inSeason)、助身方得分(support)与克泄耗方得分(drain)、净分(index)与档位(label)；再点出命局最关键的病处(如某十神太旺/太弱、何物伤格)。禁止只写「日主偏弱」这类无数据结论。\n'
+  + '5. 喜忌推导规则(通则，须写明所依通则)：身弱→喜印比、忌克泄耗；身强→喜克泄耗、忌印比；中和偏旺/偏弱→以调候与通关需要为主，兼顾抑扬。若格局本身另有要求(如阳刃喜官杀制、建禄喜财官、从格须顺势、专旺须顺生)，以格局要求优先并在文中说明为何与扶抑通则一致或冲突。\n'
+  + '6. usefulElements / avoidElements 只能填 木/火/土/金/水 五项中的若干项，且必须与第 5 条推出的喜忌一致，不得凭印象填写。\n'
+  + '7. 每个主题内部必须分点：每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。禁止在 JSON 顶层重复输出 overall/health/career/wealth/love/notice 等字段，也不要先给短句摘要再写长文。';
+
+const OVERVIEW_PREFIX = '你是资深子平命理师，现在做「全盘总结」。下面给出的是【已经算好的结论】：本命喜忌、以及未来十年的大运/流年/流月逐段批断要点。你的任务不是重新推算，也不是复述每一段，而是横向比较这些结论，挑出真正值得当事人注意的时间节点并说明理由。严格依据给定材料作答，禁止自行补充材料里没有的干支或事件；禁止输出注释或代码块/围栏标记，只给最终正文。用 JSON(仅 JSON)返回，schema：{"title":"古风四字或对仗标题(可选)","explanation":长文}。explanation 必须依次各出现一次【核心结论】【值得关注的时间节点】【行动建议】，顺序一致，不得合并、省略或改名。其中【值得关注的时间节点】是本文重点，要求：1. 按重要程度排序，每条单独一行、行首用 1. 2. 3. 编号；2. 每条写成「年份(或大运段) + 干支 + 为什么值得关注(引材料中的刑冲克害/喜忌依据) + 一句话怎么办」；3. 至少区分「机会窗口」与「风险窗口」两类，各自点明；4. 材料里若某年标注了六冲/三刑/六害等重大作用，必须纳入；5. 只写材料支持得起的结论，宁少勿滥，不要逐年流水账。【核心结论】用 2-4 条概括命局主线与该十年大势；【行动建议】用 2-4 条给出跨年份可执行的通用做法(贴合喜用五行，不重复时间节点里的原话)。全篇简体中文，每个主题内部一条一句，禁止整段连排。';
+
+const ADJUST_PREFIX = '你是资深子平命理师。根据【本命结论】的喜用五行与下方【资料库】中对应五行的后天调整/职业知识，输出该命局的【后天调整】与【事业职业适配】建议(长文，贴合资料，不要另造体系)。'
+  + '禁止输出注释或代码块，只给最终正文。JSON schema：{"explanation":长文}，explanation 必须依次各出现一次【后天调整】【事业适配】【健康注意】(不得合并、省略或改名)。'
+  + '\n\n# 判定标准(硬性)\n'
+  + '1. 一切建议必须由 natal.strengthScore / natal.patternFacts 给出的喜用五行推导出来，不得另立体系、不得假设未给出的事实。\n'
+  + '2. 【后天调整】按方位、颜色、行业属性、日常作息分条；【事业适配】给出适配岗位类型与不宜方向各至少一条，并说明与喜用的对应关系；【健康注意】只谈体质倾向与调养方向，不下诊断、不给具体病名断言。\n'
+  + '3. 每个主题内部必须分点：每条单独一行、行首 1. 2. 3. 编号，一句话一条，禁止整段连排。';
+
 export async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask, opts: AnalyzeOptions & { secret?: string } = {}): Promise<DeepSeekResult> {
   const nonAi = record.nonAiResult;
   // 神煞压缩为「名称@柱位」：与服务器/桌面端同一口径(实测省约 89% 体积)
@@ -156,6 +198,8 @@ export async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask,
     pillars: { year: record.yearPillar, month: record.monthPillar, day: record.dayPillar, hour: record.hourPillar },
     dayMaster: nonAi?.dayMaster, zodiac: nonAi?.zodiac, solarDate: nonAi?.solarDate,
     elements: nonAi?.elements, tenGods: nonAi?.tenGods, hiddenStems: nonAi?.hiddenStems,
+    // 引擎算定的格局与旺衰：模型只解读不重判(与服务器/桌面端同口径)
+    patternFacts: nonAi?.patternFacts, strengthScore: nonAi?.strengthScore,
     shenSha: compactShenSha(nonAi?.shenSha), relationships: nonAi?.relationships,
   };
   // 存储是瘦身过的(流年/流月/大运数组落库即清空)，因此必须优先采用任务自带的内联行，
@@ -175,46 +219,64 @@ export async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask,
     }
   }
   const isOverview = task?.type === 'overview';
-  const when = isOverview ? '全盘总结：未来十年中值得关注的节点'
-    : task?.type === 'adjustment' ? '后天调整与职业适配'
-    : task?.type === 'annual' ? y + '年'
-    : task?.type === 'monthly' ? y + '年' + task.month + '月'
-    : task?.type === 'decade' ? '大运'
-    : '本命';
-  const isBaseline = !task || task.type === 'baseline';
   const isAdjustment = task?.type === 'adjustment';
-  const fiveDimRule = isOverview
-    ? '你的任务不是重新推算、也不是逐段复述，而是横向比较这些已算好的结论，挑出真正值得注意的时间节点。严格依据材料，禁止补充材料里没有的干支或事件。explanation 必须依次各出现一次【核心结论】【值得关注的时间节点】【行动建议】(不得合并、省略或改名)。【值得关注的时间节点】是重点：按重要程度排序，每条写成「年份或大运段 + 干支 + 为什么值得关注(引材料中的刑冲克害/喜忌依据) + 一句话怎么办」，并区分机会窗口与风险窗口；材料里标了六冲/三刑/六害的年份必须纳入；宁少勿滥，不要逐年流水账。'
-    : isBaseline
-    ? 'explanation 必须以【身强身弱与喜忌】开头，随后按序各出现一次【健康】【事业】【财运】【爱情】(不得合并、省略或改名)。判断身强身弱按四步写明依据：①得令(月支生旺与十二长生)；②得地(四支藏干印比禄刃根基)；③得势(印比出现次数)；④克泄耗(食伤财官杀次数)，权衡后下结论；喜忌按通则：身弱喜印比、忌克泄耗，身强反之。'
-    : isAdjustment
-      ? 'explanation 必须依次各出现一次【后天调整】【事业适配】【健康注意】(不得合并、省略或改名)。'
-      : 'explanation 必须依次各出现一次【健康】【事业】【财运】【爱情】【刑冲克害批注】，顺序一致，不得合并、省略或改名；【刑冲克害批注】依据 annualHits/monthlyHits/decadeHits 逐条编号，每行 数字. 关系（干支实例）：一句影响；无命中时写 1. 本期无重大刑冲克害（仅提示）。';
-  const instruction = '你是资深子平命理师。仅依据下方JSON事实作答，禁止自行推算干支/十神/五行。'
-    + '。若为年份/月份分析且已有本命结论摘要请沿用。' + (isBaseline ? '输出 JSON 含 pattern/strength/usefulElements/avoidElements/explanation。' : '输出 JSON 仅含 explanation 以及可选 title。') + fiveDimRule
-    + ' 全篇一律简体中文，禁止繁体字。正文必须分点：每个主题每条单独一行，行首 1. 2. 3. 编号，一句话一条，不要整段连排。' + toneInstructionText(opts.tone)
-    + ' 不要输出注释或代码块。';
+  const isBaselineTask = !task || task.type === 'baseline';
   const scopeTypes = !task || task.type === 'annual' || task.type === 'monthly' || task.type === 'decade';
-  const baselineNote = (task && task.type !== 'baseline' && task.baseline)
-    ? '\n\n# 本命结论(已定，必须沿用，不得重算)\n' + String((task.baseline as { summary?: string }).summary ?? '')
-    : '';
-  const guideNote = isAdjustment
-    ? '\n\n# 资料库(喜用五行)' + '\n' + JSON.stringify(task?.guide ?? {})
-    : isOverview
-      ? '\n\n# 各时段分析要点(JSON)\n' + JSON.stringify(task?.findings ?? {})
-      : '';
-  const content = instruction + baselineNote + guideNote + '\n\n# 本命事实数据(JSON)\n' + JSON.stringify(natal)
-    + (isAdjustment || isOverview ? '\n\n# 当前分析目标\n' + when : scopeTypes ? '\n\n# 本时段数据(JSON)\n' + JSON.stringify(scope) + '\n\n# 当前分析目标\n' + when : '');
+  const when = isOverview ? '全盘总结：未来十年中值得关注的节点'
+    : isAdjustment ? '后天调整与职业适配'
+    : task?.type === 'annual' ? String(task.year) + '年'
+    : task?.type === 'monthly' ? String(task.year) + '年' + String(task.month) + '月'
+    : task?.type === 'decade' ? '所处大运(含 ' + String(task.year) + ' 年)'
+    : '本命';
+  // 公共前缀一律取模块级常量(逐字节一致)，可变内容按「变化频率从低到高」追加在后面。
+  const instruction = isBaselineTask ? BASELINE_PREFIX : isAdjustment ? ADJUST_PREFIX : isOverview ? OVERVIEW_PREFIX : SCOPE_PREFIX;
+  const toneText = OUTPUT_RULES_TEXT + '\n\n# 语气要求(必须按此措辞把握全篇)\n' + toneInstructionText(opts.tone);
+  const natalBlock = '\n\n# 本命事实数据(JSON，只依据此数据)\n' + JSON.stringify(natal);
+  const summaryOf = () => String((task?.baseline as { summary?: string } | undefined)?.summary ?? '');
+  let content: string;
+  if (isBaselineTask) {
+    content = instruction + natalBlock + toneText;
+  } else if (isAdjustment) {
+    content = instruction
+      + '\n\n# 本命结论(引擎已定，必须沿用，不得重算)\n' + summaryOf()
+      + natalBlock + toneText
+      + '\n\n# 资料库(喜用五行)\n' + JSON.stringify(task?.guide ?? {})
+      + '\n\n# 当前分析目标\n' + when;
+  } else if (isOverview) {
+    content = instruction + natalBlock + toneText
+      + '\n\n# 本命结论(引擎已定，必须沿用，不得重算)\n' + summaryOf()
+      + '\n\n# 各时段分析要点(JSON)\n' + JSON.stringify(task?.findings ?? {})
+      + '\n\n# 当前分析目标\n' + when;
+  } else if (scopeTypes) {
+    // 年度段在前、月度段在后：同一公历年的流年与该年各流月共享到年度段末尾的长前缀。
+    const yearPart: Record<string, unknown> = {};
+    for (const k of ['annual', 'decade', 'annualHits', 'decadeHits']) if (scope[k] !== undefined) yearPart[k] = scope[k];
+    // 「年龄」属于该期事实，流年放年度段、流月放月度段；大运不带年龄。
+    if (scope.age !== undefined && task?.type !== 'decade' && task?.month === undefined) yearPart.age = scope.age;
+    const monthPart: Record<string, unknown> = {};
+    if (task?.month !== undefined) {
+      for (const k of ['monthly', 'monthlyHits']) if (scope[k] !== undefined) monthPart[k] = scope[k];
+      if (scope.age !== undefined) monthPart.age = scope.age;
+    }
+    const note = summaryOf();
+    content = instruction + natalBlock + toneText
+      + (note ? '\n\n# 本命结论(引擎已定，必须沿用，不得重算或推翻)\n' + note : '')
+      + '\n\n# 本年度运势数据(JSON)\n' + JSON.stringify(yearPart)
+      + (task?.month !== undefined ? '\n\n# 本月运势数据(JSON)\n' + JSON.stringify(monthPart) : '')
+      + '\n\n# 当前分析目标\n' + when;
+  } else {
+    content = instruction + natalBlock + toneText;
+  }
   // 按“当前使用通道 → 其余已配置通道”依次尝试；每个通道用各自的端点/模型/参数
   const errors: string[] = [];
   for (const channel of channelOrder()) {
     const secret = opts.secret ?? getBrowserCredential(channel.id);
     if (!secret) { errors.push(channel.label + '：未配置凭据'); continue; }
     const payload: Record<string, unknown> = { model: channel.model, max_tokens: 32768, messages: [
-      { role: 'system', content: '请把思考压缩到最短，直接输出符合要求的JSON正文。' },
+      { role: 'system', content: SYSTEM_SCOPE },
       { role: 'user', content },
     ] };
-    if (channel.id === 'deepseek') payload.reasoning_effort = (isBaseline || isAdjustment || isOverview) ? 'high' : 'low';
+    if (channel.id === 'deepseek') payload.reasoning_effort = (isBaselineTask || isAdjustment || isOverview) ? 'high' : 'low';
     if (channel.disableThinking) payload.enable_thinking = false;
     if (channel.temperature !== undefined) payload.temperature = channel.temperature;
     try {

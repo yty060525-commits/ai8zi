@@ -42,8 +42,12 @@ export const REQUIRED_SECTIONS: Record<string, string[]> = {
   overview: ['核心结论', '值得关注的时间节点', '行动建议'],
 };
 
-/** 固定最大并发(命中率优先)：不爬坡。出现限流/超时/失败时冷却后继续发，不降并发数。 */
-export const FIXED_CONCURRENCY = { scope: 6, decade: 3, repair: 5 } as const;
+/** 固定最大并发(命中率优先)：**不爬坡** —— 一开始就满速发，遇限流/超时只冷却重发，绝不降档。
+ * 取 8 路：单张命盘最多 27 条请求；三条通道里最紧的是 Kimi(约 64 RPM 稳态)，
+ * 8 路 × 平均 6s ≈ 每秒 1.3 条新请求，配合秒级冷却兜底刚好贴住最慢通道的稳态吞吐，
+ * 同时远在 DeepSeek/Qwen 的上限之下，不会长期撞墙。repair 用于收尾补跑(量小、单独一轮)。 */
+export const FIXED_CONCURRENCY = { scope: 8, decade: 3, repair: 6 } as const;
+/** 冷却时长：限流与超时都等 3s(上游计数窗口多为秒级)后原样重发。 */
 const COOLDOWN_MS = 3000;
 
 // 只有「我们自己发太快」才需要冷却等待；上游 5xx/超时属于服务故障，重试即可，不应拖慢整体收尾。
@@ -52,8 +56,10 @@ const TRANSIENT_RE = /HTTP\s*5\d\d|timeout|timed out|network|econn|网络|超时
 export const isThrottleFailure = (error?: string): boolean => !!error && (RATE_LIMIT_RE.test(error) || TRANSIENT_RE.test(error));
 /** 仅“限流”值得进入冷却窗口(避免继续撞墙)；5xx/网络抖动只重试不冷却。 */
 export const isRateLimited = (error?: string): boolean => !!error && RATE_LIMIT_RE.test(error);
+/** 超时/不可达：说明这条通道被我们压满了，与限流同样处理(冷却后原样重发)。 */
+export const isTimeoutFailure = (error?: string): boolean => !!error && /超时|timed out|timeout|不可达/i.test(error);
 
-async function fixedMapLimit<T>(items: T[], concurrency: number, worker: (item: T) => Promise<{ status?: string; error?: string } | void>): Promise<void> {
+export async function fixedMapLimit<T>(items: T[], concurrency: number, worker: (item: T) => Promise<{ status?: string; error?: string } | void>): Promise<void> {
   const queue = [...items];
   const c = Math.max(1, concurrency);
   let running = 0;
@@ -81,7 +87,8 @@ async function fixedMapLimit<T>(items: T[], concurrency: number, worker: (item: 
           catch (error) { abortReason = abortReason ?? error; outcome = undefined; }
           finally {
             running -= 1;
-            if (outcome && outcome.status === 'failed' && isRateLimited(outcome.error)) cooledUntil = Date.now() + COOLDOWN_MS;
+            // 「限流 / 超时」一律冷却后重发(不爬坡、不降并发)；上游 5xx 属对方故障，重试即可不必等。
+            if (outcome && outcome.status === 'failed' && (isRateLimited(outcome.error) || isTimeoutFailure(outcome.error))) cooledUntil = Date.now() + COOLDOWN_MS;
             pump();
             checkDone();
           }
@@ -301,12 +308,31 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
       if (task.type === 'annual' || task.type === 'monthly' || task.type === 'decade') task.baseline = { summary: baselineSummaryText } as never;
     }
   }
-  // 前缀缓存实测：全部时段任务(流年+流月+大运)共用同一段前缀，直到「# 本时段数据」才开始分叉
-  // —— 1441/1771 字符 ≈ 81% 完全一致。所以只需 1 条请求预热，其余时段任务可以一次性全并发，
-  // 不必按年分组串行(分组只会拉长总时长，对命中率毫无帮助)。不爬坡，遇限流只冷却重发。
-  const scopeTasks = [...pick('annual'), ...pick('monthly'), ...pick('decade')];
-  if (scopeTasks.length > 0) await step(scopeTasks[0]); // 预热：建立 SCOPE 公共前缀缓存
-  if (scopeTasks.length > 1) await fixedMapLimit(scopeTasks.slice(1), FIXED_CONCURRENCY.scope, step);
+  // ── 命中率优先的调度(实测驱动，不爬坡)──────────────────────────────────────────
+  // 提示词已按「变化频率从低到高」重排，实测共享前缀(见 server/ai.mjs 的同款分段)：
+  //   · 全局公共前缀 = SCOPE_PREFIX + natal + 输出硬性要求 + 语气 ≈ 1274 字符 / 最短全文 1396 ≈ 91%
+  //   · 同一公历年的「流年 ↔ 该年各流月」在年度段上再多共享 ~263 字符
+  // 所以调度原则：先用一条请求把公共前缀烘进上游缓存，再让同年任务一起并发吃这段长前缀。
+  // 组内不再串行——流年与该年流月只差尾巴，彼此都能命中已烘焙的前缀；唯一的串行点
+  // 是第一条预热请求，用来保证「后面的请求进来时前缀已经在缓存里」。
+  const annuals = pick('annual');
+  const monthlies = pick('monthly');
+  const decades = pick('decade');
+  const byYear = new Map<number, BaziAnalysisTask[]>();
+  for (const t of [...annuals, ...monthlies, ...decades]) {
+    const key = t.year ?? 0;
+    const list = byYear.get(key) ?? [];
+    list.push(t);
+    byYear.set(key, list);
+  }
+  // 每组内流年排最前：它一落地，同组流月开始跑时前缀已含该年年度段。
+  const groups = [...byYear.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, list]) => list.sort((x, y) => (x.type === 'annual' ? -1 : 0) - (y.type === 'annual' ? -1 : 0)));
+  const flat = groups.flat();
+  if (flat.length > 0) await step(flat[0]);                 // 预热：建立全局公共前缀
+  // 组间并发、组内也并发：整批交给固定池一次性发满，只有「限流/超时」才冷却重发。
+  if (flat.length > 1) await fixedMapLimit(flat.slice(1), FIXED_CONCURRENCY.scope, step);
   // 工作/生活/职业知识：最后才上传(等大运流年流月都分析完，避免上下文污染)
   if (favorite && baselineResult.status === 'completed') {
     const guide: ElementGuide = ELEMENT_GUIDES[favorite];

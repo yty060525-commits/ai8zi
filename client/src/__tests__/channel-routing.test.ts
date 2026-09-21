@@ -78,7 +78,7 @@ describe('网页直连按当前使用通道路由', () => {
     const body = JSON.parse(String((vi.mocked(fetch).mock.calls[0][1] as RequestInit).body));
     const content = String(body.messages[1].content);
     expect(content).not.toContain('年龄约');
-    expect(content).toContain('本时段数据');
+    expect(content).toContain('本年度运势数据');
   });
 });
 
@@ -96,8 +96,8 @@ describe('网页直连的时段数据与全盘总结(回归)', () => {
     expect(content).toContain('丁卯');           // 所处大运
     expect(content).toContain('六合(甲子)');      // 刑冲克害命中串
     expect(content).toContain('驿马@月支');       // 神煞压缩口径与服务器一致
-    expect(content.indexOf('# 本命事实数据')).toBeLessThan(content.indexOf('# 本时段数据'));
-    expect(content.lastIndexOf('# 当前分析目标')).toBeGreaterThan(content.indexOf('# 本时段数据'));
+    expect(content.indexOf('# 本命事实数据')).toBeLessThan(content.indexOf('# 本年度运势数据'));
+    expect(content.lastIndexOf('# 当前分析目标')).toBeGreaterThan(content.indexOf('# 本年度运势数据'));
   });
 
   it('全盘总结任务携带各时段要点，并要求按三段输出', async () => {
