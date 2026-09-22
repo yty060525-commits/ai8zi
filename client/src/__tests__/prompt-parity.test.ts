@@ -51,6 +51,15 @@ describe('三通道提示词一致性', () => {
     expect(base).toContain('不得改判');
     expect(base).toContain('inSeason');
   });
+  it('判定标准里的英文字段名一律标注为内部代号，并禁止抄进正文', () => {
+    const base = grabJs(server, 'BASELINE_PROMPT');
+    expect(base).toContain('绝对不得写进 explanation');
+    // 截图事故：「得令与否(inSeason)为false」原文照抄。这些括号注音式写法必须彻底消失。
+    for (const word of ['inSeason', 'monthHasSupport', 'support', 'drain', 'index', 'label']) {
+      expect(base).not.toContain(`(${word})`);
+      expect(base).not.toContain(`（${word}）`);
+    }
+  });
   it('公共前缀不含任何随任务变化的内容', () => {
     for (const name of ['SCOPE_PREFIX', 'BASELINE_PROMPT', 'OVERVIEW_PROMPT']) {
       const text = grabJs(server, name);

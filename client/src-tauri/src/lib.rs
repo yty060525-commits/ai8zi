@@ -359,9 +359,9 @@ const BASELINE_PREFIX: &str = concat!(
     "当前分析目标：本命。用 JSON(仅 JSON)返回，schema：{\"pattern\":格局,\"strength\":身强/身弱/中和偏旺/中和偏弱,\"usefulElements\":[喜用],\"avoidElements\":[忌用],\"explanation\":长文}。",
     "\n\n# 判定标准(硬性，逐条遵守)\n",
     "1. 格局：直接采用 natal.patternFacts.name，不得另立格局名、不得改写；patternFacts.basis 是取格依据，须原样解释给用户。若 patternFacts.special 给出变格候选，须先复核(从格须日主无有力之根且印比虚浮受制；专旺须满盘一气成势)，复核不成立要写明「不按变格论，仍以正格X取用」。\n",
-    "2. 旺衰：直接采用 natal.strengthScore.label，不得改判。其算法：助身方(比劫+印)与克泄耗方(食伤+财+官杀)分别累加——天干每透一位 6 分(月干 9 分)；地支藏干按本气 10 / 中气 5 / 余气 3；月支只对日主自己的通根再乘 2(提纲秉令只增益日主之气，不给财官加倍)；最后按日主在该支的十二长生调整通根之力(帝旺×1.4、死绝则不为根)。index=(support-drain)/(support+drain)×100，>=25 身强、<=-25 身弱，其间为中和偏旺/偏弱。inSeason＝月支是日主的禄或刃之地(甲乙禄寅、丙戊禄巳、庚辛禄申、壬癸禄亥；甲卯丙戊午庚酉壬子为阳刃)，被邻支冲则破令不算得令。monthHasSupport 只表示月支藏干里出现过印比(含中余气)，不等于得令，勿混用。\n",
+    "2. 旺衰：直接采用 natal.strengthScore.label，不得改判。其算法：助身方(比劫+印)与克泄耗方(食伤+财+官杀)分别累加——天干每透一位 6 分(月干 9 分)；地支藏干按本气 10 / 中气 5 / 余气 3；月支只对日主自己的通根再乘 2(提纲秉令只增益日主之气，不给财官加倍)；最后按日主在该支的十二长生调整通根之力(帝旺×1.4、死绝则不为根)。index=(support-drain)/(support+drain)×100，>=25 身强、<=-25 身弱，其间为中和偏旺/偏弱。inSeason＝月支是日主的禄或刃之地(甲乙禄寅、丙戊禄巳、庚辛禄申、壬癸禄亥；甲卯丙戊午庚酉壬子为阳刃)，被邻支冲则破令不算得令。monthHasSupport 只表示月支藏干里出现过印比(含中余气)，不等于得令，勿混用。(以上英文字段名仅是本提示词内部的代号，仅供你理解算法，绝对不得写进 explanation。)\n",
     "3. explanation 必须以【身强身弱与喜忌】开头，随后按顺序各出现一次【健康】【事业】【财运】【爱情】(不得合并、省略或改名)，末尾可加【总评/行为建议】。\n",
-    "4. 【身强身弱与喜忌】一段必须引用 strengthScore 的数字与明细来写，至少包含：得令与否(inSeason)、助身方得分(support)与克泄耗方得分(drain)、净分(index)与档位(label)；再点出命局最关键的病处(如某十神太旺/太弱、何物伤格)。禁止只写「日主偏弱」这类无数据结论。\n",
+    "4. 【身强身弱与喜忌】一段必须引用旺衰的数字与明细来写，至少包含：是否得令、助身方得分、克泄耗方得分、净分与档位；再点出命局最关键的病处(如某十神太旺/太弱、何物伤格)。禁止只写「日主偏弱」这类无数据结论。\n",
     "5. 喜忌推导规则(通则，须写明所依通则)：身弱→喜印比、忌克泄耗；身强→喜克泄耗、忌印比；中和偏旺/偏弱→以调候与通关需要为主，兼顾抑扬。若格局本身另有要求(如阳刃喜官杀制、建禄喜财官、从格须顺势、专旺须顺生)，以格局要求优先并在文中说明为何与扶抑通则一致或冲突。\n",
     "6. usefulElements / avoidElements 只能填 木/火/土/金/水 五项中的若干项，且必须与第 5 条推出的喜忌一致，不得凭印象填写。\n",
     "7. 每个主题内部必须分点：每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。禁止在 JSON 顶层重复输出 overall/health/career/wealth/love/notice 等字段，也不要先给短句摘要再写长文。"
@@ -569,7 +569,7 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
             })
             .unwrap_or_else(|| "（暂无本命结论）".into());
         let findings_text = task.findings.as_ref().map(|v| serde_json::to_string(v).unwrap_or_default()).unwrap_or_else(|| "{}".into());
-        let output_rules_ov = "\n\n# 输出硬性要求(违反即整篇作废重写)\n1. 全篇一律使用简体中文(UTF-8)，禁止任何繁体字、异体字混入。\n2. explanation 的【】小节必须按本任务规定逐段出现、各只出现一次，顺序一致，不得合并、省略或改名。\n3. 每个小节至少 1 条编号要点；每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。\n4. 禁止输出注释、代码块或任何围栏标记，只给最终正文。";
+        let output_rules_ov = "\n\n# 输出硬性要求(违反即整篇作废重写)\n1. 全篇一律使用简体中文(UTF-8)，禁止任何繁体字、异体字混入。\n2. explanation 的【】小节必须按本任务规定逐段出现、各只出现一次，顺序一致，不得合并、省略或改名。\n3. 每个小节至少 1 条编号要点；每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。\n4. 禁止输出注释、代码块或任何围栏标记，只给最终正文。\n5. 正文只写中文，不得出现任何英文单词、英文字母缩写或拼音。上面【事实数据(JSON)】与本提示词里出现的英文键名(如 patternFacts、strengthScore、inSeason、monthHasSupport、index、support、drain、label、name、basis、special、dayMaster、hiddenStems、tenGods、shenSha、scope 等)全部只是数据结构的代号：你要把它的「数值和含义」用中文说出来，绝不可以把这个英文词本身抄进正文。例如不得写\"得令与否(inSeason)为false\"，只能写\"月支非日主禄刃之地，不得令\"；不得写\"monthHasSupport为false\"，只能写\"月支藏干中未见印比，无通根之助\"。数值也一律用中文数字表述。";
         let content = format!("{}\n# 本命结论(已定，必须沿用，不得重算)\n{}\n\n# 本命事实数据(JSON，只依据此数据)\n{}{}\n\n# 语气要求\n{}\n\n# 各时段分析要点(JSON)\n{}\n\n# 当前分析目标\n全盘总结：未来十年中值得关注的节点",
             OVERVIEW_PROMPT, baseline_text, natal_text, output_rules_ov, tone_instruction(clamp_tone(task.tone)), findings_text);
         return Ok(serde_json::json!({
@@ -606,7 +606,7 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
         task.baseline.as_ref().and_then(|b| b.get("summary")).and_then(|s| s.as_str())
             .map(|s| format!("\n\n# 本命结论(引擎已定，必须沿用，不得推翻或重算)\n{s}\n")).unwrap_or_default()
     } else { String::new() };
-    let output_rules = "\n\n# 输出硬性要求(违反即整篇作废重写)\n1. 全篇一律使用简体中文(UTF-8)，禁止任何繁体字、异体字混入。\n2. explanation 的【】小节必须按本任务规定逐段出现、各只出现一次，顺序一致，不得合并、省略或改名。\n3. 每个小节至少 1 条编号要点；每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。\n\n# 语气要求\n";
+    let output_rules = "\n\n# 输出硬性要求(违反即整篇作废重写)\n1. 全篇一律使用简体中文(UTF-8)，禁止任何繁体字、异体字混入。\n2. explanation 的【】小节必须按本任务规定逐段出现、各只出现一次，顺序一致，不得合并、省略或改名。\n3. 每个小节至少 1 条编号要点；每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。\n4. 正文只写中文，不得出现任何英文单词、英文字母缩写或拼音。上面【事实数据(JSON)】与本提示词里出现的英文键名(如 patternFacts、strengthScore、inSeason、monthHasSupport、index、support、drain、label、name、basis、special、dayMaster、hiddenStems、tenGods、shenSha、scope 等)全部只是数据结构的代号：你要把它的「数值和含义」用中文说出来，绝不可以把这个英文词本身抄进正文。例如不得写\"得令与否(inSeason)为false\"，只能写\"月支非日主禄刃之地，不得令\"；不得写\"monthHasSupport为false\"，只能写\"月支藏干中未见印比，无通根之助\"。数值也一律用中文数字表述。\n\n# 语气要求\n";
     let content = if is_scope {
         {
             // 只有流月任务才追加「本月」段；流年/大运到此为止，前缀更短也更能与同年任务对齐。
