@@ -247,6 +247,8 @@ describe('排盘页顶部「问问 AI」锚点', () => {
 
     expect(scrollIntoView).toHaveBeenCalledTimes(1);
     expect(scrollIntoView.mock.instances[0]).toBe(document.querySelector('.chat-panel'));
+    // 必须是 auto：smooth 依赖动画帧，被降频/后台时整段丢失，点了没反应。
+    expect(scrollIntoView.mock.calls[0][0]).toEqual({ behavior: 'auto', block: 'start' });
     expect(document.activeElement).toBe(input);
     // 滚动由 scrollIntoView 负责，聚焦时不能再让浏览器自己滚一遍，否则会跳走。
     expect(input.__opts).toEqual({ preventScroll: true });

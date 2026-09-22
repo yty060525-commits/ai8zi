@@ -61,7 +61,10 @@ export function clearChatThread() {
 export function scrollToChat() {
   const panel = document.querySelector('.chat-panel');
   if (!panel) return;
-  panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  /* 用 auto 而非 smooth：平滑滚动依赖动画帧，页面处于后台或被降频时会被整个丢掉、
+     表现为「点了没反应」。锚点跳转必须保证生效，不能用动画换。
+     顺带一条：只在这里滚动，聊天区自己不自动滚，否则一进页面就被拽走。 */
+  panel.scrollIntoView({ behavior: 'auto', block: 'start' });
   panel.querySelector<HTMLInputElement>('.chat-input-row input')?.focus({ preventScroll: true });
 }
 
