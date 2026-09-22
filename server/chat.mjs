@@ -170,10 +170,37 @@ export const CHAT_SYSTEM = '你是一位资深子平命理师，正在与用户�
   + '【绝对禁止】禁止自行推算或猜测干支、十神、五行、旺衰、格局、神煞；'
   + '禁止用命理常识、通书、经验、类比或"一般来说""通常""可能会"来补足缺失数据；'
   + '禁止在证据之外新增任何未给出的结论。'
-  + '已有事实优先，格局与旺衰一律以 natal.patternFacts / natal.strengthScore 为准，不得重判、不得改口径。'
+  + '已有事实优先，格局与旺衰一律以命盘事实里的 patternFacts / strengthScore 字段为准，不得重判、不得改口径。'
   + '【说重点】先说结论，再给依据，只讲与该问题直接相关的话，不铺垫、不寒暄、不重复问题、不写无关主题。'
+  + '【禁止英文】正文一律用中文表述，不得出现任何英文单词、英文缩写或拼音；'
+  + '尤其禁止把证据 JSON 里的英文字段名(如 patternFacts、strengthScore、dayMaster、elementRatio 等)、'
+  + '变量名、代码标识符原样抄进正文，要说的内容一律翻译成中文说法。'
   + '输出为简体中文纯文本：不要 JSON、不要代码块/注释/围栏标记；总长 150~350 字；'
   + '分点(1. 2. 3.)作答，有证据时每点都注明依据的批断小节，无证据时直接说明缺数据并给出补算建议；全篇不得出现繁体字。';
+
+/** 聊天正文去英文(与客户端 features/chart/elements.ts 的 sanitizeChatText 同口径)。
+ *  实测(deepseek + reasoning_effort=high)模型会把证据 JSON 里的英文字段名原样抄进正文，
+ *  提示词只是软约束，故在此做确定性清洗兜底。 */
+export const FIELD_NAME_ZH = {
+  patternFacts: '格局事实', strengthScore: '旺衰评分', dayMaster: '日主', elementRatio: '五行比例',
+  elements: '五行', hiddenStems: '藏干', tenGods: '十神', naYin: '纳音', twelveLongevity: '十二长生',
+  shenSha: '神煞', relationships: '刑冲合害', solarDate: '公历日期', lunarDate: '农历日期',
+  zodiac: '生肖', gender: '性别', birthYear: '出生年', pillars: '四柱', natal: '命盘事实',
+  periodFacts: '时段运势', analyses: '已算批断', missing: '数据缺口', plan: '检索计划',
+  verdict: '判定', favorites: '喜用', favorable: '喜用', unfavorable: '忌神', score: '分值',
+};
+
+export function sanitizeChatText(text) {
+  let out = String(text ?? '');
+  // 整段几乎纯英文(无中文且连续英文词 ≥4) → 视为跑偏，交回调用方按失败处理
+  const cjk = (out.match(/[\u4e00-\u9fff]/g) ?? []).length;
+  const latinWords = out.match(/[A-Za-z]{2,}/g) ?? [];
+  if (cjk === 0 && latinWords.length >= 4) return '';
+  out = out.replace(/[A-Za-z_][A-Za-z0-9_]{1,}/g, (word) => FIELD_NAME_ZH[word] ?? word);
+  out = out.replace(/(?<=[\u4e00-\u9fff\s、，。；：（）「」])[A-Za-z_][A-Za-z0-9_]{2,}/g, '');
+  out = out.replace(/\bAI\b/g, 'AI').replace(/\s{2,}/g, ' ').replace(/ +([，。、；：）])/g, '$1');
+  return out.trim();
+}
 
 /** 证据摘要压成一段稳定前缀(同盘同题逐字节一致，吃上游前缀缓存)，可变尾巴只有问题本身。 */
 export function buildChatMessages({ question, history = [], evidence, tone = 80 }) {
@@ -236,10 +263,11 @@ export async function runChat(db, user, body = {}) {
   const cacheable = history.length === 0; // 追问依赖上下文，不缓存
   const evidenceMeta = { recordId: record.id, personName: record.name, plan };
   // 先查缓存：即便服务器当前没有配置任何密钥(或密钥被移除)，已入库的答案仍应可复用。
+  // 缓存也过一遍去英文：早先落库的答案可能残留英文字段名，读时顺手洗净。
   if (cacheable) {
     for (const model of (providers.length ? providers.map((p) => p.model) : PROVIDERS.map((p) => p.model))) {
       const hit = readCache(db, chatCacheKey(record, question, model, tone));
-      if (hit) return { status: 'completed', answer: hit, cached: true, evidence: evidenceMeta };
+      if (hit) { const clean = sanitizeChatText(hit); if (clean) return { status: 'completed', answer: clean, cached: true, evidence: evidenceMeta }; }
     }
   }
   if (providers.length === 0) return { status: 'not_configured', error: '服务器未配置 AI 密钥，请在服务器设置中填写后保存' };
@@ -248,8 +276,11 @@ export async function runChat(db, user, body = {}) {
     const ck = cacheable ? chatCacheKey(record, question, provider.model, tone) : null;
     const result = await callProvider(provider, providerKey(db, provider.id), messages, 'high', 'text');
     if (result.text) {
-      if (ck) { try { writeCache(db, ck, result.text); } catch { /* 写缓存失败不影响回答 */ } }
-      return { status: 'completed', answer: result.text, cached: false, evidence: evidenceMeta };
+      const clean = sanitizeChatText(result.text);
+      // 洗净后为空 = 模型整段跑成英文，当作该 provider 失败，换下一个通道再试
+      if (!clean) { errors.push(provider.id + ': 模型输出不是中文'); continue; }
+      if (ck) { try { writeCache(db, ck, clean); } catch { /* 写缓存失败不影响回答 */ } }
+      return { status: 'completed', answer: clean, cached: false, evidence: evidenceMeta };
     }
     errors.push(provider.id + ': ' + (result.error || 'failed'));
   }

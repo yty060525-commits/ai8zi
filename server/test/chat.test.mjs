@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { openDatabase, insertRecord, getRecordById, writeCache, readCache, clearChartCache } from '../db.mjs';
-import { analyzeQuestion, extractWhen, sliceSections, collectEvidence, buildChatMessages, chatCacheKey, runChat } from '../chat.mjs';
+import { analyzeQuestion, extractWhen, sliceSections, collectEvidence, buildChatMessages, chatCacheKey, runChat, sanitizeChatText, FIELD_NAME_ZH } from '../chat.mjs';
 import { saveProviderKey, cacheKey } from '../ai.mjs';
 import { createApp } from '../app.mjs';
 
@@ -234,6 +234,45 @@ describe('runChat 解析路径', () => {
     } else {
       assert.equal(reply.status, 'not_configured');
     }
+    d.close();
+  });
+});
+
+/* ---------- 聊天正文去英文：与客户端 features/chart/elements.ts 同口径 ---------- */
+describe('聊天正文去英文(防英文字段名漏进正文)', () => {
+  test('证据 JSON 的英文字段名翻成中文而非删掉', () => {
+    const out = sanitizeChatText('本命盘事实为庚金日主、身弱（strengthScore 42），喜土金。');
+    assert.doesNotMatch(out, /strengthScore/);
+    assert.match(out, /旺衰评分 42/);
+    assert.match(out, /庚金日主/);
+  });
+  test('未收录的变量名从中文语境剔除，纯中文正文原样不动', () => {
+    const out = sanitizeChatText('依据 someInternalVar 判断，身弱。');
+    assert.doesNotMatch(out, /[A-Za-z]{2,}/);
+    const pure = '1. 事业：稳中有进。依据：流年批断的【事业】小节。';
+    assert.equal(sanitizeChatText(pure), pure);
+  });
+  test('整段跑成英文 → 返回空(交回调用方换通道)', () => {
+    assert.equal(sanitizeChatText('Sorry, I cannot answer this question based on the provided data.'), '');
+    assert.equal(sanitizeChatText(''), '');
+  });
+  test('字段名映射表与服务端一致(两端口径基础)', () => {
+    for (const key of ['patternFacts', 'strengthScore', 'dayMaster', 'elementRatio', 'periodFacts', 'missing']) {
+      assert.ok(FIELD_NAME_ZH[key], key);
+      assert.match(FIELD_NAME_ZH[key], /^[\u4e00-\u9fff]+$/);
+    }
+  });
+  test('缓存答案读出来也去英文：旧的脏缓存自动洗净', async () => {
+    const d = openDatabase(':memory:');
+    insertRecord(d, { id: 'san1', userId: 'usan', name: '洗衣', gender: 'male', birthYear: 1984, birthMonth: 2, createdAt: '2025-01-01', yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午', nonAiResult: { greatFortunes: [], annualFortunes: [], monthlyFortunes: [] }, aiStatus: 'completed' });
+    const stored = getRecordById(d, 'san1');
+    // 不配密钥 → 走「缓存优先于密钥检查」分支，只验证读出的答案已被洗净
+    writeCache(d, chatCacheKey(stored, '我的喜用五行是什么？', 'deepseek-flash', 80), '身弱（strengthScore 42）喜土金。');
+    const reply = await runChat(d, { id: 'usan', role: 'user' }, { question: '我的喜用五行是什么？' });
+    assert.equal(reply.status, 'completed');
+    assert.equal(reply.cached, true);
+    assert.doesNotMatch(reply.answer, /strengthScore/);
+    assert.match(reply.answer, /旺衰评分/);
     d.close();
   });
 });

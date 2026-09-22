@@ -17,7 +17,7 @@ import type { BaziRecord } from '../types/domain';
 import { listBaziRecords } from './clientRepository';
 import { isServerMode, serverFetch, ServerError } from './serverClient';
 import { chatDirect, toneInstructionText } from './deepseekAdapter';
-import { countElements } from '../features/chart/elements';
+import { countElements, sanitizeChatText } from '../features/chart/elements';
 
 export interface ChatMessage { role: 'user' | 'assistant'; content: string }
 export interface ChatPlan { recordId: string | null; personName: string | null; matchedCount: number; year?: number; month?: number; topics: string[] }
@@ -217,8 +217,11 @@ export const CHAT_SYSTEM = '你是一位资深子平命理师，正在与用户�
   + '【绝对禁止】禁止自行推算或猜测干支、十神、五行、旺衰、格局、神煞；'
   + '禁止用命理常识、通书、经验、类比或"一般来说""通常""可能会"来补足缺失数据；'
   + '禁止在证据之外新增任何未给出的结论。'
-  + '已有事实优先，格局与旺衰一律以 natal.patternFacts / natal.strengthScore 为准，不得重判、不得改口径。'
+  + '已有事实优先，格局与旺衰一律以命盘事实里的 patternFacts / strengthScore 字段为准，不得重判、不得改口径。'
   + '【说重点】先说结论，再给依据，只讲与该问题直接相关的话，不铺垫、不寒暄、不重复问题、不写无关主题。'
+  + '【禁止英文】正文一律用中文表述，不得出现任何英文单词、英文缩写或拼音；'
+  + '尤其禁止把证据 JSON 里的英文字段名(如 patternFacts、strengthScore、dayMaster、elementRatio 等)、'
+  + '变量名、代码标识符原样抄进正文，要说的内容一律翻译成中文说法。'
   + '输出为简体中文纯文本：不要 JSON、不要代码块/注释/围栏标记；总长 150~350 字；'
   + '分点(1. 2. 3.)作答，有证据时每点都注明依据的批断小节，无证据时直接说明缺数据并给出补算建议；全篇不得出现繁体字。';
 
@@ -267,7 +270,8 @@ export async function askChat(input: AskChatInput): Promise<ChatReply> {
       let provider: string | undefined;
       try { provider = localStorage.getItem('mingli.provider') ?? undefined; } catch { provider = undefined; }
       const { data } = await serverFetch<ChatReply>('/chat', { method: 'POST', body: { question, history, recordId, tone, periodFacts, provider }, signal: input.signal });
-      return { ...data, evidence: data?.evidence };
+      const answer = data?.status === 'completed' ? sanitizeChatText(String(data.answer ?? '')) : data?.answer;
+      return { ...data, answer, evidence: data?.evidence };
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return { status: 'failed', error: '已取消' };
       const offline = error instanceof ServerError && error.status === 0;
@@ -300,11 +304,12 @@ async function askChatLocal(input: { question: string; history: ChatMessage[]; t
         },
         messages,
       });
-      return { status: result.status as ChatReply['status'], answer: result.answer, error: result.error, cached: result.cached, evidence: meta };
+      return { status: result.status as ChatReply['status'], answer: result.answer ? sanitizeChatText(result.answer) : result.answer, error: result.error, cached: result.cached, evidence: meta };
     } catch (error) {
       return { status: 'failed', error: error instanceof Error ? error.message : '本机 AI 请求失败', evidence: meta };
     }
   }
   const result = await chatDirect(messages, { signal: input.signal });
-  return { status: result.status as ChatReply['status'], answer: (result as { answer?: string }).answer, error: (result as { error?: string }).error, evidence: meta };
+  const direct = (result as { answer?: string }).answer;
+  return { status: result.status as ChatReply['status'], answer: direct ? sanitizeChatText(direct) : direct, error: (result as { error?: string }).error, evidence: meta };
 }

@@ -43,3 +43,33 @@ export function countElements(pillars: string[]): { elements: Record<string, num
   const elementRatio = Object.fromEntries(ELEMENTS.map((element) => [element, elements[element] / (observed || 1)]));
   return { elements, elementRatio, elementRuleVersion: ELEMENT_RULE_VERSION };
 }
+
+/* ---------- 聊天正文去英文 ----------
+ * 实测(deepseek-chat + reasoning_effort=high)模型会把证据 JSON 里的英文字段名
+ * (patternFacts / strengthScore / dayMaster 等)原样抄进正文。提示词已明令禁止，
+ * 但提示词只是软约束，故再加一道确定性清洗兜底。
+ * 原则：只动「夹在中文语境里的英文词」，中文与标点一律不动；
+ * 整段纯英文(模型跑偏/报错)宁可清空后由上层提示缺数据，也不把英文丢给用户看。 */
+export const FIELD_NAME_ZH: Record<string, string> = {
+  patternFacts: '格局事实', strengthScore: '旺衰评分', dayMaster: '日主', elementRatio: '五行比例',
+  elements: '五行', hiddenStems: '藏干', tenGods: '十神', naYin: '纳音', twelveLongevity: '十二长生',
+  shenSha: '神煞', relationships: '刑冲合害', solarDate: '公历日期', lunarDate: '农历日期',
+  zodiac: '生肖', gender: '性别', birthYear: '出生年', pillars: '四柱', natal: '命盘事实',
+  periodFacts: '时段运势', analyses: '已算批断', missing: '数据缺口', plan: '检索计划',
+  verdict: '判定', favorites: '喜用', favorable: '喜用', unfavorable: '忌神', score: '分值',
+};
+
+export function sanitizeChatText(text: string): string {
+  let out = String(text ?? '');
+  // 1) 整段几乎全是英文(含连续英文词 ≥4 个且中文极少) → 视为跑偏，返回空交给上层兜底
+  const cjk = (out.match(/[\u4e00-\u9fff]/g) ?? []).length;
+  const latinWords = out.match(/[A-Za-z]{2,}/g) ?? [];
+  if (cjk === 0 && latinWords.length >= 4) return '';
+  // 2) 已知字段名 → 中文说法
+  out = out.replace(/[A-Za-z_][A-Za-z0-9_]{1,}/g, (word) => FIELD_NAME_ZH[word] ?? word);
+  // 3) 仍是纯英文词(未收录的标识符/变量名) → 删掉；保留单字母(AI 等缩写词由 4 步处理)
+  out = out.replace(/(?<=[\u4e00-\u9fff\s、，。；：（）「」])[A-Za-z_][A-Za-z0-9_]{2,}/g, '');
+  // 4) 常见英文缩写就地中文化
+  out = out.replace(/\bAI\b/g, 'AI').replace(/\s{2,}/g, ' ').replace(/ +([，。、；：）])/g, '$1');
+  return out.trim();
+}
