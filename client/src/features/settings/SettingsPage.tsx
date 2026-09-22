@@ -5,6 +5,7 @@ import { exportableRecords, reloadLocalForSession } from '../../data/clientRepos
 import { exportRecordsSQLite, exportRecordsSQLText } from '../../data/sqliteExport';
 import { importRecords, parseBackupFile, type ImportMode } from '../../data/sqlImport';
 import { apiAuth, getServerSession, getServerUrl, setServerSession, setServerUrl, type ServerSession } from '../../data/serverClient';
+import { BUILD_ID, buildLabel, cacheLabel } from '../../utils/buildInfo';
 
 type DisplayStatus = '已配置' | '未配置' | '保存中' | '保存失败';
 
@@ -263,5 +264,31 @@ export function SettingsPage() {
         {srvMsg && <p role="status">{srvMsg}</p>}
       </div>
     </section>
+    <VersionInfo />
   </main>;
+}
+
+/** 版本信息：显示当前页面构建号，并对比已激活的 SW 缓存号。
+ *  两者不一致＝页面还没换到最新版(旧缓存/旧页面)，是手机端「看不到新功能」的典型原因。 */
+function VersionInfo() {
+  const [swCache, setSwCache] = useState<string>('检测中…');
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        if (!('caches' in window)) { if (active) setSwCache('此环境不支持'); return; }
+        const keys = await caches.keys();
+        const mine = keys.filter((k) => k.startsWith('mingli-'));
+        if (active) setSwCache(mine.length ? mine.join('、') : '（无）');
+      } catch { if (active) setSwCache('读取失败'); }
+    })();
+    return () => { active = false; };
+  }, []);
+  const current = cacheLabel();
+  const stale = swCache !== current && swCache !== '检测中…' && swCache !== '此环境不支持' && swCache !== '读取失败' && swCache !== '（无）';
+  return <section aria-label="版本信息"><h2>版本信息</h2>
+    <p className="ai-status">页面版本：{buildLabel()}（{BUILD_ID}）</p>
+    <p className="ai-status">已缓存版本：{swCache}</p>
+    {stale ? <p className="form-error" role="alert">页面与已缓存版本不一致：当前显示的可能不是最新版。请下拉刷新或清除站点数据后重开。</p> : null}
+  </section>;
 }

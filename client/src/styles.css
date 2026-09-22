@@ -10,6 +10,8 @@
 .modal-backdrop { position: fixed; inset: 0; z-index: 2; display: grid; place-items: center; padding: 18px; background: rgb(0 0 0 / 45%); } .modal { width: min(100%, 560px); max-height: 90vh; overflow: auto; background: #fff; border: 1px solid #171717; padding: 22px; } .modal-header { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #ccc; margin-bottom: 20px; } .modal-header h2 { margin: 0 0 14px; } .text-button { min-height: 36px; padding: 5px 10px; margin-bottom: 10px; } .input-form { padding-bottom: 2px; } .checkbox-label { display: flex; align-items: center; grid-template-columns: auto 1fr; } .checkbox-label input { min-height: auto; }
 .placeholder-page { min-height: 250px; }
 .settings-entry { display: block; margin-left: auto; margin-bottom: 12px; }
+/* 构建版本戳：贴在固定底栏上方，手机上一眼可见「装的是哪一版」 */
+.build-stamp { position: fixed; left: 0; right: 0; bottom: 59px; margin: 0; padding: 3px 10px; text-align: center; font-size: 11px; color: #888; background: rgb(247 247 247 / 92%); letter-spacing: .04em; pointer-events: none; }
 .settings-page { background: #fff; border: 1px solid #d0d0d0; padding: 28px; }
 .settings-page section { margin-bottom: 24px; }
 .settings-form { display: grid; gap: 16px; max-width: 480px; }

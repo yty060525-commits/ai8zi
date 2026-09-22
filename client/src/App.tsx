@@ -5,6 +5,7 @@ import { RecordsPage } from './features/records/RecordsPage';
 import { PersonDetail } from './features/person/PersonDetail';
 import { saveBaziRecord } from './data/clientRepository';
 import { SettingsPage } from './features/settings/SettingsPage';
+import { BUILD_ID, buildLabel } from './utils/buildInfo';
 import type { BaziRecord } from './types/domain';
 
 export function App() {
@@ -31,5 +32,5 @@ export function App() {
   }
   return <div className="app-shell"><div className="app-content"><button className="settings-entry text-button" type="button" onClick={() => setSettingsOpen(true)}>设置</button>
     {settingsOpen ? <SettingsPage /> : section === 'chart' ? <ChartPage onRecordCreated={handleRecordCreated} /> : openedPersonId ? <PersonDetail refreshKey={recordsRevision} personId={openedPersonId} onBack={() => { setOpenedPersonId(null); setRecordsRevision((revision) => revision + 1); }} /> : <RecordsPage refreshKey={recordsRevision} onOpenPerson={setOpenedPersonId} />}
-  </div><BottomNav active={section} onChange={(nextSection) => { setSettingsOpen(false); handleSectionChange(nextSection); }} /></div>;
+  </div><p className="build-stamp" title={'构建号 ' + BUILD_ID} aria-label="页面版本">{buildLabel()}</p><BottomNav active={section} onChange={(nextSection) => { setSettingsOpen(false); handleSectionChange(nextSection); }} /></div>;
 }
