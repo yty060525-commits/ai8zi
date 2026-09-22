@@ -3,6 +3,7 @@ import { deleteBaziRecord, getBaziRecord, saveBaziRecord } from '../../data/clie
 import { ABORTED_MESSAGE, buildBaziTasks, isRetryableFailure, orchestrateBaziAnalysis, DEFAULT_TONE } from '../../data/baziOrchestrator';
 import { beginAiSession, cancelAiSession } from '../../data/deepseekAdapter';
 import { clearChartCache } from '../../data/storageInfo';
+import { sanitizeAnalysisText } from '../chart/elements';
 import type { BaziRecord, BaziTaskResult, NonAiChart } from '../../types/domain';
 import { interpersonalZodiac, zodiacOfBranch } from '../../utils/interpersonal';
 
@@ -236,14 +237,16 @@ export function pointBodyText(blocks: PointBlock[]): string {
   }).join('\n\n');
 }
 
-/** 复制正文排版：标题行 + 分点条目(•) + 段落间空行，方便检索/定位。 */
+/** 复制正文排版：标题行 + 分点条目(•) + 段落间空行，方便检索/定位。
+ *  与展示同理，「先读后洗」：旧记录里存的照抄字段也在这里被清掉，复制出去的不带英文。 */
 export function formatCopyBody(analysis: NonNullable<BaziTaskResult['analysis']>, selected: DimKey[] | null, keepWholeText = false): string {
   const blocks: string[] = [];
-  if (selected === null && analysis.title) blocks.push('标题：' + analysis.title);
+  if (selected === null && analysis.title) blocks.push('标题：' + sanitizeAnalysisText(analysis.title));
   if (analysis.pattern && selected === null && !analysis.explanation) {
-    blocks.push('格局：' + analysis.pattern + ' · 强弱：' + (analysis.strength || '—') + '　喜：' + (analysis.usefulElements ?? []).join('、') + '　忌：' + (analysis.avoidElements ?? []).join('、'));
+    const elements = (list?: string[]) => (list ?? []).map((item) => sanitizeAnalysisText(item)).filter(Boolean).join('、') || '—';
+    blocks.push('格局：' + (sanitizeAnalysisText(analysis.pattern) || '—') + ' · 强弱：' + (sanitizeAnalysisText(analysis.strength || '') || '—') + '　喜：' + elements(analysis.usefulElements) + '　忌：' + elements(analysis.avoidElements));
   }
-  const text = analysis.explanation || '';
+  const text = sanitizeAnalysisText(analysis.explanation || '');
   const allBlocks = toPointBlocks(text);
   let used: PointBlock[];
   if (!selected) {
@@ -261,9 +264,10 @@ export function formatCopyBody(analysis: NonNullable<BaziTaskResult['analysis']>
   return blocks.join('\n\n');
 }
 
-/** 展示用：分点渲染 AI 正文。 */
+/** 展示用：分点渲染 AI 正文。读取时也过一遍清洗 —— 早于提示词修复的旧记录里
+ *  存着 `(inSeason: false)` 这类照抄字段，写入路径管不到它们，只能在展示层兜住。 */
 function PointsView({ text }: { text?: string }) {
-  const blocks = toPointBlocks(text || '');
+  const blocks = toPointBlocks(sanitizeAnalysisText(text || ''));
   if (blocks.length === 0) return <p>（无正文）</p>;
   return <div className="points-view">{blocks.map((block, index) => (
     <div className="point-block" key={index}>{block.head ? <p className="point-head">{block.head}</p> : null}{block.points.length > 0 && <ul className="point-list">{block.points.map((point, i) => <li key={i}>{point}</li>)}</ul>}</div>
@@ -490,7 +494,7 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
     {record.aiStatus === 'not_configured' && <p role="status">AI 尚未可用：请先点页面左上角「设置」，在服务一/服务二中任选一个填写访问凭据并保存，再回来点 AI 分析。</p>}
     {record.aiStatus === 'failed' && <p role="status">个别任务自动重试多轮后仍未成功。常见原因：余额不足或额度已用完 / 密钥无效 / 请求过于频繁（限流）/ 网络超时或不可达 / 所选服务不可用。请按下方原因处理后，再点 AI 分析（只补失败项，不重复花钱）。</p>}
     {record.aiError && <p role="alert">原因：{safeAiError(record.aiError)}</p>}
-    {record.aiAnalysis && <div className="long-text"><strong>格局与强弱</strong><p>{record.aiAnalysis.pattern || '—'} · {record.aiAnalysis.strength || '—'}</p><p>喜：{(record.aiAnalysis.usefulElements ?? []).join('、') || '—'}　忌：{(record.aiAnalysis.avoidElements ?? []).join('、') || '—'}</p><PointsView text={record.aiAnalysis.explanation} /></div>}
+    {record.aiAnalysis && <div className="long-text"><strong>格局与强弱</strong><p>{sanitizeAnalysisText(record.aiAnalysis.pattern || '') || '—'} · {sanitizeAnalysisText(record.aiAnalysis.strength || '') || '—'}</p><p>喜：{(record.aiAnalysis.usefulElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}　忌：{(record.aiAnalysis.avoidElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}</p><PointsView text={record.aiAnalysis.explanation} /></div>}
     {/* 全盘总结正文(含古风标题)在下方「② 全盘总结」分组里完整展示；这里只留一处入口提示，避免同一段内容渲染两遍 */}
     {record.aiOverview && <p className="long-text" aria-label="全盘总结提要"><strong>全盘总结已完成：</strong>值得关注的年份与机会/风险窗口见下方「② 全盘总结」段落。</p>}
     {aiResults.length > 0 && <div className="ai-scopes">
@@ -522,10 +526,10 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
         return <section key={group.key} className="subsection scope-group" aria-label={group.title}><h4>{group.title}</h4>
           {items.map((item, idx) => {
             const analysis = item.analysis;
-            const lead = analysis && (analysis.pattern || analysis.strength) ? <p className="scope-lead">格局：{analysis.pattern || '—'} · 强弱：{analysis.strength || '—'}　喜：{(analysis.usefulElements ?? []).join('、') || '—'}　忌：{(analysis.avoidElements ?? []).join('、') || '—'}</p> : null;
+            const lead = analysis && (analysis.pattern || analysis.strength) ? <p className="scope-lead">格局：{sanitizeAnalysisText(analysis.pattern || '') || '—'} · 强弱：{sanitizeAnalysisText(analysis.strength || '') || '—'}　喜：{(analysis.usefulElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}　忌：{(analysis.avoidElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}</p> : null;
             return <details key={group.key + '-' + idx} className="scope-item" open={group.key === 'baseline' && item.status === 'completed'}>
               <summary>{describeScope(item, record)}<span className="scope-status">　{statusText[item.status === 'completed' ? 'completed' : item.status === 'failed' ? 'failed' : 'not_configured']}</span></summary>
-              {item.status === 'completed' && analysis ? <div className="scope-body">{analysis.title ? <p className="scope-title"><strong>{analysis.title}</strong></p> : null}{lead}<PointsView text={analysis.explanation} /></div> : item.status === 'failed' ? (busy ? <p className="retry-hint">该任务失败，正在自动重新调用 AI…</p> : <p className="form-error">自动重试多轮后仍失败：{safeAiError(item.error ?? '未知错误')}</p>) : item.status === 'not_configured' ? <p>未配置密钥，本项未生成。</p> : null}
+              {item.status === 'completed' && analysis ? <div className="scope-body">{analysis.title ? <p className="scope-title"><strong>{sanitizeAnalysisText(analysis.title)}</strong></p> : null}{lead}<PointsView text={analysis.explanation} /></div> : item.status === 'failed' ? (busy ? <p className="retry-hint">该任务失败，正在自动重新调用 AI…</p> : <p className="form-error">自动重试多轮后仍失败：{safeAiError(item.error ?? '未知错误')}</p>) : item.status === 'not_configured' ? <p>未配置密钥，本项未生成。</p> : null}
             </details>;
           })}
         </section>;

@@ -32,8 +32,16 @@ const missing = files.filter(f => !shas.has(f.rel)).map(f => f.rel);
 console.log('missing:', missing.length ? missing.join(', ') : '(none)');
 if (shas.size !== files.length) process.exit(1);
 const flat = [...shas].map(([p, sha]) => ({ path: p, mode: '100644', type: 'blob', sha }));
-const tree = await gh('POST', '/repos/' + REPO + '/git/trees', { tree: flat });
+// 保留历史带哈希 chunk：已加载的旧页面会动态 import 它当初那版的 chunk 文件名，
+// 一旦从分支上删掉，旧页面就会 404(截图事故)。不带哈希的入口文件仍然只留最新一份。
+const HASHED = /-[A-Za-z0-9_-]{8,}\.(?:js|css)$/;
+const current = new Set(flat.map((e) => e.path));
+const kept = (treeInfo.data?.tree || []).filter((e) => e.type === 'blob' && HASHED.test(e.path) && !current.has(e.path));
+if (kept.length) console.log('retaining', kept.length, 'old hashed chunk(s):', kept.map((e) => e.path).join(', '));
+const tree = await gh('POST', '/repos/' + REPO + '/git/trees', {
+  tree: [...flat, ...kept.map((e) => ({ path: e.path, mode: '100644', type: 'blob', sha: e.sha }))],
+});
 const main = await gh('GET', '/repos/' + REPO + '/git/refs/heads/main');
-const c = await gh('POST', '/repos/' + REPO + '/git/commits', { message: 'deploy: full PWA build', tree: tree.data.sha, parents: [main.data.object.sha] });
+const c = await gh('POST', '/repos/' + REPO + '/git/commits', { message: 'deploy: full PWA build (retain old hashed chunks)', tree: tree.data.sha, parents: [main.data.object.sha] });
 await gh('PATCH', '/repos/' + REPO + '/git/refs/heads/gh-pages', { sha: c.data.sha, force: true });
-console.log('gh-pages force-updated to full build:', c.data.sha, 'blobs', flat.length);
+console.log('gh-pages force-updated:', c.data.sha, 'new blobs', flat.length, 'retained', kept.length, 'total', flat.length + kept.length);

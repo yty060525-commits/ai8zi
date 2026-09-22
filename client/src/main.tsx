@@ -9,6 +9,15 @@ if (rootElement === null) {
   throw new Error('Root element is missing');
 }
 
+/* 旧页面动态 import 已不存在的带哈希 chunk(Vite 的 preloadError)：
+   直接重载一次，让页面回到当前版本，而不是把「Failed to fetch dynamically imported module」抛给用户。
+   用 sessionStorage 打标，避免服务器持续异常时反复刷新。 */
+window.addEventListener('vite:preloadError', () => {
+  if (sessionStorage.getItem('mingli.chunk.reloaded') === '1') return;
+  sessionStorage.setItem('mingli.chunk.reloaded', '1');
+  location.reload();
+});
+
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || ['localhost','127.0.0.1'].includes(location.hostname)) && import.meta.env.MODE !== 'test') {
   window.addEventListener('load', () => {
     void navigator.serviceWorker.register('./sw.js').then((registration) => {

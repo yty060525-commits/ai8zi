@@ -71,6 +71,40 @@ describe('正文分点化(toPointBlocks / 复制)', () => {
   });
 });
 
+describe('旧记录读取时兜底清洗(展示/复制共用)', () => {
+  // 提示词修复前落库的正文里存着照抄的英文字段名；写入路径管不到历史数据，只能在读取时清。
+  const dirty = '【身强身弱与喜忌】\n1. 日主庚金生于未月，故判定为不得令(inSeason: false)。\n2. 助身方得分(support)为 28.8。';
+
+  it('复制路径：旧正文里的英文字段名被清掉，中文完整保留', () => {
+    const analysis: BaziAIAnalysis = { pattern: '', strength: '', usefulElements: [], avoidElements: [], explanation: dirty };
+    const out = formatCopyBody(analysis, null);
+    expect(out).not.toMatch(/[A-Za-z]/);
+    expect(out).toContain('故判定为不得令');
+    expect(out).toContain('为 28.8');
+  });
+
+  it('复制路径：标题/格局/强弱/喜忌这几个单行字段同样清洗', () => {
+    const analysis: BaziAIAnalysis = {
+      pattern: '食神格(basis)', strength: '身弱(inSeason为false)',
+      usefulElements: ['木(wood)'], avoidElements: ['金'],
+      explanation: '', title: '鸾凤和鸣(title)',
+    };
+    const out = formatCopyBody(analysis, null);
+    expect(out).not.toMatch(/[A-Za-z]/);
+    expect(out).toContain('食神格');
+    expect(out).toContain('鸾凤和鸣');
+    expect(out).toContain('木');
+  });
+
+  it('纯中文正文读取时一字不改(只加分点，不改字)', () => {
+    const clean = '【财运】\n1. 今年财星得地，宜守不宜攻。';
+    const out = formatCopyBody({ pattern: '', strength: '', usefulElements: [], avoidElements: [], explanation: clean }, null);
+    expect(out).toContain('【财运】');
+    expect(out).toContain('今年财星得地，宜守不宜攻。');
+    expect(out).not.toMatch(/[A-Za-z]/);
+  });
+});
+
 describe('复制：全盘总结在维度筛选下不丢失', () => {
   const overview: BaziAIAnalysis = { pattern: '', strength: '', usefulElements: [], avoidElements: [], explanation: '【核心结论】1. 命局以木为用。\n【值得关注的时间节点】1. 2029年(乙巳)：机会窗口。\n【行动建议】1. 上半年落地谈判。' };
   const annual: BaziAIAnalysis = { pattern: '', strength: '', usefulElements: [], avoidElements: [], explanation: '【健康】1. 作息规律。\n【事业】1. 有升迁机会。' };
