@@ -2,6 +2,7 @@ import type { ClientRepository, PersonDetailData, Person, BaziRecord } from '../
 import { invoke } from '@tauri-apps/api/core';
 import { apiAdmin, apiRecords, getServerSession, isServerMode } from './serverClient';
 import { sqlMirror } from './offlineSql';
+import { ELEMENT_RULE_VERSION, countElements } from '../features/chart/elements';
 
 let sessionPeople: Person[] = [];
 let sessionDetails: PersonDetailData[] = [];
@@ -97,17 +98,28 @@ function isPruned(nonAi: BaziRecord['nonAiResult']): boolean {
     && Array.isArray(nonAi.annualFortunes) && nonAi.annualFortunes.length === 0
     && Array.isArray(nonAi.monthlyFortunes) && nonAi.monthlyFortunes.length === 0;
 }
-export async function hydrateRecord(record: BaziRecord): Promise<BaziRecord> {
+/** 存量记录的五行计数按当前唯一口径校正：纯查表、同步、不动任何 AI 结果。
+ *  背景：老引擎的地支本气手抄表把「子」写成木，带子的盘 木+1、水-1。 */
+export function repairElementCounts(record: BaziRecord): BaziRecord {
   const n = record.nonAiResult;
-  if (!n || !isPruned(n)) return record;
+  if (!n || n.elementRuleVersion === ELEMENT_RULE_VERSION) return record;
+  const pillars = [record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar];
+  if (!pillars.every((p) => typeof p === 'string' && p.length === 2)) return record;
+  const { elements, elementRatio } = countElements(pillars);
+  return { ...record, nonAiResult: { ...n, elements, elementRatio, elementRuleVersion: ELEMENT_RULE_VERSION } };
+}
+export async function hydrateRecord(record: BaziRecord): Promise<BaziRecord> {
+  const fixed = repairElementCounts(record);
+  const n = fixed.nonAiResult;
+  if (!n || !isPruned(n)) return fixed;
   const year = Number(record.birthYear);
   const month = Number(record.birthMonth);
-  if (!Number.isInteger(year) || !Number.isInteger(month) || record.yearPillar.length !== 2 || record.monthPillar.length !== 2 || record.dayPillar.length !== 2 || record.hourPillar.length !== 2) return record;
+  if (!Number.isInteger(year) || !Number.isInteger(month) || ![record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar].every((p) => typeof p === 'string' && p.length === 2)) return fixed;
   try {
     const { calculateNonAi } = await import('../features/chart/nonAiCalculator');
     const full = calculateNonAi({ birthYear: year, birthMonth: month, yearPillar: record.yearPillar, monthPillar: record.monthPillar, dayPillar: record.dayPillar, hourPillar: record.hourPillar }, record.gender, record.createdAt || new Date().toISOString());
     return { ...record, nonAiResult: full };
-  } catch { return record; }
+  } catch { return fixed; }
 }
 
 /* ---------------- 服务器同步(默认走服务器；断网自动留本地，联网后自动汇总) ---------------- */
@@ -162,7 +174,17 @@ export const saveBaziRecord = async (record: Omit<BaziRecord, 'id' | 'aiStatus'>
 };
 export const listBaziRecords = async (): Promise<BaziRecord[]> => {
   await pullAndMergeLocal();
-  return baziRepository.listBaziRecords();
+  // 列表也要校正五行计数：聊天证据直接读列表记录，不走 hydrate(避免为读数拖入历法库)。
+  const stored = await baziRepository.listBaziRecords();
+  const repaired = stored.map(repairElementCounts);
+  // 校正结果回写一次：否则每次读列表都要重算，且导出/同步出去的仍是旧的错值。
+  // 逐条比对，只有真的被改过的才落库；失败不影响返回(内存里已经是对的)。
+  const fixes = repaired.filter((record, i) => record !== stored[i]);
+  if (fixes.length) {
+    try { for (const record of fixes) await baziRepository.saveBaziRecord(pruneRecord(record)); }
+    catch { /* 落库失败只影响下次仍要重算，界面与返回值不受影响 */ }
+  }
+  return repaired;
 };
 
 /** 导出用：把瘦身存储还原成完整盘，保证分享出去的 .sqlite/.sql/.json 自解释、可被第三方直接读懂。 */

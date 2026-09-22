@@ -43,6 +43,8 @@ export interface NonAiChart {
   zodiac: string;
   elements: Record<string, number>;
   elementRatio: Record<string, number>;
+  /** 五行计数口径版本(老库缺标记时按当前口径回填)。 */
+  elementRuleVersion?: string;
   hiddenStems: string[][];
   tenGods: string[];
   naYin: string[];

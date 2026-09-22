@@ -46,4 +46,9 @@ cd client && npm install && npm run build   # 产物在 client/dist
 ## 三、接口速查(前缀 /api)
 - auth: register/login/logout/me/password
 - records: GET/POST /records, GET/PUT/DELETE /records/:id, POST /records/:id/ai/task, POST /records/:id/ai/cache-clear
+- chat: POST /chat(需登录) —— 排盘页「问问 AI」：提问解析(人名/年月/主题) → 查库取证(命盘事实+已算批断，缺段按缓存键补读 ai_cache) → 模型仅依据证据作答；首轮答案写回 ai_cache 复用。多命盘未指明返回 need_record+候选；recordId 只允许名下记录(管理员例外)。
 - admin: GET /admin/records, GET+POST /admin/config, POST /admin/test
+
+索引与检索优化(自动生效，旧库文件打开时自动迁移)：`idx_records_user_time(user_id, updated_at DESC, created_at DESC)` 让列表查询免临时排序；`ai_cache.chart_sig`(性别+四柱派生列)+`idx_cache_chart_sig` 把删盘清缓存从 `LIKE '%…%'` 全表扫描改为索引精确删除，聊天缓存与任务缓存一并覆盖。
+
+测试：`cd server && npm test`(38 项，含提问解析、取证、EXPLAIN 索引命中、chart_sig 回填迁移、/api/chat 路由与越权校验)。

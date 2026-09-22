@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { BaziRecord, Gender } from '../../types/domain';
 import { BirthInputModal } from './BirthInputModal';
+import { ChartChat } from './ChartChat';
 
 
 interface ChartPageProps { onRecordCreated?: (record: Omit<BaziRecord, 'id' | 'aiStatus'>) => void; }
@@ -29,5 +30,6 @@ export function ChartPage({ onRecordCreated }: ChartPageProps) {
     </section>
     {error && <p className="form-error" role="alert">{error}</p>}<button className="primary-button" type="button" onClick={() => setOpen(true)}>录入四柱八字</button>
     <BirthInputModal open={open} onClose={() => setOpen(false)} onSubmit={(pillars) => createRecord(pillars)} />
+    <ChartChat />
   </main>;
 }

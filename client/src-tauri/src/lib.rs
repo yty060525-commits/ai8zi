@@ -20,7 +20,24 @@ pub struct BaziRecord {
 fn initialize(connection: &Connection) -> Result<(), String> {
     connection.execute_batch("CREATE TABLE IF NOT EXISTS bazi_records (id TEXT PRIMARY KEY, name TEXT NOT NULL, gender TEXT NOT NULL, birth_year INTEGER NOT NULL, birth_month INTEGER NOT NULL, created_at TEXT NOT NULL, year_pillar TEXT NOT NULL, month_pillar TEXT NOT NULL, day_pillar TEXT NOT NULL, hour_pillar TEXT NOT NULL, non_ai_result TEXT, ai_status TEXT NOT NULL, ai_analysis TEXT, ai_overview TEXT, ai_error TEXT, ai_tasks TEXT)").map_err(|e| e.to_string())?;
     // 命中缓存：同一八字+性别+任务+年份的 AI 结果只算一次(成本优化)。
-    connection.execute("CREATE TABLE IF NOT EXISTS ai_cache (cache_key TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL)", []).map_err(|e| e.to_string())?;
+    // chart_sig = 键内「性别|四柱」段(第 2..6 列)，清盘缓存由 LIKE 全表扫描改为索引精确匹配。
+    connection.execute("CREATE TABLE IF NOT EXISTS ai_cache (cache_key TEXT PRIMARY KEY, chart_sig TEXT, payload TEXT NOT NULL, created_at TEXT NOT NULL)", []).map_err(|e| e.to_string())?;
+    let has_sig_col = connection.prepare("SELECT 1 FROM pragma_table_info('ai_cache') WHERE name = ?1").and_then(|mut statement| statement.exists(["chart_sig"])).map_err(|e| e.to_string())?;
+    if !has_sig_col { connection.execute("ALTER TABLE ai_cache ADD COLUMN chart_sig TEXT", []).map_err(|e| e.to_string())?; }
+    // 与服务器 migrateChartSig 同口径：每次启动都兜底回填签名为空的存量行(旧库升级/脏数据)。
+    let needs_backfill = connection.prepare("SELECT 1 FROM ai_cache WHERE chart_sig IS NULL LIMIT 1").and_then(|mut statement| statement.exists([])).map_err(|e| e.to_string())?;
+    if needs_backfill {
+        let rows: Vec<String> = connection.prepare("SELECT cache_key FROM ai_cache WHERE chart_sig IS NULL").map_err(|e| e.to_string())?
+            .query_map([], |row| row.get(0)).map_err(|e| e.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+        let mut update = connection.prepare("UPDATE ai_cache SET chart_sig = ?1 WHERE cache_key = ?2").map_err(|e| e.to_string())?;
+        for key in rows {
+            if let Some(sig) = chart_sig_from_key(&key) { let _ = update.execute(params![sig, key]); }
+        }
+    }
+    // 索引优化(与服务器 db.mjs 同口径)：按名查人 / 同盘查重 / 缓存按命盘清理都走索引。
+    connection.execute_batch("CREATE INDEX IF NOT EXISTS idx_cache_chart_sig ON ai_cache(chart_sig);
+        CREATE INDEX IF NOT EXISTS idx_bazi_records_name ON bazi_records(name);
+        CREATE INDEX IF NOT EXISTS idx_bazi_records_pillars ON bazi_records(year_pillar, month_pillar, day_pillar, hour_pillar);").map_err(|e| e.to_string())?;
     let has_created_at = connection.prepare("SELECT 1 FROM pragma_table_info('bazi_records') WHERE name = ?1").and_then(|mut statement| statement.exists(["created_at"])).map_err(|e| e.to_string())?;
     if !has_created_at {
         connection.execute("ALTER TABLE bazi_records ADD COLUMN created_at TEXT NOT NULL DEFAULT ''", []).map_err(|e| e.to_string())?;
@@ -33,6 +50,14 @@ fn initialize(connection: &Connection) -> Result<(), String> {
     let has_ai_overview = connection.prepare("SELECT 1 FROM pragma_table_info('bazi_records') WHERE name = ?1").and_then(|mut statement| statement.exists(["ai_overview"])).map_err(|e| e.to_string())?;
     if !has_ai_overview { connection.execute("ALTER TABLE bazi_records ADD COLUMN ai_overview TEXT", []).map_err(|e| e.to_string())?; }
     Ok(())
+}
+
+/// 从缓存键派生命盘签名：键格式恒为 [版本, 模型, 性别, 年柱, 月柱, 日柱, 时柱, …]
+/// (任务键 v7|… 与聊天键 chatv1|… 同位)，据此把「清某盘全部缓存」从 LIKE 全表扫描降为索引查找。
+pub(crate) fn chart_sig_from_key(key: &str) -> Option<String> {
+    let parts: Vec<&str> = key.split('|').collect();
+    if parts.len() < 8 { return None; }
+    Some(parts[2..7].join("|"))
 }
 
 fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<BaziRecord> {
@@ -169,8 +194,15 @@ pub(crate) fn compact_records_in(connection: &rusqlite::Connection) -> Result<(u
 }
 
 pub(crate) fn purge_chart_cache(connection: &rusqlite::Connection, gender: &str, y: &str, m: &str, d: &str, h: &str) -> Result<usize, String> {
-    let pattern = format!("%|{}|{}|{}|{}|{}|%", gender, y, m, d, h);
-    connection.execute("DELETE FROM ai_cache WHERE cache_key LIKE ?1", [pattern]).map_err(|e| e.to_string())
+    let sig = format!("{}|{}|{}|{}|{}", gender, y, m, d, h);
+    let mut removed = connection.execute("DELETE FROM ai_cache WHERE chart_sig = ?1", [&sig]).map_err(|e| e.to_string())?;
+    // 仅当还有未回填签名的老行时，做一次 LIKE 兜底(正常库中该查询立即返回 0)
+    let legacy: i64 = connection.query_row("SELECT COUNT(*) FROM ai_cache WHERE chart_sig IS NULL", [], |row| row.get(0)).map_err(|e| e.to_string())?;
+    if legacy > 0 {
+        let pattern = format!("%|{}|{}|{}|{}|{}|%", gender, y, m, d, h);
+        removed += connection.execute("DELETE FROM ai_cache WHERE chart_sig IS NULL AND cache_key LIKE ?1", [pattern]).map_err(|e| e.to_string())?;
+    }
+    Ok(removed)
 }
 
 #[tauri::command]
@@ -283,7 +315,8 @@ pub(crate) fn read_cache(connection: &rusqlite::Connection, key: &str) -> Result
 }
 
 pub(crate) fn write_cache(connection: &rusqlite::Connection, key: &str, payload: &str) -> Result<(), String> {
-    connection.execute("INSERT OR REPLACE INTO ai_cache (cache_key, payload, created_at) VALUES (?1, ?2, ?3)", params![key, payload, now_text()]).map_err(|e| e.to_string())?;
+    let sig = chart_sig_from_key(key);
+    connection.execute("INSERT OR REPLACE INTO ai_cache (cache_key, chart_sig, payload, created_at) VALUES (?1, ?2, ?3, ?4)", params![key, sig, payload, now_text()]).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -693,6 +726,98 @@ pub async fn run_ai_task(state: State<'_, Database>, record: BaziRecord, task: A
     let (status, error) = final_ai_status(&errors);
     Ok(AiTaskOutput { task, status: status.into(), analysis: None, error })
 }
+
+/* ---------- 排盘页 AI 聊天(本机离线通道) ----------
+ * 证据(命盘事实/已算批断)由客户端 chatEngine 从本机 SQLite 组装成 messages；
+ * 这里负责：首轮问题按「命盘签名+问题哈希+模型+语气档」查/写 ai_cache(索引命中)，
+ * 未命中再按通道顺序调用上游，返回纯文本。删盘/清缓存时 chart_sig 精确连带清除。 */
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatRequest {
+    pub gender: String, pub birth_year: i32,
+    pub year_pillar: String, pub month_pillar: String, pub day_pillar: String, pub hour_pillar: String,
+    pub question: String, pub tone: Option<i32>, pub cached: Option<bool>,
+}
+
+/// 64 位 FNV-1a：给问题文本做稳定短哈希用作缓存键片段(无第三方依赖)。
+pub(crate) fn fnv1a(text: &str) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in text.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+/// 聊天缓存键：第 2..6 段与任务键同位(性别+四柱)，chart_sig 索引自动覆盖。
+pub(crate) fn chat_cache_key(chat: &ChatRequest, model: &str) -> String {
+    let qhash = fnv1a(chat.question.trim());
+    format!("chatv1|{}|{}|{}|{}|{}|{}|chat|{:016x}|{}|{}", model, chat.gender,
+        chat.year_pillar, chat.month_pillar, chat.day_pillar, chat.hour_pillar,
+        qhash, chat.birth_year, tone_bucket(chat.tone))
+}
+
+#[tauri::command]
+pub async fn run_ai_chat(state: State<'_, Database>, chat: ChatRequest, messages: Vec<Value>) -> Result<Value, String> {
+    let mut errors = Vec::new();
+    let want_cache = chat.cached.unwrap_or(false);
+    for provider in provider_order(&selected_provider()) {
+        let model = provider_model(&provider);
+        let cache = chat_cache_key(&chat, model);
+        if want_cache {
+            let connection = state.0.lock().map_err(|e| e.to_string())?;
+            if let Ok(Some(payload)) = read_cache(&connection, &cache) {
+                return Ok(serde_json::json!({ "status": "completed", "answer": payload, "cached": true }));
+            }
+        }
+        let secret = match credential_entry(&provider)?.get_password() {
+            Ok(secret) => secret,
+            Err(_) => { errors.push(format!("{} credential unavailable", provider.key())); continue; }
+        };
+        let endpoint = match provider { AiProvider::Deepseek => "https://api.deepseek.com/chat/completions", AiProvider::Kimi => "https://api.moonshot.cn/v1/chat/completions", AiProvider::Qwen => "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions" };
+        let mut api_payload = serde_json::json!({ "model": model, "messages": messages, "max_tokens": 8192 });
+        if model.starts_with("deepseek") { api_payload["reasoning_effort"] = serde_json::json!("high"); } // 聊天走思考模式
+        if provider == AiProvider::Qwen { api_payload["enable_thinking"] = serde_json::json!(false); }
+        if let Some(t) = provider_temperature(&provider) { api_payload["temperature"] = t.into(); }
+        // 与任务通道一致的传输层抗抖：429/5xx/网络错误重试一次
+        let mut body: Value = Value::Null;
+        let mut transport_ok = false;
+        let mut request_failed = String::new();
+        for attempt in 0..2u8 {
+            match reqwest::Client::new().post(endpoint).bearer_auth(&secret).json(&api_payload).send().await {
+                Ok(response) if response.status().is_success() => {
+                    match response.json::<Value>().await {
+                        Ok(parsed) => { body = parsed; transport_ok = true; break; }
+                        Err(_) => { request_failed = "上游返回内容无法解析".into(); break; }
+                    }
+                }
+                Ok(response) => {
+                    let code = response.status().as_u16();
+                    let err_text = response.text().await.unwrap_or_default();
+                    if attempt == 0 && (code == 429 || code >= 500) { continue; }
+                    request_failed = format!("{}（HTTP {} · {}）", classify_failure(code, &err_text), code, provider.key());
+                    break;
+                }
+                Err(err) => {
+                    if attempt == 0 { continue; }
+                    request_failed = format!("网络不可达或延迟过高（{}）：{err}", provider.key());
+                    break;
+                }
+            }
+        }
+        if !transport_ok { errors.push(request_failed); continue; }
+        let content = match body["choices"][0]["message"]["content"].as_str() {
+            Some(content) => content.trim().trim_start_matches("```json").trim_end_matches("```").trim().to_string(),
+            None => { errors.push("上游返回空正文（可能被内容过滤或达到输出上限）".into()); continue; }
+        };
+        if content.is_empty() { errors.push("上游返回空正文".into()); continue; }
+        if want_cache {
+            if let Ok(connection) = state.0.lock() { let _ = write_cache(&connection, &cache, &content); }
+        }
+        return Ok(serde_json::json!({ "status": "completed", "answer": content, "cached": false }));
+    }
+    Ok(serde_json::json!({ "status": "failed", "error": errors.join("；") }))
+}
 }
 
 /// 数据目录 = exe 同目录下的 data(全相对路径，绿色便携：整个文件夹拷贝即可迁移数据)
@@ -729,7 +854,7 @@ pub fn run() {
             app.manage(Database(Mutex::new(connection)));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![commands::init_database, commands::save_bazi_record, commands::list_bazi_records, commands::get_bazi_record, commands::delete_bazi_record, commands::clear_chart_cache, commands::get_storage_stats, commands::compact_records, commands::ai_self_test, commands::save_ai_credential, commands::clear_ai_credential, commands::get_ai_provider_status, commands::set_ai_provider, commands::run_ai_task, commands::begin_ai_session, commands::cancel_ai_session])
+        .invoke_handler(tauri::generate_handler![commands::init_database, commands::save_bazi_record, commands::list_bazi_records, commands::get_bazi_record, commands::delete_bazi_record, commands::clear_chart_cache, commands::get_storage_stats, commands::compact_records, commands::ai_self_test, commands::save_ai_credential, commands::clear_ai_credential, commands::get_ai_provider_status, commands::set_ai_provider, commands::run_ai_task, commands::run_ai_chat, commands::begin_ai_session, commands::cancel_ai_session])
         .run(tauri::generate_context!()).expect("error while running tauri application");
 }
 
@@ -984,6 +1109,39 @@ mod tests {
         assert_eq!(removed, 2);
         let left: i64 = connection.query_row("SELECT COUNT(*) FROM ai_cache", [], |row| row.get(0)).unwrap();
         assert_eq!(left, 1); // 只删对应八字，其他命盘缓存保留
+    }
+
+    #[test]
+    fn chart_sig_is_derived_on_write_and_backfilled_on_migration() {
+        let connection = Connection::open_in_memory().unwrap(); initialize(&connection).unwrap();
+        // 新写入自动带签名
+        commands::write_cache(&connection, "v7|deepseek-flash|male|甲子|丙寅|戊辰|庚申|baseline|0|0|1984|80", "{}").unwrap();
+        let sig: Option<String> = connection.query_row("SELECT chart_sig FROM ai_cache WHERE cache_key LIKE 'v7|%'", [], |row| row.get(0)).unwrap();
+        assert_eq!(sig.as_deref(), Some("male|甲子|丙寅|戊辰|庚申"));
+        // 老库升级：签名为空的存量行在重新 initialize 时回填
+        connection.execute("UPDATE ai_cache SET chart_sig = NULL", []).unwrap();
+        initialize(&connection).unwrap();
+        let sig: Option<String> = connection.query_row("SELECT chart_sig FROM ai_cache WHERE cache_key LIKE 'v7|%'", [], |row| row.get(0)).unwrap();
+        assert_eq!(sig.as_deref(), Some("male|甲子|丙寅|戊辰|庚申"));
+        assert_eq!(chart_sig_from_key("short|key"), None);
+    }
+
+    #[test]
+    fn chat_cache_key_is_stable_and_purged_with_the_chart() {
+        let connection = Connection::open_in_memory().unwrap(); initialize(&connection).unwrap();
+        let chat = commands::ChatRequest { gender: "male".into(), birth_year: 1984, year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "戊辰".into(), hour_pillar: "庚申".into(), question: "2027年事业如何？".into(), tone: Some(80), cached: Some(true) };
+        let k1 = commands::chat_cache_key(&chat, "deepseek-flash");
+        let k2 = commands::chat_cache_key(&chat, "deepseek-flash");
+        assert_eq!(k1, k2, "同一问题+同盘+同模型+同语气 => 同一缓存键");
+        let other = commands::ChatRequest { question: "换个问法".into(), ..chat.clone() };
+        assert_ne!(k1, commands::chat_cache_key(&other, "deepseek-flash"));
+        commands::write_cache(&connection, &k1, "答案正文").unwrap();
+        commands::write_cache(&connection, "v7|deepseek-flash|male|甲子|丙寅|戊辰|庚申|annual|2027|0|1984|80", "{}").unwrap();
+        commands::write_cache(&connection, "v7|deepseek-flash|female|乙丑|丁卯|己巳|辛未|annual|2027|0|1985|80", "{}").unwrap();
+        let removed = commands::purge_chart_cache(&connection, "male", "甲子", "丙寅", "戊辰", "庚申").unwrap();
+        assert_eq!(removed, 2, "聊天缓存须随该盘任务缓存一并清除");
+        let left: i64 = connection.query_row("SELECT COUNT(*) FROM ai_cache", [], |row| row.get(0)).unwrap();
+        assert_eq!(left, 1);
     }
 
     #[test]

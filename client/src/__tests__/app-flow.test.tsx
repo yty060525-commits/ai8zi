@@ -23,6 +23,16 @@ describe('simplified chart application flow', () => {
     expect(screen.getByRole('heading', { name: '排盘' })).toBeTruthy();
   });
 
+  it('opens the settings page when a child broadcasts mingli:open-settings', () => {
+    render(<App />);
+    expect(screen.queryByText('AI 通道（三条可同时配置）')).toBeNull();
+    act(() => { window.dispatchEvent(new Event('mingli:open-settings')); });
+    expect(screen.getByText('AI 通道（三条可同时配置）')).toBeTruthy();
+    // 设置打开后切到别的分页要能回到正常导航
+    fireEvent.click(screen.getByRole('button', { name: '记录' }));
+    expect(screen.getByRole('heading', { name: '记录' })).toBeTruthy();
+  });
+
   it('accepts only manually entered four pillars and emits a record', async () => {
     const onRecordCreated = vi.fn();
     render(<ChartPage onRecordCreated={onRecordCreated} />);

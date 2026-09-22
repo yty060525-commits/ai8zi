@@ -30,10 +30,44 @@ CREATE TABLE IF NOT EXISTS records (
   updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS ai_cache (cache_key TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL);
+/* chart_sig = 缓存键里的「性别|年柱|月柱|日柱|时柱」段(第 2..6 列)。
+ * 旧实现 clearChartCache 用 LIKE '%…%' 全表扫描(前导通配符无法用索引)；
+ * 现在写入时派生该列并建索引，清缓存变成索引精确匹配 O(log n)。 */
+CREATE TABLE IF NOT EXISTS ai_cache (cache_key TEXT PRIMARY KEY, chart_sig TEXT, payload TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_records_user ON records(user_id);
+/* 覆盖 listRecordsByUser 的 WHERE user_id + ORDER BY updated_at DESC, created_at DESC：
+ * 免临时 B-tree 排序，列表页随记录数增长仍是索引顺序扫描。 */
+CREATE INDEX IF NOT EXISTS idx_records_user_time ON records(user_id, updated_at DESC, created_at DESC);
+/* 聊天按姓名定位命主 / 管理端按姓名检索：避免全表扫。 */
+CREATE INDEX IF NOT EXISTS idx_records_name ON records(name);
+/* 同盘查重(跨账号)与按柱检索。 */
+CREATE INDEX IF NOT EXISTS idx_records_pillars ON records(year_pillar, month_pillar, day_pillar, hour_pillar);
+CREATE INDEX IF NOT EXISTS idx_cache_chart_sig ON ai_cache(chart_sig);
+/* 定期清理过期会话时按 expires_at 范围删除，不再全表扫。 */
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 `);
+  migrateChartSig(db);
   return db;
+}
+
+/** 老库升级：ai_cache 缺 chart_sig 列时补列，并从存量 cache_key 回填派生值。 */
+function migrateChartSig(db) {
+  const cols = db.prepare('SELECT name FROM pragma_table_info(\'ai_cache\')').all().map((r) => r.name);
+  if (!cols.includes('chart_sig')) db.exec('ALTER TABLE ai_cache ADD COLUMN chart_sig TEXT');
+  const rows = db.prepare('SELECT cache_key FROM ai_cache WHERE chart_sig IS NULL').all();
+  if (rows.length === 0) return;
+  const upd = db.prepare('UPDATE ai_cache SET chart_sig=? WHERE cache_key=?');
+  for (const row of rows) {
+    const sig = chartSigFromKey(row.cache_key);
+    if (sig) upd.run(sig, row.cache_key);
+  }
+}
+
+/** 从缓存键派生命盘签名：键格式恒为 [版本, 模型, 性别, 年柱, 月柱, 日柱, 时柱, …](任务键与聊天键同位)。 */
+export function chartSigFromKey(key) {
+  const parts = String(key || '').split('|');
+  if (parts.length < 8) return null;
+  return parts.slice(2, 7).join('|');
 }
 
 export const nowText = () => new Date().toISOString();
@@ -139,6 +173,11 @@ export const listAllRecords = (db) => {
   return rows.map((row) => ({ ...rowToRecord(row), username: row.username }));
 };
 export const deleteRecord = (db, id) => { db.prepare('DELETE FROM records WHERE id=?').run(id); };
+/** 聊天定位命主用的轻列表：只取姓名/四柱等短列，不解析 non_ai_result/ai_tasks 大 JSON。
+ *  列组合与 idx_records_user_time 同序，走索引顺序扫描。 */
+export const listRecordSummaries = (db, userId) => {
+  return db.prepare('SELECT id,name,gender,birth_year,birth_month,year_pillar,month_pillar,day_pillar,hour_pillar,ai_status,updated_at FROM records WHERE user_id=? ORDER BY updated_at DESC, created_at DESC').all(userId);
+};
 
 /* ---------- ai cache ---------- */
 export const readCache = (db, key) => {
@@ -146,10 +185,18 @@ export const readCache = (db, key) => {
   return row ? row.payload : null;
 };
 export const writeCache = (db, key, payload) => {
-  db.prepare('INSERT OR REPLACE INTO ai_cache (cache_key,payload,created_at) VALUES (?,?,?)').run(key, payload, nowText());
+  db.prepare('INSERT OR REPLACE INTO ai_cache (cache_key,chart_sig,payload,created_at) VALUES (?,?,?,?)')
+    .run(key, chartSigFromKey(key), payload, nowText());
 };
+/* 按命盘签名走 idx_cache_chart_sig 精确索引删除(旧版 LIKE '%…%' 是全表扫描)。
+ * 兼容极老的、chart_sig 仍为空的存量行：仅对这部分保留一次 LIKE 兜底。 */
 export const clearChartCache = (db, gender, y, m, d, h) => {
-  const pattern = '%|' + gender + '|' + y + '|' + m + '|' + d + '|' + h + '|%';
-  const res = db.prepare('DELETE FROM ai_cache WHERE cache_key LIKE ?').run(pattern);
-  return res.changes;
+  const sig = [gender, y, m, d, h].join('|');
+  let removed = db.prepare('DELETE FROM ai_cache WHERE chart_sig=?').run(sig).changes;
+  const legacy = db.prepare('SELECT COUNT(*) AS n FROM ai_cache WHERE chart_sig IS NULL').get();
+  if (legacy && legacy.n > 0) {
+    const pattern = '%|' + gender + '|' + y + '|' + m + '|' + d + '|' + h + '|%';
+    removed += db.prepare('DELETE FROM ai_cache WHERE chart_sig IS NULL AND cache_key LIKE ?').run(pattern).changes;
+  }
+  return removed;
 };

@@ -6,6 +6,7 @@ import {
   insertRecord, getRecordById, listRecordsByUser, listAllRecords, deleteRecord, clearChartCache,
 } from './db.mjs';
 import { runOneTask, runSelfTest, PROVIDERS, currentProviderId, providerKey, saveProviderKey, saveProviderId, providerOf } from './ai.mjs';
+import { runChat } from './chat.mjs';
 
 function publicUser(u) {
   return u ? { id: u.id, username: u.username, role: u.role } : null;
@@ -128,6 +129,13 @@ export function createApp({ db, allowRegister = true }) {
           return json(res, 200, { removed });
         }
         return json(res, 404, { error: 'unknown records action' });
+      }
+
+      // ---- AI 聊天(排盘页)：解析提问 → 查本账号库内证据 → 思考回答；只读自己的记录 ----
+      if (method === 'POST' && route === 'chat') {
+        const body = await readJsonBody(req);
+        const result = await runChat(db, user, body || {});
+        return json(res, 200, result);
       }
 
       // ---- 管理端 ----

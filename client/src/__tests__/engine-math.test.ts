@@ -74,6 +74,18 @@ describe('sexagenary math invariants', () => {
     const total = Object.values(result.elementRatio).reduce((a, b) => a + b, 0);
     expect(total).toBeCloseTo(1, 10);
   });
+
+  it('地支本气五行 = 该支藏干本气的五行(子属水，不作木)', () => {
+    // 甲子 丙寅 庚午 壬午：天干 甲木 丙火 庚金 壬水；地支本气 子水 寅木 午火 午火
+    const result = calculateNonAi({ birthYear: 1984, birthMonth: 2, yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午' }, 'male');
+    expect(result.elements).toEqual({ 木: 2, 火: 3, 土: 0, 金: 1, 水: 2 });
+    expect(result.elementRatio.水).toBeCloseTo(2 / 8, 10);
+    expect(result.elementRatio.木).toBeCloseTo(2 / 8, 10);
+    // 口径一致性：计入的地支五行必须等于该支藏干首位(本气)的五行
+    const stemElement: Record<string, string> = { 甲: '木', 乙: '木', 丙: '火', 丁: '火', 戊: '土', 己: '土', 庚: '金', 辛: '金', 壬: '水', 癸: '水' };
+    for (let i = 0; i < 4; i += 1) expect(stemElement[result.hiddenStems[i][0]]).toBeTruthy();
+    expect(stemElement[result.hiddenStems[0][0]]).toBe('水'); // 子藏癸
+  });
 });
 describe('袁天罡称骨 (chenggu-v1)', () => {
   it('computes the classic sample: 甲子年正月初五 午时 = 四两四钱', () => {

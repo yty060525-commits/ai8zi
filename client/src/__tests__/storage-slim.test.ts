@@ -11,13 +11,17 @@ const fullRecord = (): BaziRecord => {
 afterEach(() => { configureBaziRepository(memoryBaziRepository); });
 
 describe('storage slimming (prune/hydrate)', () => {
-  it('prunes the 200KB forecast arrays to a ~3KB natal summary', () => {
+  it('prunes the 200KB forecast arrays to a compact natal summary', () => {
     const record = fullRecord();
     const original = JSON.stringify(record.nonAiResult).length;
     const pruned = pruneRecord(record);
     const compact = JSON.stringify(pruned.nonAiResult).length;
     expect(original).toBeGreaterThan(100000);
-    expect(compact).toBeLessThan(4000);
+    // 本命章节改版后这里多了 strengthScore / relationshipDetails / shenSha / tenGodDetails
+    // 四段「列表和详情都要用」的摘要(共约 2.9KB)，瘦身目标从 3KB 提到 6KB；
+    // 断言的是「比整盘小两个数量级」，不是某个精确字节数，避免每次加摘要都要改阈值。
+    expect(compact).toBeLessThan(6000);
+    expect(compact).toBeLessThan(original / 20);
     expect(pruned.nonAiResult!.greatFortunes).toHaveLength(0);
     expect(pruned.nonAiResult!.annualFortunes).toHaveLength(0);
     expect(pruned.nonAiResult!.monthlyFortunes).toHaveLength(0);
@@ -56,5 +60,37 @@ describe('storage slimming (prune/hydrate)', () => {
     const malformed = { ...fullRecord(), yearPillar: '', monthPillar: '', dayPillar: '', hourPillar: '', nonAiResult: { ...pruneRecord(fullRecord()).nonAiResult! } };
     const out = await hydrateRecord(malformed);
     expect(out.nonAiResult!.annualFortunes).toHaveLength(0); // 不重算也不崩
+  });
+
+  it('老库里的错误五行计数在读列表时被校正并回写(子属水不作木)', async () => {
+    configureBaziRepository(memoryBaziRepository);
+    // 模拟老版本落库的记录：地支「子」被手抄表记成木 → 木3/水1，且没有 elementRuleVersion
+    const legacy = fullRecord();
+    legacy.nonAiResult = {
+      ...pruneRecord(legacy).nonAiResult!,
+      elements: { 木: 3, 火: 3, 土: 0, 金: 1, 水: 1 },
+      elementRatio: { 木: 3 / 8, 火: 3 / 8, 土: 0, 金: 1 / 8, 水: 1 / 8 },
+      elementRuleVersion: undefined,
+    };
+    await memoryBaziRepository.saveBaziRecord(pruneRecord(legacy));
+
+    const listed = await listBaziRecords();
+    expect(listed[0].nonAiResult!.elements).toEqual({ 木: 2, 火: 3, 土: 0, 金: 1, 水: 2 });
+    expect(listed[0].nonAiResult!.elementRuleVersion).toBe('branch-main-v2');
+
+    // 回写生效：再读一次，库里存的就已经是校正后的值(不是每次读都重算)
+    const reread = await memoryBaziRepository.getBaziRecord(legacy.id);
+    expect(reread?.nonAiResult?.elements).toEqual({ 木: 2, 火: 3, 土: 0, 金: 1, 水: 2 });
+    expect(reread?.nonAiResult?.elementRuleVersion).toBe('branch-main-v2');
+  });
+
+  it('口径已是最新的记录不会被重复改写', async () => {
+    configureBaziRepository(memoryBaziRepository);
+    const current = fullRecord(); // calculateNonAi 产出的记录自带当前 elementRuleVersion
+    await memoryBaziRepository.saveBaziRecord(pruneRecord(current));
+    const before = await memoryBaziRepository.getBaziRecord(current.id);
+    await listBaziRecords();
+    const after = await memoryBaziRepository.getBaziRecord(current.id);
+    expect(JSON.stringify(after?.nonAiResult?.elements)).toBe(JSON.stringify(before?.nonAiResult?.elements));
   });
 });

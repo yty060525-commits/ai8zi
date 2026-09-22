@@ -3,7 +3,9 @@ import { chinaYear } from '../../utils/date';
 export { chinaYear }; // 兼容既有调用点
 
 import { computeShenSha } from './shenSha';
+import { STEMS, BRANCHES, ELEMENTS, HIDDEN_STEMS, stemElementIndex, ELEMENT_RULE_VERSION, countElements } from './elements';
 import type { BaziRecord, Gender, NonAiChart, RelationshipFacts, RelationshipDetail, FortunePeriod, ShenShaItem } from '../../types/domain';
+export { ELEMENT_RULE_VERSION, countElements }; // 口径唯一真源在 ./elements，这里转出以兼容既有引用
 
 /* =============================================================================
  * 确定性命理计算核心 (non-AI engine) — 数学模型
@@ -28,11 +30,6 @@ import type { BaziRecord, Gender, NonAiChart, RelationshipFacts, RelationshipDet
  * 「公历每月 15 日取样」，无历法取样误差，边界完全确定。
  * ========================================================================== */
 
-const STEMS = '甲乙丙丁戊己庚辛壬癸';
-const BRANCHES = '子丑寅卯辰巳午未申酉戌亥';
-const ELEMENTS = ['木', '火', '土', '金', '水'] as const;
-/** 地支本气五行索引(子水丑土寅木卯木辰土巳火午火未土申金酉金戌土亥水) */
-const BRANCH_ELEMENT = [0, 2, 0, 0, 2, 1, 1, 2, 3, 3, 2, 4];
 const YANG = '甲丙戊庚壬';                        // 阳干(序数为偶)
 
 /** 六破规范对(小序在前)：子酉、丑辰、寅亥、卯午、巳申、未戌 */
@@ -47,16 +44,8 @@ const indexOfStem = (s: string) => STEMS.indexOf(s);
 const indexOfBranch = (b: string) => BRANCHES.indexOf(b);
 const mod = (n: number, m: number) => ((n % m) + m) % m;
 
-/* ---- 以下三张表是纯查表(不依赖历法/天文)，本地化后与 lunar-javascript 逐支扫描比对一致 ---- */
-/** 地支藏干，按 本气→中气→余气 排列。
- *  与 lunar-javascript 逐柱扫描完全一致(15000 天)。注意「巳」古籍有两说：
- *  按五行旺相休囚推为 丙戊庚，通行印本与 lunar-javascript 作 丙庚戊 —— 两说只差中/余次序，
- *  本气(丙火当令)相同，而旺衰判断只看本气，故取主流印本口径以免与既有缓存结果冲突。 */
-const HIDDEN_STEMS: Record<string, string[]> = {
-  子: ['癸'], 丑: ['己', '癸', '辛'], 寅: ['甲', '丙', '戊'], 卯: ['乙'],
-  辰: ['戊', '乙', '癸'], 巳: ['丙', '庚', '戊'], 午: ['丁', '己'], 未: ['己', '丁', '乙'],
-  申: ['庚', '壬', '戊'], 酉: ['辛'], 戌: ['戊', '辛', '丁'], 亥: ['壬', '甲'],
-};
+/* ---- 干支/藏干/五行计数在 ./elements(纯查表，与 lunar-javascript 逐支扫描比对一致)，
+ *      单独成模块是因为仓库与聊天证据也要用同一口径，不该为此拖入历法库。 ---- */
 /** 纳音五行(两柱一组，共 30 项)：甲子乙丑海中金 …… 壬戌癸亥大海水。 */
 const NAYIN_30 = ['海中金', '炉中火', '大林木', '路旁土', '剑锋金', '山头火', '涧下水', '城头土', '白蜡金', '杨柳木', '泉中水', '屋上土', '霹雳火', '松柏木', '长流水', '沙中金', '山下火', '平地木', '壁上土', '金箔金', '覆灯火', '天河水', '大驿土', '钗钏金', '桑柘木', '大溪水', '沙中土', '天上火', '石榴木', '大海水'];
 const naYinOf = (ganZhi: string) => { const i = GANZHI_60.indexOf(ganZhi); return i < 0 ? '' : NAYIN_30[Math.floor(i / 2)]; };
@@ -535,13 +524,8 @@ export function calculateNonAi(
   const forward = fortuneDirection(input.yearPillar[0], gender);
   const chenggu = calculateChenggu(lunar.getYearInGanZhiExact(), lunar.getMonth(), lunar.getDay(), input.hourPillar[1]);
 
-  // 五行计数：四天干 + 四地支本气 = 8 个观测，比例和为 1。
-  const counts: Record<string, number> = { 木: 0, 火: 0, 土: 0, 金: 0, 水: 0 };
-  for (const pillar of pillars) {
-    counts[ELEMENTS[indexOfStem(pillar[0]) >> 1]] += 1;
-    counts[ELEMENTS[BRANCH_ELEMENT[indexOfBranch(pillar[1])]]] += 1;
-  }
-  const elementRatio = Object.fromEntries(ELEMENTS.map((e) => [e, counts[e] / (pillars.length * 2)]));
+  // 五行计数：口径见 countElements(单一真源，供老库回填与聊天/证据复用)。
+  const { elements: counts, elementRatio } = countElements(pillars);
 
   const natalItems: Node[] = pillars.map((value, index) => ({ value, layer: 'natal' as const, name: String(index) }));
   const relationships = natalFacts(pillars);
@@ -604,6 +588,7 @@ export function calculateNonAi(
     zodiac: lunar.getYearShengXiao(),
     elements: counts,
     elementRatio,
+    elementRuleVersion: ELEMENT_RULE_VERSION,
     hiddenStems,
     tenGods: tenGodDetails.heavenly,
     naYin: pillars.map(naYinOf),

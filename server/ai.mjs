@@ -48,6 +48,34 @@ const pickByYear = (rows, year) => (Array.isArray(rows) ? rows.find((r) => Numbe
 const pickByYearMonth = (rows, year, month) => (Array.isArray(rows) ? rows.find((r) => Number(r.year) === Number(year) && Number(r.month) === Number(month)) : null);
 const pickDecade = (rows, year) => (Array.isArray(rows) ? rows.find((r) => Number(r.startYear) <= Number(year) && Number(year) <= Number(r.endYear)) : null);
 const gzOf = (row) => (row && typeof row.ganZhi === 'string' ? row.ganZhi : '');
+/** 纯比较用：五行计数(每个干支记 2 次观测)；必须与客户端 features/chart/elements.ts 同口径，
+ *  两处结果由 test/elements.test.mjs 与 client/src/__tests__/engine-math.test.ts 双向对照。
+ *  两条硬约束(都踩过)：
+ *  1) 对象字面量里的汉字键一律写引号 —— 汉字是合法标识符，
+ *     `{ 木: 0, 火: 0 }` 里的 `火:` 会被当成简写属性引用未声明的变量而抛 ReferenceError，
+ *     整个函数对任何输入都变成 null(表现为「数据不全」)。
+ *  2) 取值用 charAt(0) 直接比字符串，不建映射对象，避免路径再出岔。 */
+const isStem = (s) => typeof s === 'string' && s.length === 1 && '甲乙丙丁戊己庚辛壬癸'.indexOf(s) >= 0;
+const ELEMENT_OF_STEM = (s) => {
+  if (!isStem(s)) return '';
+  return ['木', '火', '土', '金', '水']['甲乙丙丁戊己庚辛壬癸'.indexOf(s) >> 1] ?? '';
+};
+export function countElements(pillars, hiddenStems) {
+  const tally = { '木': 0, '火': 0, '土': 0, '金': 0, '水': 0 };
+  let observed = 0;
+  (Array.isArray(pillars) ? pillars : []).forEach((pillar, i) => {
+    const stemElement = ELEMENT_OF_STEM(String(pillar || '').charAt(0));
+    const branchStem = Array.isArray(hiddenStems?.[i]) ? String(hiddenStems[i][0] ?? '') : '';
+    const mainElement = ELEMENT_OF_STEM(branchStem);
+    if (!stemElement || !mainElement) return;
+    tally[stemElement] += 1;
+    tally[mainElement] += 1;
+    observed += 2;
+  });
+  if (!observed) return null; // 数据不全(或完全未观测到) → 交回调用方用存量值
+  const elementRatio = Object.fromEntries(Object.keys(tally).map((key) => [key, tally[key] / observed]));
+  return { elements: tally, elementRatio, elementRuleVersion: 'branch-main-v2' };
+}
 
 function summarizeHits(row, ownGanZhi) {
   if (!row) return [];
@@ -125,13 +153,15 @@ const ADJUST_PREFIX = '你是资深子平命理师。根据【本命结论】的
   + '2. 【后天调整】按方位、颜色、行业属性、日常作息分条；【事业适配】给出适配岗位类型与不宜方向各至少一条，并说明与喜用的对应关系；【健康注意】只谈体质倾向与调养方向，不下诊断、不给具体病名断言。\n'
   + '3. 每个主题内部必须分点：每条单独一行、行首 1. 2. 3. 编号，一句话一条，禁止整段连排。';
 
-export function buildTaskPayload(record, task, tone = DEFAULT_TONE) {
+/** 本命事实(natal)：各任务与聊天共用的同一段 JSON(口径一致、且最大化前缀缓存)。 */
+export function natalFactsOf(record) {
   const nonAi = record?.nonAiResult || {};
-  const natal = {
+  const counted = countElements([record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar], nonAi.hiddenStems);
+  return {
     gender: record.gender, birthYear: record.birthYear,
     pillars: { year: record.yearPillar, month: record.monthPillar, day: record.dayPillar, hour: record.hourPillar },
     solarDate: nonAi.solarDate, lunarDate: nonAi.lunarDate, zodiac: nonAi.zodiac, dayMaster: nonAi.dayMaster,
-    elements: nonAi.elements, elementRatio: nonAi.elementRatio,
+    elements: counted?.elements ?? nonAi.elements, elementRatio: counted?.elementRatio ?? nonAi.elementRatio,
     hiddenStems: nonAi.hiddenStems, tenGods: nonAi.tenGods,
     naYin: nonAi.naYin, twelveLongevity: nonAi.twelveLongevity,
     // 引擎算定的格局与旺衰：放进「本命事实」里(所有任务共用同一段前缀)，
@@ -139,6 +169,11 @@ export function buildTaskPayload(record, task, tone = DEFAULT_TONE) {
     patternFacts: nonAi.patternFacts, strengthScore: nonAi.strengthScore,
     shenSha: compactShenSha(nonAi.shenSha), relationships: nonAi.relationships,
   };
+}
+
+export function buildTaskPayload(record, task, tone = DEFAULT_TONE) {
+  const nonAi = record?.nonAiResult || {};
+  const natal = natalFactsOf(record);
   const y = task.year;
   const scope = {};
   if (y !== undefined) {
@@ -246,8 +281,9 @@ export function classifyFailure(status, bodyText) {
   return snippet ? ('上游报错：' + snippet) : ('HTTP ' + status);
 }
 
-/** 调一次上游(单 provider，最多 transport 重试一次)；失败返回 {error}。 */
-async function callProvider(provider, key, messages, effort) {
+/** 调一次上游(单 provider，最多 transport 重试一次)；失败返回 {error}。
+ *  mode='json'(默认)解析为结构化 analysis；mode='text' 直接返回 {text} 纯正文(聊天用)。 */
+export async function callProvider(provider, key, messages, effort, mode = 'json') {
   const body = { model: provider.model, messages, max_tokens: 32768 };
   // V4.1：思考模式默认开启；按任务类型控制思考力度(本命/后天调整=high，时段=low 以省时省钱)
   if (provider.id === 'deepseek' && effort) body.reasoning_effort = effort;
@@ -292,6 +328,7 @@ async function callProvider(provider, key, messages, effort) {
         const finish = String(data?.choices?.[0]?.finish_reason ?? '');
         return { error: '上游返回空正文' + (finish ? '（finish_reason=' + finish + '）' : '') + '（' + provider.label + '）' };
       }
+      if (mode === 'text') return { text: raw };
       const cleaned = raw.replace(/^\`\`\`json?\s*/i, '').replace(/\`\`\`\s*$/, '').trim();
       try { return { analysis: JSON.parse(cleaned) }; }
       catch { return { error: '模型输出不是合法 JSON（' + provider.label + '）' }; }

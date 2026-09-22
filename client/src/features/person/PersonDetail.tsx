@@ -121,12 +121,22 @@ function BasicInfo({ record }: { record: BaziRecord }) {
 }
 const listText = (value: string[] | string[][]) => value.map((item) => Array.isArray(item) ? item.join('、') : item).join(' · ') || '—';
 const mapText = (value: Record<string, number>) => Object.entries(value).map(([key, count]) => `${key} ${count}`).join(' · ') || '—';
+/** 五行比例按百分比展示(原始值是 0~1 的小数，直接打出来是 0.375 这种看不懂的数)。
+ *  分母是实际观测数(四干 + 四支本气 = 8)，为 0 时不硬凑百分比。
+ *  空格点名的五行补一句「缺X」，这是读盘最关心的一句话，不该让用户自己去数。
+ *  导出以便测试直接锁住文案(组件本身依赖太多上下文，不适合为这一行单独渲染)。 */
+export const formatElementRatio = (value: Record<string, number>) => {
+  if (!value || !Object.values(value).reduce((a, b) => a + b, 0)) return '—';
+  const shown = Object.entries(value).map(([key, ratio]) => `${key} ${(ratio * 100).toFixed(1).replace(/\.0$/, '')}%`);
+  const missing = Object.entries(value).filter(([, ratio]) => ratio === 0).map(([key]) => key);
+  return shown.join(' · ') + (missing.length ? `（缺${missing.join('、')}）` : '');
+};
 function NonAiAnalysis({ result, record }: { result?: NonAiChart; record: BaziRecord }) {
   if (!result) return <section className="detail-section" aria-label="基础排盘数据"><div className="section-heading"><div><p className="eyebrow">02 / CHART DATA</p><h2>基础排盘数据</h2></div></div><p role="status">暂无基础排盘数据</p></section>;
   const fields: [string, string][] = [
     ['四柱', `${result.pillars.year} · ${result.pillars.month} · ${result.pillars.day} · ${result.pillars.hour}`],
     ['公历日期', result.solarDate],
-    ['五行', mapText(result.elements)], ['五行比例', mapText(result.elementRatio)],
+    ['五行', mapText(result.elements)], ['五行比例', formatElementRatio(result.elementRatio)],
     ['日主', result.dayMaster], ['十二长生', listText(result.twelveLongevity)],
     ['袁天罡称骨', result.chenggu ? `${result.chenggu.totalText}（年 ${result.chenggu.parts.year}·月 ${result.chenggu.parts.month}·日 ${result.chenggu.parts.day}·时 ${result.chenggu.parts.hour}，${result.chenggu.ruleVersion}）` : '—'],
   ];

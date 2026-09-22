@@ -13,11 +13,15 @@ Windows 桌面端( Tauri 2 + React + TypeScript + Rust/SQLite )。原则：**程
   ③ 所处大运(未来十年)、④ 未来十年·每年、⑤ 从今天起·未来十二个月——不再重复喜忌，正文含【健康】【事业】【财运】【爱情】与(有命中时)【刑冲克害批注】；
   - 批文标题只引用古籍原文/口诀(《三命通会》《渊海子平》等)，并禁止输出 /* */、HTML 注释、代码块等草稿标记。
 - 命中缓存(ai_cache)：同八字+性别+任务+年/月+模型 只算一次；断点续跑跳过已完成；脏结果(空正文)自动重算。
+- 排盘页「问问 AI」聊天：提问先解析成检索计划(人名/今年明年/本月下月/健康·事业·财运·爱情·五行等主题)，再从数据库取证(命盘事实 + 已算流年/流月/大运/本命批断，缺段时按缓存键补读 ai_cache)，让模型只依据证据作答、不重复推算；首轮答案落 ai_cache 复用(同题再问零成本)。三通道自适应：服务器 /api/chat → 断网落 Tauri `run_ai_chat` → 浏览器直连备用；服务器存储为瘦身版，聊天请求随带本机引擎现算的时段干支行补齐。
+- 聊天体验：空会话按已存命主给「示例提问」按钮，点一下即发送；未配置密钥时提示改为「尚未配置 AI 密钥」并给「去设置 ›」直达入口(不泄漏各通道原始错误串)；对话常驻内存，切分页/进设置再回来不再丢失，另有「清空对话」；每条回答标注「依据：某人 · 某年某月」，新消息自动滚到底部。
+- 检索/索引优化：记录列表走 `(user_id, updated_at, created_at)` 复合索引(免临时排序)；缓存键派生 `chart_sig` 列 + 索引，删盘/清缓存由前导通配 LIKE 全表扫描改为索引精确删除(任务缓存与聊天缓存一并清理，旧库打开时自动回填)；命主定位只查轻列不解析大 JSON。多端聊天缓存键位同构，前缀缓存最大化。
 
 ## 运行与打包
 - 桌面窗口开发：`启动-桌面版开发.cmd`(需 Rust MSVC 工具链)；网页版预览仅看布局：`启动-网页版预览.cmd`(无数据库/AI)。
 - 正式构建：双击 `client\build-windows.cmd` → 产出 exe 与安装包；也可用 GitHub Actions(`.github/workflows/build-windows-exe.yml`)云构建。
 - 成品目录：`release\windows\命理客户端.exe`(免安装双击版)、`命理客户端-安装版.exe`(NSIS)。
+- PWA 网页版：每次重大更新后在 `client` 内 `npm run build`(产出 `client\dist`)，再把 `client\dist\*` 压缩覆盖 `release\pwa\dist.zip`(部署到网页服务器后解压即用；`sw.js` 对 index.html 走网络优先，在线刷新即取新版)。
 - 编译中间件默认放到**项目外** `%LOCALAPPDATA%\mingli-client-target`，项目本体不膨胀(见下)。
 
 ## 体积：为什么大 & 怎么保持小
@@ -33,7 +37,7 @@ Windows 桌面端( Tauri 2 + React + TypeScript + Rust/SQLite )。原则：**程
 - 设置页：服务一/服务二 = DeepSeek/Kimi，密钥存 Windows 凭据管理器(不落盘)；有“AI 连通自检(微小消耗)”。
 
 ## 测试
-- 前端：`client` 内 `npm test`(72 项)；Rust：`client\src-tauri` 内 `cargo test --lib`。
+- 前端：`client` 内 `npm test`(37 文件 206 项，含聊天引擎/三通道分流/问问 AI UI(示例提问、去设置引导、会话常驻、依据标注)/服务器-客户端提示词一致性)；服务器：`server` 内 `node --test`(39 项，含 EXPLAIN 索引命中断言、chart_sig 迁移回填、缓存优先于密钥检查、/api/chat 越权校验)；Rust：`client\src-tauri` 内 `cargo test --lib`。
 
 ## 目录速览
 - `client/src/features/chart` 非AI引擎(nonAiCalculator/shenSha/称骨等) 与 排盘输入；`data/` AI编排/适配/仓库/知识库；`person/` 详情展示；

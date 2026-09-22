@@ -2,6 +2,7 @@ import type { BaziRecord, BaziAIAnalysis, BaziAnalysisTask, BaziTaskResult, NonA
 import { invoke } from '@tauri-apps/api/core';
 import { getBrowserCredential } from './aiSettings';
 import { isServerMode, runTaskOnServer, ServerError } from './serverClient';
+import { countElements } from '../features/chart/elements';
 
 export type DeepSeekResult = { status: 'completed'; analysis: BaziAIAnalysis } | { status: 'not_configured' | 'failed'; error?: string };
 type SecureRunner = (record: BaziRecord, task?: BaziAnalysisTask, options?: AnalyzeOptions) => Promise<BaziTaskResult>;
@@ -197,7 +198,10 @@ export async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask,
   const natal = {
     pillars: { year: record.yearPillar, month: record.monthPillar, day: record.dayPillar, hour: record.hourPillar },
     dayMaster: nonAi?.dayMaster, zodiac: nonAi?.zodiac, solarDate: nonAi?.solarDate,
-    elements: nonAi?.elements, tenGods: nonAi?.tenGods, hiddenStems: nonAi?.hiddenStems,
+    // 五行计数按四柱现算，不取库里的存量数字：存储可能来自旧口径引擎，
+    // 让模型数到「木+1 水-1」的假配比，比不给这项更糟。
+    elements: countElements([record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar]).elements,
+    tenGods: nonAi?.tenGods, hiddenStems: nonAi?.hiddenStems,
     // 引擎算定的格局与旺衰：模型只解读不重判(与服务器/桌面端同口径)
     patternFacts: nonAi?.patternFacts, strengthScore: nonAi?.strengthScore,
     shenSha: compactShenSha(nonAi?.shenSha), relationships: nonAi?.relationships,
@@ -299,4 +303,39 @@ export async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask,
     }
   }
   return { status: 'failed', error: errors.join('；') || '没有可用的通道凭据，请先在设置里配置' };
+}
+
+/* ---------- 聊天直连(排盘页「问问 AI」备用通道)：纯文本输出，不要求 JSON ---------- */
+export type ChatDirectResult = { status: 'completed'; answer: string } | { status: 'failed' | 'not_configured'; error?: string };
+
+export async function chatDirect(messages: Array<{ role: string; content: string }>, opts: { signal?: AbortSignal } = {}): Promise<ChatDirectResult> {
+  const errors: string[] = [];
+  let hasCredential = false;
+  // 与任务通道同一回退顺序：当前使用通道 → 其余已配置通道
+  for (const channel of channelOrder()) {
+    const secret = getBrowserCredential(channel.id);
+    if (!secret) { errors.push(channel.label + '：未配置凭据'); continue; }
+    hasCredential = true;
+    const payload: Record<string, unknown> = { model: channel.model, max_tokens: 8192, messages };
+    if (channel.id === 'deepseek') payload.reasoning_effort = 'high'; // 聊天走思考模式，答复更有依据
+    if (channel.disableThinking) payload.enable_thinking = false;
+    if (channel.temperature !== undefined) payload.temperature = channel.temperature;
+    try {
+      const res = await fetch(channel.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + secret }, body: JSON.stringify(payload), signal: opts.signal });
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        errors.push(channel.label + '：' + classifyFailure(res.status, errText) + '（HTTP ' + res.status + '）');
+        continue;
+      }
+      const body = await res.json();
+      const raw = String(body?.choices?.[0]?.message?.content ?? '').trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim();
+      if (!raw) { errors.push(channel.label + '：上游返回空正文'); continue; }
+      return { status: 'completed', answer: raw };
+    } catch (error) {
+      if (opts.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) return { status: 'failed', error: '已取消' };
+      const msg = error instanceof Error ? error.message : '请求失败';
+      errors.push(channel.label + '：' + (/abort|timeout|timed out/i.test(msg) ? '网络超时或不可达' : msg));
+    }
+  }
+  return { status: hasCredential ? 'failed' : 'not_configured', error: errors.join('；') || '没有可用的通道凭据，请先在设置里配置' };
 }

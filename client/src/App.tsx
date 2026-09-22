@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { BottomNav, type AppSection } from './components/BottomNav';
 import { ChartPage } from './features/chart/ChartPage';
 import { RecordsPage } from './features/records/RecordsPage';
@@ -16,6 +16,12 @@ export function App() {
     if (nextSection === 'chart') setOpenedPersonId(null);
     setSection(nextSection);
   };
+  useEffect(() => {
+    // 聊天面板等子组件的「去设置」入口：不钻 prop，统一走窗口事件。
+    const open = () => setSettingsOpen(true);
+    window.addEventListener('mingli:open-settings', open);
+    return () => window.removeEventListener('mingli:open-settings', open);
+  }, []);
   function handleRecordCreated(record: Omit<BaziRecord, 'id' | 'aiStatus'>) {
     void saveBaziRecord(record).then((saved) => {
       // The raw record is durable before navigation; AI must never block the user.
