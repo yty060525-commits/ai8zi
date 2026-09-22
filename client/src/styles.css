@@ -171,6 +171,9 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* ---- 排盘页 AI 聊天(问问 AI) ---- */
 .chat-panel { margin-top: 30px; border-top: 1px solid #d0d0d0; padding-top: 20px; }
+/* 排盘页顶部锚点：手机端聊天区在折叠线以下，这里给一条明确的去路。 */
+.chat-shortcut { margin: 10px 0 0; }
+.chat-shortcut .text-button { min-height: 36px; padding: 6px 14px; font-size: 13px; border-radius: 16px; }
 .chat-panel h2 { margin: 0 0 6px; font-size: 20px; }
 .chat-hint { color: #666; font-size: 13px; margin: 0 0 10px; }
 .chat-empty { color: #888; font-size: 13px; }

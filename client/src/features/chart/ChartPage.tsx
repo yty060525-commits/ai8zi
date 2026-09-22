@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { BaziRecord, Gender } from '../../types/domain';
 import { BirthInputModal } from './BirthInputModal';
-import { ChartChat } from './ChartChat';
+import { ChartChat, scrollToChat } from './ChartChat';
 
 
 interface ChartPageProps { onRecordCreated?: (record: Omit<BaziRecord, 'id' | 'aiStatus'>) => void; }
@@ -24,7 +24,8 @@ export function ChartPage({ onRecordCreated }: ChartPageProps) {
     const record: Omit<BaziRecord, 'id' | 'aiStatus'> = { name: name.trim(), gender, birthYear: year, birthMonth: month, createdAt, ...pillars, nonAiResult };
     setError(''); setOpen(false); onRecordCreated?.(record);
   }
-  return <main className="chart-page"><header className="page-heading"><p className="eyebrow">LOCAL WORKSPACE</p><h1>排盘</h1><p>输入基本信息和四柱八字，保存一条记录。</p></header>
+  return <main className="chart-page"><header className="page-heading"><p className="eyebrow">LOCAL WORKSPACE</p><h1>排盘</h1><p>输入基本信息和四柱八字，保存一条记录。</p>
+    <p className="chat-shortcut"><button className="text-button" type="button" onClick={scrollToChat}>问问 AI ›</button></p></header>
     <section className="form-section" aria-label="排盘基本信息"><div className="field-grid"><label>姓名<input required value={name} onChange={(e) => { setError(''); setName(e.target.value); }} placeholder="请输入姓名" /></label><label>出生年<input required type="number" step="1" value={birthYear} onChange={(e) => { setError(''); setBirthYear(e.target.value); }} /></label><label>出生月<input required type="number" min="1" max="12" step="1" value={birthMonth} onChange={(e) => { setError(''); setBirthMonth(e.target.value); }} /></label></div>
       <fieldset className="gender-field"><legend>性别</legend><div className="button-group">{(['male', 'female'] as Gender[]).map((item) => <button type="button" key={item} className={gender === item ? 'choice-button selected' : 'choice-button'} onClick={() => setGender(item)} aria-pressed={gender === item}>{item === 'male' ? '男' : '女'}</button>)}</div></fieldset>
     </section>

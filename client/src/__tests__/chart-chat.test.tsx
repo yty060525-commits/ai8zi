@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { ChartChat, clearChatThread } from '../features/chart/ChartChat';
+import { ChartChat, clearChatThread, scrollToChat } from '../features/chart/ChartChat';
 import { askChat } from '../data/chatEngine';
 import { listBaziRecords } from '../data/clientRepository';
 
@@ -226,5 +226,36 @@ describe('切换命主(点名字)', () => {
     render(<ChartChat />);
     await flush();
     expect(screen.queryByLabelText('已存命主')).toBeNull();
+  });
+});
+
+describe('排盘页顶部「问问 AI」锚点', () => {
+  it('点击后把聊天区滚进视野，并把焦点落到输入框', async () => {
+    const scrollIntoView = vi.fn();
+    const scrollIntoViewInput = vi.fn();
+    // jsdom 不实现滚动与焦点滚动控制，这里只验证「调用了正确的方法与目标」。
+    Element.prototype.scrollIntoView = scrollIntoView;
+    const original = HTMLElement.prototype.focus;
+    HTMLElement.prototype.focus = function focus(options?: FocusOptions) { (this as HTMLElement & { __opts?: FocusOptions }).__opts = options; return original.call(this); };
+
+    render(<ChartChat />);
+    await flush();
+    const input = screen.getByLabelText('命理问题') as HTMLInputElement & { __opts?: FocusOptions };
+    input.scrollIntoView = scrollIntoViewInput;
+
+    scrollToChat();
+
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scrollIntoView.mock.instances[0]).toBe(document.querySelector('.chat-panel'));
+    expect(document.activeElement).toBe(input);
+    // 滚动由 scrollIntoView 负责，聚焦时不能再让浏览器自己滚一遍，否则会跳走。
+    expect(input.__opts).toEqual({ preventScroll: true });
+
+    HTMLElement.prototype.focus = original;
+  });
+
+  it('聊天区不在页面上时不报错(直接调用也不抛)', () => {
+    render(<div />);
+    expect(() => scrollToChat()).not.toThrow();
   });
 });

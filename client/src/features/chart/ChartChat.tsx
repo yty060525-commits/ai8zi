@@ -57,6 +57,14 @@ export function clearChatThread() {
   publish({ ...EMPTY });
 }
 
+/** 排盘页顶部的快捷入口：手机端聊天区被挤到折叠线以下，靠它一句话把人送过去。 */
+export function scrollToChat() {
+  const panel = document.querySelector('.chat-panel');
+  if (!panel) return;
+  panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  panel.querySelector<HTMLInputElement>('.chat-input-row input')?.focus({ preventScroll: true });
+}
+
 /** 排盘页「问问 AI」：根据提问查库(命盘事实+已算批断)后思考回答；三通道自适应。 */
 export function ChartChat() {
   const [state, setState] = useState<ChatState>(shared);
