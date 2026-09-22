@@ -62,6 +62,8 @@ export function ChartChat() {
   const [state, setState] = useState<ChatState>(shared);
   const [input, setInput] = useState('');
   const [people, setPeople] = useState<Array<{ id: string; name: string }>>([]);
+  /* 命主列表默认收起：选中后若一直摊开，会长期占着输入区上方；点「当前命主」的名字才展开改选。 */
+  const [pickOpen, setPickOpen] = useState(false);
   const logRef = useRef<HTMLDivElement | null>(null);
   const { thread: messages, busy, error, needKey, pending, selected } = state;
 
@@ -134,7 +136,7 @@ export function ChartChat() {
 
   return <section className="chat-panel" aria-label="问问 AI">
     <h2>问问 AI</h2>
-    <p className="chat-hint">基于已入库的命盘与已算批断作答，例如：「张三的喜用五行是什么？」「2027年事业运如何？」。{selected ? <span>当前命主：<strong>{selected.name}</strong>（点姓名可切换）</span> : null}</p>
+    <p className="chat-hint">基于已入库的命盘与已算批断作答，例如：「张三的喜用五行是什么？」「2027年事业运如何？」。{selected ? <span>当前命主：<button type="button" className="link-button chat-current-person" aria-expanded={pickOpen} aria-label="切换当前命主" onClick={() => setPickOpen((open) => !open)}>{selected.name}</button>（点姓名可切换）</span> : null}</p>
     {messages.length === 0 ? <p className="chat-empty">支持追问：先问本命，再问某年某月，AI 会引用数据库里已算好的流年/流月批断。</p> : null}
     {suggestions.length ? <div className="chat-people" aria-label="示例提问">{suggestions.map((suggestion) => <button type="button" key={suggestion} className="choice-button" disabled={busy} onClick={() => void ask(suggestion)}>{suggestion}</button>)}</div> : null}
     {messages.length > 0 ? <div className="chat-log" role="log" ref={logRef}>
@@ -146,7 +148,10 @@ export function ChartChat() {
     </div> : null}
     {messages.length > 0 ? <p className="chat-tools"><button type="button" className="text-button chat-clear" onClick={clearChatThread}>清空对话</button></p> : null}
     {pending ? <div className="chat-people" aria-label="选择命主">{pending.options.map((option) => <button type="button" key={option.id} className="choice-button" onClick={() => { publish({ selected: option }); void ask(pending.question, option.id); }}>{option.name}</button>)}</div> : null}
-    {!pending && people.length > 1 && !selected ? <div className="chat-people" aria-label="已存命主">{people.map((person) => <button type="button" key={person.id} className="choice-button" title="指定该命主后提问" onClick={() => publish({ selected: person })}>{person.name}</button>)}</div> : null}
+    {!pending && people.length > 1 && (!selected || pickOpen) ? <div className="chat-people" aria-label="已存命主">
+      {people.map((person) => <button type="button" key={person.id} className={'choice-button' + (person.id === selected?.id ? ' selected' : '')} title="指定该命主后提问" onClick={() => { publish({ selected: person }); setPickOpen(false); }}>{person.name}</button>)}
+      {selected ? <button type="button" className="text-button chat-clear-person" onClick={() => { publish({ selected: null }); setPickOpen(false); }}>取消指定</button> : null}
+    </div> : null}
     {error ? <p className="form-error" role="alert">{error}{needKey ? <button type="button" className="text-button chat-settings-link" onClick={openSettings}>去设置 ›</button> : null}</p> : null}
     <div className="chat-input-row">
       <input value={input} maxLength={500} disabled={busy} placeholder="输入命理问题(500 字以内)" aria-label="命理问题"

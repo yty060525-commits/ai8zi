@@ -149,3 +149,82 @@ describe('排盘页「问问 AI」', () => {
     expect(screen.getByLabelText('命理问题')).toBeTruthy();
   });
 });
+
+describe('切换命主(点名字)', () => {
+  const twoPeople = [{ id: 'a', name: '张三' }, { id: 'b', name: '李四' }];
+
+  it('选定命主后名字变成可点击的切换入口，列表收起', async () => {
+    vi.mocked(listBaziRecords).mockResolvedValue(twoPeople as never);
+    vi.mocked(askChat).mockResolvedValue({ status: 'completed', answer: '答' } as never);
+    render(<ChartChat />);
+    await flush();
+    // 未指定时列表就开着，点张三设为主命主
+    fireEvent.click(await screen.findByRole('button', { name: '张三' }));
+    await flush();
+
+    // 已选命主：名字变成可点击的切换入口，列表收起
+    const switcher = screen.getByRole('button', { name: '切换当前命主' });
+    expect(switcher.textContent).toBe('张三');
+    expect(screen.queryByLabelText('已存命主')).toBeNull();
+  });
+
+  it('点「当前命主」的名字 → 展开列表，可改选另一人', async () => {
+    vi.mocked(listBaziRecords).mockResolvedValue(twoPeople as never);
+    vi.mocked(askChat).mockResolvedValue({ status: 'completed', answer: '答' } as never);
+    render(<ChartChat />);
+    await flush();
+
+    // 未指定命主时列表本来就开着，先点张三
+    fireEvent.click(await screen.findByRole('button', { name: '张三' }));
+    await flush();
+    expect(screen.queryByLabelText('已存命主')).toBeNull();
+
+    // 点名字重新展开 → 改选李四
+    fireEvent.click(screen.getByRole('button', { name: '切换当前命主' }));
+    expect(screen.getByLabelText('已存命主')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '李四' }));
+    await flush();
+    expect(screen.queryByLabelText('已存命主')).toBeNull();
+    expect(screen.getByRole('button', { name: '切换当前命主' }).textContent).toBe('李四');
+  });
+
+  it('改选后提问带的是新命主的 recordId', async () => {
+    vi.mocked(listBaziRecords).mockResolvedValue(twoPeople as never);
+    vi.mocked(askChat).mockResolvedValue({ status: 'completed', answer: '答' } as never);
+    render(<ChartChat />);
+    await flush();
+    fireEvent.click(await screen.findByRole('button', { name: '张三' }));
+    await flush();
+    fireEvent.click(screen.getByRole('button', { name: '切换当前命主' }));
+    fireEvent.click(screen.getByRole('button', { name: '李四' }));
+    await flush();
+
+    fireEvent.change(screen.getByLabelText('命理问题'), { target: { value: '财运？' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await flush();
+    expect(vi.mocked(askChat).mock.lastCall?.[0]).toEqual(expect.objectContaining({ recordId: 'b' }));
+  });
+
+  it('「取消指定」回到未选状态，列表重新展开', async () => {
+    vi.mocked(listBaziRecords).mockResolvedValue(twoPeople as never);
+    vi.mocked(askChat).mockResolvedValue({ status: 'completed', answer: '答' } as never);
+    render(<ChartChat />);
+    await flush();
+    fireEvent.click(await screen.findByRole('button', { name: '张三' }));
+    await flush();
+    fireEvent.click(screen.getByRole('button', { name: '切换当前命主' }));
+    fireEvent.click(screen.getByRole('button', { name: '取消指定' }));
+    await flush();
+
+    expect(screen.queryByRole('button', { name: '切换当前命主' })).toBeNull();
+    expect(screen.getByLabelText('已存命主')).toBeTruthy();
+  });
+
+  it('只有一个命主时不展示切换列表', async () => {
+    vi.mocked(listBaziRecords).mockResolvedValue([{ id: 'a', name: '张三' }] as never);
+    vi.mocked(askChat).mockResolvedValue({ status: 'completed', answer: '答' } as never);
+    render(<ChartChat />);
+    await flush();
+    expect(screen.queryByLabelText('已存命主')).toBeNull();
+  });
+});

@@ -183,6 +183,9 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .chat-people { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .chat-people .choice-button { min-height: 36px; padding: 7px 14px; font-size: 13px; border-radius: 16px; }
 .chat-settings-link { margin-left: 8px; border: 0; padding: 0; color: #171717; font-weight: 700; text-decoration: underline; }
+/* 「当前命主：X（点姓名可切换）」——名字是按钮，视觉上仍像行内文字。 */
+.chat-current-person { border: 0; background: none; padding: 0 2px; min-height: 0; color: #171717; font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; }
+.chat-clear-person { min-height: 36px; padding: 7px 12px; font-size: 13px; color: #666; border-radius: 16px; }
 .chat-about { display: block; margin-top: 6px; padding-top: 5px; border-top: 1px dashed #e0e0e0; color: #888; font-size: 12px; }
 .chat-tools { margin: 8px 0 0; text-align: right; }
 .chat-tools .chat-clear { min-height: 30px; padding: 3px 10px; font-size: 12px; color: #666; }
