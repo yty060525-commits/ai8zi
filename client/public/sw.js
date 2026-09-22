@@ -18,9 +18,11 @@ self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
   const url = e.request.url;
   if (e.request.mode === 'navigate' || url.indexOf('/index.html') >= 0) {
-    // 页面入口：网络优先(在线必是新版)；断网回退到最近缓存的页面
+    // 页面入口：网络优先(在线必是新版)；断网回退到最近缓存的页面。
+    // cache: 'no-store' 是关键：GitHub Pages 给 index.html 也发 max-age=600，
+    // 默认的 fetch 会吃这份 HTTP 缓存，于是「网络优先」取回的仍是旧页面。
     e.respondWith(
-      fetch(e.request)
+      fetch(e.request, { cache: 'no-store' })
         .then((res) => { if (res.ok) { const copy = res.clone(); if (url.startsWith(self.location.origin)) caches.open(CACHE).then((c) => c.put(e.request, copy)); } return res; })
         .catch(() => caches.match(e.request).then((hit) => hit || caches.match('./index.html')))
     );

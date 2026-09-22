@@ -33,3 +33,35 @@ describe('Service Worker 缓存版本', () => {
     expect(dist).toMatch(/const CACHE = 'mingli-\d+';/);
   });
 });
+
+/* 光有版本号还不够：浏览器只在「页面导航」时才自动去取 sw.js，而 GitHub Pages
+   给 sw.js 和 index.html 都发了 Cache-Control: max-age=600。
+   手机从主屏图标打开(尤其 iOS)不产生导航 → 更新检查永不触发；
+   加上 600 秒的 HTTP 缓存 → 连导航时的取回也吃旧副本。
+   所以必须「主动 update()」+「取页面时 no-store」，两条一起守。 */
+describe('Service Worker 主动更新链路', () => {
+  it('页面会主动查更新：注册后、定时、回到前台各一次', () => {
+    const main = read('client/src/main.tsx');
+    expect(main).toContain('registration.update()');
+    expect(main).toContain('setInterval');
+    expect(main).toContain('visibilitychange');
+  });
+
+  it('换版重载绕开 HTTP 缓存(加时间戳参数)，否则重载完还是旧页面', () => {
+    const main = read('client/src/main.tsx');
+    expect(main).toContain('function reloadFresh');
+    expect(main).toContain("url.searchParams.set('_v'");
+    // 直接 reload() 会吃 index.html 的 max-age 缓存
+    expect(main).not.toMatch(/location\.reload\(\)/);
+  });
+
+  it('SW 取页面入口时用 no-store，不吃 max-age 缓存', () => {
+    const sw = read('client/public/sw.js');
+    expect(sw).toContain("fetch(e.request, { cache: 'no-store' })");
+  });
+
+  it('静态资源仍保持缓存优先(离线可用不能被这次改动破坏)', () => {
+    const sw = read('client/public/sw.js');
+    expect(sw).toContain('caches.match(e.request).then((hit)');
+  });
+});
