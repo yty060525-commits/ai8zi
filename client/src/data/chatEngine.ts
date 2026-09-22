@@ -20,7 +20,7 @@ import { chatDirect, toneInstructionText } from './deepseekAdapter';
 import { countElements, sanitizeChatText } from '../features/chart/elements';
 
 export interface ChatMessage { role: 'user' | 'assistant'; content: string }
-export interface ChatPlan { recordId: string | null; personName: string | null; matchedCount: number; year?: number; month?: number; topics: string[] }
+export interface ChatPlan { recordId: string | null; personName: string | null; matchedCount: number; year?: number; month?: number; topics: string[]; question?: string; scan?: boolean; scanFrom?: number }
 export interface ChatEvidence {
   person: { id: string; name: string; gender: string; birthYear: number };
   plan: { year?: number; month?: number; topics: string[] };
@@ -52,7 +52,12 @@ export const TOPIC_RULES: Array<{ topic: string; re: RegExp }> = [
 ];
 const RELATIVE_YEAR: Record<string, number> = { 今年: 0, 明年: 1, 后年: 2, 去年: -1, 前年: -2 };
 
-export function extractWhen(question: string, now = new Date()): { year?: number; month?: number } {
+/** 开放式时间问法：问「什么时候/大约在何时」，不指定具体年份，需要扫未来若干年。 */
+export const OPEN_TIMING_RE = /什么(时候|时间|年份|时期|阶段|时候能)|哪一?年|何时|多久|几年(内|后|能)|大约在|大致在|何时能/;
+/** 扫年窗口：从「起算年」往后取多少年。太短会漏掉晚来的应期，太长则证据与成本失控。 */
+export const SCAN_YEARS = 8;
+
+export function extractWhen(question: string, now = new Date()): { year?: number; month?: number; scan?: boolean; from?: number } {
   const q = String(question || '');
   let year: number | undefined; let month: number | undefined;
   const abs = q.match(/(20\d{2})\s*年/);
@@ -61,6 +66,11 @@ export function extractWhen(question: string, now = new Date()): { year?: number
     for (const [word, delta] of Object.entries(RELATIVE_YEAR)) {
       if (q.includes(word)) { year = now.getFullYear() + delta; break; }
     }
+  }
+  // 「明年什么时候」这种：句子里有明确年份锚点，不算开放式扫描，仍按那一年精确取证
+  if (year === undefined && OPEN_TIMING_RE.test(q)) {
+    const rel = Object.entries(RELATIVE_YEAR).find(([word]) => q.includes(word));
+    return { year: undefined, month: undefined, scan: true, from: now.getFullYear() + (rel ? rel[1] : 0) };
   }
   const monthMatch = q.match(/(\d{1,2})\s*月/);
   if (monthMatch) { const m = Number(monthMatch[1]); if (m >= 1 && m <= 12) month = m; }
@@ -80,24 +90,52 @@ export function analyzeQuestion(question: string, records: Array<Pick<BaziRecord
     if (name && q.includes(name)) matched.push({ id: s.id, name });
   }
   matched.sort((a, b) => b.name.length - a.name.length);
-  const { year, month } = extractWhen(q, now);
+  const when = extractWhen(q, now);
   const topics = [...new Set(TOPIC_RULES.filter((rule) => rule.re.test(q)).map((rule) => rule.topic))];
-  return { recordId: matched[0]?.id ?? null, personName: matched[0]?.name ?? null, matchedCount: matched.length, year, month, topics };
+  return { recordId: matched[0]?.id ?? null, personName: matched[0]?.name ?? null, matchedCount: matched.length, year: when.year, month: when.month, scan: when.scan === true, scanFrom: when.from, topics, question: q };
+}
+
+/** 追问继承上文语境：上一轮问的是 2026 年爱情，这轮一句「那我明年呢」不该退化成全新问题。
+ *  只做「有历史且本轮自己没说时间/主题」时的补全，本轮若已明说就以本轮为准。 */
+export function applyFollowUp(plan: ChatPlan, history: ChatMessage[]): ChatPlan {
+  if (!Array.isArray(history) || history.length === 0) return plan;
+  const prevUser = [...history].reverse().find((m) => m?.role === 'user' && typeof m.content === 'string');
+  const prevAssistant = [...history].reverse().find((m) => m?.role === 'assistant' && typeof m.content === 'string');
+  const source = [prevUser?.content, prevAssistant?.content, plan.question].filter(Boolean).join('\n');
+  const next: ChatPlan = { ...plan };
+  if (!plan.topics?.length) {
+    const inherited = [...new Set(TOPIC_RULES.filter((rule) => rule.re.test(source)).map((rule) => rule.topic))];
+    if (inherited.length) next.topics = inherited;
+  }
+  if (next.year === undefined && !next.scan) {
+    const inheritedWhen = extractWhen(prevUser?.content ?? '', new Date());
+    if (inheritedWhen.year !== undefined) { next.year = inheritedWhen.year; next.month = inheritedWhen.month; }
+    else if (inheritedWhen.scan) { next.scan = true; next.scanFrom = inheritedWhen.from; }
+  }
+  return next;
 }
 
 /* ---------- 证据摘录(与服务器 sliceSections 同口径) ---------- */
-const SECTION_ALLOW = ['健康', '事业', '财运', '爱情', '刑冲克害批注', '后天调整', '事业适配', '健康注意', '核心结论', '值得关注的时间节点', '行动建议', '身强身弱与喜忌'];
+/** 批断正文里可能出现的【小节】标签全集：提问主题(健康/事业/…)与独立小节名(核心结论/…)的并集。
+ *  提问主题里的「大运」「格局」「神煞」「五行」「流月」不在这里——它们不是批断小节的标签，
+ *  但必须能落进 labels，否则过滤条件会被整条跳过、把全部小节都当成命中返回。 */
+export const KNOWN_SECTION_LABELS = [
+  '健康', '事业', '财运', '爱情', '刑冲克害批注', '后天调整', '事业适配', '健康注意',
+  '核心结论', '值得关注的时间节点', '行动建议', '身强身弱与喜忌',
+];
 export function sliceSections(text: string, topics: string[], capPer = 700): string {
   const source = String(text || '');
   if (!source) return '';
-  const labels = (Array.isArray(topics) ? topics : []).filter((t) => SECTION_ALLOW.includes(t));
+  const labels = (Array.isArray(topics) ? topics : []).slice();
+  const realLabels = labels.filter((t) => KNOWN_SECTION_LABELS.includes(t));
   const blocks: string[] = [];
   const seen = new Set<string>();
   for (const part of source.split(/(?=【)/)) {
     const m = part.match(/^【([^】]+)】([\s\S]*)/);
     if (!m) continue;
     const label = m[1].trim(); const body = m[2].trim().slice(0, capPer);
-    if (labels.length && !labels.some((t) => label.includes(t))) continue;
+    // 提问主题里存在真实小节标签时才按标签过滤；只问「大运/格局」这类非小节主题时不过滤
+    if (realLabels.length && !realLabels.some((t) => label.includes(t))) continue;
     if (seen.has(label)) continue;
     seen.add(label);
     blocks.push('【' + label + '】' + body);
@@ -174,8 +212,33 @@ export function buildEvidence(record: BaziRecord, plan: ChatPlan): ChatEvidence 
     natal, analyses: [], missing: [],
   };
   const tasks = taskRecords(record);
-  const wantsPeriod = plan.year !== undefined;
+  const wantsScan = plan.scan === true;
+  const wantsPeriod = plan.year !== undefined || wantsScan;
   const topics = plan.topics;
+  if (wantsScan) {
+    // 开放式时机提问：把未来若干年的流年批断逐条列成时间线，让模型在证据里挑年限
+    const labels = topics.length ? topics : ['健康', '事业', '财运', '爱情', '刑冲克害批注'];
+    const from = Number(plan.scanFrom ?? new Date().getFullYear());
+    const lines: string[] = []; const gaps: number[] = []; const uncovered: number[] = [];
+    for (let y = from; y < from + SCAN_YEARS; y += 1) {
+      const annual = findCompleted(tasks, 'annual', y);
+      if (!annual) { gaps.push(y); continue; }
+      const body = sliceSections(annual.analysis.explanation, labels, 260);
+      // 该年批断存在，但按提问主题过滤后一个字都没有 → 这一年答不了这个问题，必须点名
+      if (!body) uncovered.push(y);
+      lines.push(String(y) + '年(' + String(annual.analysis.title ?? '') + ')：' + body);
+    }
+    if (lines.length) {
+      evidence.analyses.push({ heading: from + '—' + (from + SCAN_YEARS - 1) + '年·逐年批断(用于判断应期)', text: lines.join('\n') });
+      const decade = findCompleted(tasks, 'decade', from);
+      if (decade) evidence.analyses.push({ heading: '所处大运批断', text: sliceSections(decade.analysis.explanation, labels) });
+    } else {
+      evidence.missing.push(from + '—' + (from + SCAN_YEARS - 1) + ' 年的流年批断一条都还没生成，无法判断应期');
+    }
+    if (gaps.length) evidence.missing.push('下列年份尚未生成流年批断，作答时只能在这些年份之外给应期：' + gaps.join('、') + '年');
+    if (uncovered.length) evidence.missing.push('下列年份虽有流年批断，但其中没有与所问主题相关的小节，不得据其判断该主题的应期：' + uncovered.join('、') + '年');
+    return evidence;
+  }
   if (!wantsPeriod) {
     const baseline = findCompleted(tasks, 'baseline');
     if (baseline) {
@@ -207,21 +270,26 @@ export function buildEvidence(record: BaziRecord, plan: ChatPlan): ChatEvidence 
 /* ---------- 消息构建(与服务器 buildChatMessages 同口径) ---------- */
 export const CHAT_SYSTEM = '你是一位资深子平命理师，正在与用户实时对话答疑。'
   + '【唯一依据】回答只能引用消息中【命盘事实】【所问时段运势数据】【已算批断摘录】里已给出的内容。'
-  + '严格按下列顺序作答：'
-  + '第一步，检查【已算批断摘录】里有没有覆盖用户所问的时段与主题；'
-  + '第二步，只要有覆盖，就直接引用其中的结论与依据作答，不得改写其口径；'
-  + '第三步，只要没有覆盖(摘录为空或只有【数据缺口提示】)，或有【数据缺口提示】，'
-  + '就先明确说出"数据库里还没有计算过这批数据"，逐条列出缺了什么，'
+  + '【先看历史】若对话历史里已有你上一轮的回答，必须先读懂用户这一句在追问什么，再往下走：'
+  + '追问是对上一轮某个结论的深挖或换角度，就在上一轮的基础上继续讲那一处，不得整段重述上一轮已经说过的话；'
+  + '追问若是在纠正或否定你上一轮的理解，先承认理解偏了，再按用户真正想问的重答一次；'
+  + '追问若含义不明、指代不清，只问一句最关键的澄清话(比如"你是想问姻缘的应期，还是想问今年的桃花？")，不要顺着猜。'
+  + '【时机提问】用户问"什么时候/大约何时/多久/哪一年"这类不指定年份的应期问题时，'
+  + '证据里会给出一个连续年份的【逐年批断(用于判断应期)】；'
+  + '要逐个年份比对其中与该主题相关的小节，挑出最有利的一到两个年份作为应期作答，'
+  + '并说明是该年哪一条批断支持这个判断；'
+  + '证据里若点名了"尚未生成流年批断"的年份，只能在该范围之外给应期，绝不能给这批空缺年份下任何结论。'
+  + '【缺口处理】只有当证据覆盖不了用户所问的时段与主题时(摘录为空，或只有【数据缺口提示】)，'
+  + '才明确说出"数据库里还没有计算过这批数据"，逐条列出缺了什么，'
   + '并建议用户先到命盘详情页点「AI 分析」把对应的本命/流年/流月批断算出来，然后再来提问；'
   + '此时只允许复述缺口与已有事实，一条都不许推测。'
   + '【绝对禁止】禁止自行推算或猜测干支、十神、五行、旺衰、格局、神煞；'
   + '禁止用命理常识、通书、经验、类比或"一般来说""通常""可能会"来补足缺失数据；'
   + '禁止在证据之外新增任何未给出的结论。'
-  + '已有事实优先，格局与旺衰一律以命盘事实里的 patternFacts / strengthScore 字段为准，不得重判、不得改口径。'
+  + '已有事实优先，格局与旺衰一律以命盘事实里「格局事实」「旺衰评分」两项为准，不得重判、不得改口径。'
   + '【说重点】先说结论，再给依据，只讲与该问题直接相关的话，不铺垫、不寒暄、不重复问题、不写无关主题。'
   + '【禁止英文】正文一律用中文表述，不得出现任何英文单词、英文缩写或拼音；'
-  + '尤其禁止把证据 JSON 里的英文字段名(如 patternFacts、strengthScore、dayMaster、elementRatio 等)、'
-  + '变量名、代码标识符原样抄进正文，要说的内容一律翻译成中文说法。'
+  + '尤其禁止把证据 JSON 里的英文字段名、变量名、代码标识符原样抄进正文，要说的内容一律翻译成中文说法。'
   + '输出为简体中文纯文本：不要 JSON、不要代码块/注释/围栏标记；总长 150~350 字；'
   + '分点(1. 2. 3.)作答，有证据时每点都注明依据的批断小节，无证据时直接说明缺数据并给出补算建议；全篇不得出现繁体字。';
 
@@ -260,7 +328,7 @@ export async function askChat(input: AskChatInput): Promise<ChatReply> {
     // 本机若已有该盘完整数据，把引擎现算的时段行一并带上(服务器存储是瘦身版)
     try {
       const records = await listBaziRecords();
-      const plan = analyzeQuestion(question, records);
+      const plan = applyFollowUp(analyzeQuestion(question, records), history);
       const target = (recordId ? records.find((r) => r.id === recordId) : undefined)
         ?? (plan.recordId ? records.find((r) => r.id === plan.recordId) : undefined)
         ?? (records.length === 1 ? records[0] : undefined);
@@ -285,7 +353,7 @@ export async function askChat(input: AskChatInput): Promise<ChatReply> {
 async function askChatLocal(input: { question: string; history: ChatMessage[]; tone: number; recordId?: string | null; signal?: AbortSignal }): Promise<ChatReply> {
   const records = await listBaziRecords();
   if (records.length === 0) return { status: 'need_record', reason: '还没有任何命盘：请先在「排盘」页保存一条记录，再向我提问' };
-  const plan = analyzeQuestion(input.question, records);
+  const plan = applyFollowUp(analyzeQuestion(input.question, records), input.history);
   let target = input.recordId ? records.find((r) => r.id === input.recordId) : undefined;
   if (!target && plan.recordId) target = records.find((r) => r.id === plan.recordId);
   if (!target && records.length === 1) target = records[0];

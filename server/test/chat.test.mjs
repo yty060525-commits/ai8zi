@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { openDatabase, insertRecord, getRecordById, writeCache, readCache, clearChartCache } from '../db.mjs';
-import { analyzeQuestion, extractWhen, sliceSections, collectEvidence, buildChatMessages, chatCacheKey, runChat, sanitizeChatText, FIELD_NAME_ZH } from '../chat.mjs';
+import { analyzeQuestion, extractWhen, sliceSections, collectEvidence, buildChatMessages, chatCacheKey, applyFollowUp, runChat, sanitizeChatText, FIELD_NAME_ZH, SCAN_YEARS } from '../chat.mjs';
 import { saveProviderKey, cacheKey } from '../ai.mjs';
 import { createApp } from '../app.mjs';
 
@@ -33,6 +33,53 @@ describe('提问理解(检索计划)', () => {
     const plan = analyzeQuestion('今年桃花运如何', [{ id: 'a', name: '张三' }], now);
     assert.equal(plan.recordId, null);
     assert.ok(plan.topics.includes('爱情'));
+  });
+  test('开放式时机提问 → 不锚定某一年，改为标记扫年起点', () => {
+    for (const q of ['大概什么时期能找到对象', '我什么时候能升职', '哪一年适合结婚', '多久能遇到贵人', '何时能有起色']) {
+      const plan = analyzeQuestion(q, [{ id: 'a', name: '张三' }], now);
+      assert.equal(plan.year, undefined, q);
+      assert.equal(plan.scan, true, q);
+      assert.equal(plan.scanFrom, 2026, q);
+    }
+  });
+  test('「明年什么时候」有年份锚点，仍按那一年精确取证而不是扫年', () => {
+    const plan = analyzeQuestion('明年什么时候适合换工作', [{ id: 'a', name: '张三' }], now);
+    assert.equal(plan.scan, false);
+    assert.equal(plan.year, 2027);
+  });
+  test('纯本命问题不触发扫年(问五行不该被当成问时机)', () => {
+    const plan = analyzeQuestion('我的五行喜用是什么', [{ id: 'a', name: '张三' }], now);
+    assert.equal(plan.scan, false);
+    assert.equal(plan.year, undefined);
+  });
+});
+
+/* ---------- 追问继承上文 ---------- */
+describe('追问继承上文(防复读)', () => {
+  const now = new Date('2026-09-22T08:00:00');
+  const hist = (u, a) => [{ role: 'user', content: u }, { role: 'assistant', content: a }];
+  test('本轮没提主题/时间时，从上一轮继承', () => {
+    const base = analyzeQuestion('那具体呢', [{ id: 'a', name: '张三' }], now);
+    assert.deepEqual(base.topics, []);
+    const plan = applyFollowUp(base, hist('2026年爱情如何', '【爱情】1. 平顺。'));
+    assert.deepEqual(plan.topics, ['爱情']);
+    assert.equal(plan.year, 2026);
+  });
+  test('本轮自己已明说时间/主题时不继承，以本轮为准', () => {
+    const base = analyzeQuestion('2027年事业如何', [{ id: 'a', name: '张三' }], now);
+    const plan = applyFollowUp(base, hist('2026年爱情如何', '【爱情】1. 平顺。'));
+    assert.deepEqual(plan.topics, ['事业']);
+    assert.equal(plan.year, 2027);
+  });
+  test('上一轮是开放式时机提问 → 追问同样保持扫年', () => {
+    const base = analyzeQuestion('那具体呢', [{ id: 'a', name: '张三' }], now);
+    const plan = applyFollowUp(base, hist('大概什么时期能找到对象', '【爱情】1. 应期在2028年。'));
+    assert.equal(plan.scan, true);
+    assert.deepEqual(plan.topics, ['爱情']);
+  });
+  test('无历史时原样返回', () => {
+    const base = analyzeQuestion('2026年爱情如何', [{ id: 'a', name: '张三' }], now);
+    assert.deepEqual(applyFollowUp(base, []), base);
   });
 });
 
@@ -90,6 +137,64 @@ describe('查库取证', () => {
     const last = msgs[msgs.length - 1].content;
     assert.ok(last.includes('# 用户问题'));
     assert.ok(last.includes('流年批断') || ev.analyses.length > 0);
+    db.close();
+  });
+  test('扫年取证：把窗口内已有年份列成时间线，缺的年份逐个点名', () => {
+    const db = openDatabase(':memory:');
+    // 库内只有 2026 一条流年，窗口 2026—2033 其余 7 年应逐个写进缺口
+    insertRecord(db, baseRecord);
+    const rec = getRecordById(db, 'r1');
+    const ev = collectEvidence(db, rec, { scan: true, scanFrom: 2026, topics: ['爱情'] }, { providers: [] });
+    const timeline = ev.analyses.find((a) => a.heading.includes('逐年批断'));
+    assert.ok(timeline, '应生成逐年时间线');
+    assert.ok(timeline.text.includes('2026年'));
+    assert.ok(timeline.text.includes('顺'), '应带上该年爱情小节');
+    assert.equal(timeline.text.includes('2027年'), false, '没有批断的年份不得混进时间线');
+    const gap = ev.missing.find((m) => m.includes('2027'));
+    assert.ok(gap, '缺的年份要写进缺口');
+    for (let y = 2027; y < 2026 + SCAN_YEARS; y += 1) assert.ok(gap.includes(String(y)), String(y) + ' 应被点名');
+    assert.equal(gap.includes('2026'), false, '已有批断的年份不算缺口');
+    db.close();
+  });
+  test('扫年取证：主题不是批断小节时(神煞/大运/格局)不过滤，整年批断都交给模型判断', () => {
+    const db = openDatabase(':memory:');
+    insertRecord(db, baseRecord);
+    const rec = getRecordById(db, 'r1');
+    const ev = collectEvidence(db, rec, { scan: true, scanFrom: 2026, topics: ['神煞'] }, { providers: [] });
+    const timeline = ev.analyses.find((a) => a.heading.includes('逐年批断'));
+    // 「神煞」不是【小节】标签：过滤条件整条跳过，该年全部小节都要给出，不能凭截空的正文下结论
+    assert.ok(timeline.text.includes('【健康】'));
+    assert.ok(timeline.text.includes('【刑冲克害批注】'));
+    assert.equal(ev.missing.some((m) => m.includes('没有与所问主题相关的小节')), false);
+    db.close();
+  });
+  test('扫年取证：主题是批断小节但该年没有该小节 → 点名说明该年判不了这个主题', () => {
+    const db = openDatabase(':memory:');
+    // 只留一条没有【事业】小节的 2026 流年，问事业时应命中「该年覆盖不了主题」
+    const noCareer = {
+      ...baseRecord,
+      aiTasks: { 'task-03': { task: { taskId: 'task-03', type: 'annual', year: 2026 }, status: 'completed', analysis: { title: '丙午', explanation: '【健康】1. 心火旺。' } } },
+    };
+    insertRecord(db, noCareer);
+    const rec = getRecordById(db, 'r1');
+    const ev = collectEvidence(db, rec, { scan: true, scanFrom: 2026, topics: ['事业'] }, { providers: [] });
+    const uncovered = ev.missing.find((m) => m.includes('没有与所问主题相关的小节'));
+    assert.ok(uncovered, '应点名该年覆盖不了主题');
+    assert.ok(uncovered.includes('2026'));
+    // 该年仍留在时间线里，让模型看到「这条批断里确实没有事业内容」
+    const timeline = ev.analyses.find((a) => a.heading.includes('逐年批断'));
+    assert.ok(timeline.text.includes('2026年('));
+    db.close();
+  });
+  test('扫年窗口内一条流年都没有 → 明确说不出应期，而不是笼统答没有数据', () => {
+    const db = openDatabase(':memory:');
+    insertRecord(db, { ...baseRecord, aiTasks: { 'task-01': baseRecord.aiTasks['task-01'] } });
+    const rec = getRecordById(db, 'r1');
+    const ev = collectEvidence(db, rec, { scan: true, scanFrom: 2026, topics: ['爱情'] }, { providers: [] });
+    assert.equal(ev.analyses.some((a) => a.heading.includes('逐年批断')), false);
+    assert.ok(ev.missing.some((m) => m.includes('无法判断应期')));
+    // 本命批断缺失时仍要提示补算，两条缺口并存
+    assert.ok(ev.missing.some((m) => m.includes('2026—')));
     db.close();
   });
 });
