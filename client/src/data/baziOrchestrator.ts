@@ -2,6 +2,7 @@ import type { AiFindings, BaziAIAnalysis, BaziAnalysisTask, BaziRecord, BaziTask
 import * as adapter from './deepseekAdapter';
 import { chinaYear, chinaYearMonth } from '../utils/date';
 import { ELEMENT_GUIDES, primaryElement, type ElementGuide } from './elementKnowledge';
+import { sanitizeAnalysisText } from '../features/chart/elements';
 export type TaskRunner = (task: BaziAnalysisTask, payload: { nonAiResult: BaziRecord['nonAiResult']; task: BaziAnalysisTask }) => Promise<BaziTaskResult>;
 export interface AiProgress { done: number; total: number; label: string; record: BaziRecord; }
 export type ProgressFn = (progress: AiProgress) => void | Promise<void>;
@@ -126,7 +127,7 @@ export function stripMarkers(value: string): string {
 }
 
 export function sanitizeAnalysis(raw: BaziAIAnalysis | undefined): BaziAIAnalysis {
-  const asString = (v: unknown) => (typeof v === 'string' ? stripMarkers(v) : '');
+  const asString = (v: unknown) => (typeof v === 'string' ? sanitizeAnalysisText(stripMarkers(v)) : '');
   const asStringArray = (v: unknown) => Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
   const optional = (key: 'overall' | 'health' | 'career' | 'wealth' | 'love' | 'notice' | 'title') => (raw && asString(raw[key])) ? { [key]: asString(raw[key]) } : {};
   return {

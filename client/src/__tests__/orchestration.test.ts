@@ -5,7 +5,24 @@ import type { BaziAnalysisTask, BaziRecord } from '../types/domain';
 
 const record = { id: 'r1', name: '测试', gender: 'male', birthYear: 1984, birthMonth: 2, createdAt: '2025-01-01T00:00:00.000Z', yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午', nonAiResult: { forecastRange: [2025, 2026, 2027, 2028, 2029, 2030, 2031, 2032, 2033, 2034], greatFortunes: [], annualFortunes: [], monthlyFortunes: [] } as unknown as BaziRecord['nonAiResult'], aiStatus: 'not_started' } as BaziRecord;
 
-const okAnalysis = { pattern: 'x', strength: '强', usefulElements: [], avoidElements: [], explanation: 'ok' };
+// 真实 explanation 是带【小节】的简体中文长文；用纯 ASCII 占位会被 sanitizeAnalysis 的
+// 去英文规则清空，导致「复用已完成结果」的判定失效，故这里用贴近真实的中文正文。
+// 小节必须覆盖 REQUIRED_SECTIONS 的全部维度(含时段任务的「刑冲克害批注」)，否则会触发结构重试。
+const okText = [
+  '【身强身弱与喜忌】1. 日主得令，身强。',
+  '【健康】1. 注意作息。',
+  '【事业】1. 宜进取。',
+  '【财运】1. 稳中求进。',
+  '【爱情】1. 多沟通。',
+  '【刑冲克害批注】1. 本月无明显冲克。',
+].join('\n');
+// 全盘总结另有 REQUIRED_SECTIONS(核心结论/值得关注的时间节点/行动建议)，缺段会触发结构重试。
+const OVERVIEW_TEXT_FULL = [
+  '【核心结论】1. 命局主线清晰。',
+  '【值得关注的时间节点】1. 2027年(丙午)：官星得力，是机会窗口。',
+  '【行动建议】1. 抓住上半年。',
+].join('\n');
+const okAnalysis = { pattern: 'x', strength: '强', usefulElements: [], avoidElements: [], explanation: okText };
 
 describe('task layout: 本命 + 未来十年 + 滚动12个月(+大运) + 末条全盘总结', () => {
   it('builds 23 tasks without great fortunes', () => {
@@ -40,14 +57,14 @@ describe('task layout: 本命 + 未来十年 + 滚动12个月(+大运) + 末条�
   it('runs baseline → years/months → decades and persists everything', async () => {
     const calls: string[] = [];
     const withDecades: BaziRecord = { ...record, nonAiResult: { forecastRange: Array.from({ length: 10 }, (_, i) => 2025 + i), greatFortunes: [{ ganZhi: '辛未', startYear: 2017, endYear: 2026 }], annualFortunes: [], monthlyFortunes: [] } as unknown as BaziRecord['nonAiResult'] };
-    const result = await orchestrateBaziAnalysis(withDecades, async (task) => { calls.push(task.taskId); return { task, status: 'completed', analysis: okAnalysis }; });
+    const result = await orchestrateBaziAnalysis(withDecades, async (task) => { calls.push(task.taskId); return { task, status: 'completed', analysis: { ...okAnalysis, explanation: task.type === 'overview' ? OVERVIEW_TEXT_FULL : okText } }; });
     // 23 基础任务 + 1 大运 + 1 全盘总结 = 25
     expect(calls.length).toBe(25);
     expect(calls[0]).toBe('task-01');
     expect(calls).toContain('task-24'); // 大运任务已跑
     expect(calls[calls.length - 1]).toBe('task-31'); // 总结排在最后
     expect(Object.keys(result.aiTasks ?? {})).toHaveLength(25);
-    expect(result.aiAnalysis?.explanation).toBe('ok');
+    expect(result.aiAnalysis?.explanation).toBe(okText);
     // 月度任务携带了干支行(供后端最小上下文)
     const monthTask = result.aiTasks?.['task-12']?.task;
     expect(monthTask?.type).toBe('monthly');
@@ -81,14 +98,14 @@ describe('task layout: 本命 + 未来十年 + 滚动12个月(+大运) + 末条�
     const record2 = { ...record, nonAiResult: undefined };
     const result = await orchestrateBaziAnalysis(record2, async (task) => {
       called.push(task.taskId);
-      if (task.type === 'baseline') return { task, status: 'completed', analysis: { pattern: '身弱', strength: '弱', usefulElements: ['木'], avoidElements: ['金'], explanation: 'ok' } };
+      if (task.type === 'baseline') return { task, status: 'completed', analysis: { pattern: '身弱', strength: '弱', usefulElements: ['木'], avoidElements: ['金'], explanation: okText } };
       if (task.type === 'adjustment') {
         expect(task.guide?.element).toBe('木');
         expect(task.guide?.lifestyle).toContain('木');
         expect(task.guide?.career).toContain('木');
         expect(ELEMENT_GUIDES['木']).toBeDefined();
       }
-      return { task, status: 'completed', analysis: { pattern: 'x', strength: 'x', usefulElements: [], avoidElements: [], explanation: 'ok' } };
+      return { task, status: 'completed', analysis: { pattern: 'x', strength: 'x', usefulElements: [], avoidElements: [], explanation: okText } };
     });
     expect(called).toContain('task-30');
     expect(result.aiTasks?.['task-30']?.task.type).toBe('adjustment');

@@ -73,3 +73,18 @@ export function sanitizeChatText(text: string): string {
   out = out.replace(/\bAI\b/g, 'AI').replace(/\s{2,}/g, ' ').replace(/ +([，。、；：）])/g, '$1');
   return out.trim();
 }
+
+/** 批断正文(explanation 等)的英文清洗：先按字段名翻中文，再清掉残留标识符与 `xx: 值` 残句。
+ *  与聊天不同，这里不做「整段英文→清空」的丢弃(批断长文里偶有一两个词不该毁掉整段)。 */
+export function sanitizeAnalysisText(text: string): string {
+  let out = String(text ?? '').replace(/\r/g, '');
+  if (!/[A-Za-z]/.test(out)) return out;
+  // 「得令与否(inSeason)为false」这类由提示词引导出的照抄 → 去掉括号注音，让中文说法留下。
+  out = out.replace(/[（(]\s*(?:[A-Za-z_][A-Za-z0-9_]*)(?:\s*[:=]\s*[A-Za-z0-9_.+-]+)?\s*[)）]/g, '');
+  out = out.replace(/[A-Za-z_][A-Za-z0-9_]{1,}/g, (word) => FIELD_NAME_ZH[word] ?? word);
+  out = out.replace(/([^\s：:])[：:]\s*(?:true|false|null|undefined|None)\b/gi, '$1');
+  out = out.replace(/(?<=[\u4e00-\u9fff、，。；：（）「」])[A-Za-z_][A-Za-z0-9_]{2,}/g, '');
+  out = out.replace(/[A-Za-z_]{2,}/g, '');
+  out = out.replace(/\bAI\b/g, 'AI').replace(/[ \t]{2,}/g, ' ').replace(/ +([，。、；：）])/g, '$1');
+  return out.split('\n').map((line) => line.replace(/\s+$/, '')).join('\n').trim();
+}
