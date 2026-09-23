@@ -634,8 +634,12 @@ export function calculateNonAi(
 
   // 旺衰评分只算一次，供 patternFacts 与返回对象共用
   const strengthScore = scoreStrength(pillars, day);
+  /* 时柱必须回显用户填的那一柱。eight.getTime() 是按「正午近似」的出生时刻推出来的，
+     而定位出生日期时只用年/月/日三柱比对(见上文 scanRange)，所以库给的时间支几乎必然是午，
+     不是用户填的未/申/…。旧实现直接输出 eight.getTime()：实测输入癸未、界面显示壬午 ——
+     藏干、十神、纳音、长生全都按 pillars(用户输入)算，唯独四柱这一行按库算，两拨数字自相矛盾。 */
   return {
-    pillars: { year: eight.getYear(), month: eight.getMonth(), day: eight.getDay(), hour: eight.getTime() },
+    pillars: { year: pillars[0], month: pillars[1], day: pillars[2], hour: pillars[3] },
     solarDate: candidate.toYmd(),
     lunarDate: lunar.toString(),
     zodiac: lunar.getYearShengXiao(),
@@ -657,8 +661,10 @@ export function calculateNonAi(
     luckStart,
     annualFortunes,
     monthlyFortunes,
-    // 十二长生：日主对四支(本地查表)，与库 getXXxDiShi 同口径
-    twelveLongevity: pillars.map((pillar) => longevityOf(day, pillar[1])),
+    // 十二长生：日主对年/月/日三支。时支不列 —— 传统论「生旺死绝」只看年月日三宫，
+    // 时下另论(看通根、看归宿)；旧实现把时支也塞进来，UI 上四条并排看不出哪条是时，
+    // 读者会误以为「养」是日主坐支的状态(实测乙日主：沐浴·绝·养 里那个养其实是未时)。
+    twelveLongevity: pillars.slice(0, 3).map((pillar) => longevityOf(day, pillar[1])),
     // 旺衰与格局：引擎算定的确定结论，提示词要求 AI 沿用不重判
     strengthScore: strengthScore,
     patternFacts: Object.assign({}, derivePattern(pillars, day), { special: specialPatternHint(strengthScore, pillars, day) }),

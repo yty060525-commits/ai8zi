@@ -23,7 +23,7 @@ export function SettingsPage() {
   const [switching, setSwitching] = useState(false);
   const [notice, setNotice] = useState<Partial<Record<ServiceId, string>>>({});
   const [status, setStatus] = useState<DisplayStatus>('未配置');
-  const [storage, setStorage] = useState<{ records: number; cache: number; bytes: number } | null>(null);
+  const [storage, setStorage] = useState<{ records: number; cacheEntries: number | null; bytes: number } | null>(null);
   const [compacting, setCompacting] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<AiSelfTest | null>(null);
@@ -54,11 +54,11 @@ export function SettingsPage() {
   }, []);
   const refreshStorage = async () => {
     const stats = await getStorageStats();
-    setStorage({ records: stats.records, cache: stats.cacheEntries, bytes: stats.dbBytes });
+    setStorage({ records: stats.records, cacheEntries: stats.cacheEntries, bytes: stats.dbBytes });
   };
   useEffect(() => {
     let active = true;
-    void getStorageStats().then((stats) => { if (active) setStorage({ records: stats.records, cache: stats.cacheEntries, bytes: stats.dbBytes }); }).catch(() => { if (active) setStorage(null); });
+    void getStorageStats().then((stats) => { if (active) setStorage({ records: stats.records, cacheEntries: stats.cacheEntries, bytes: stats.dbBytes }); }).catch(() => { if (active) setStorage(null); });
     return () => { active = false; };
   }, []);
   async function compress() {
@@ -173,7 +173,28 @@ export function SettingsPage() {
     reloadLocalForSession();
     setSrvPw('');
   }
-  async function saveServerUrl() { setServerUrl(serverUrl); setSrvMsg('服务器地址已保存：此后数据与分析默认走服务器，连不上时自动退回本机离线。'); }
+  async function saveServerUrl() {
+    setServerUrl(serverUrl);
+    // 只填了地址就顺手探一次 /api/health：否则用户要等到点登录才知道地址写错了，
+    // 而那时报出的「登录失败」看起来像账号问题。
+    if (!serverUrl.trim()) { setServerUrl(''); setSrvMsg('服务器地址已清空：此后只用本机离线数据。'); return; }
+    setSrvBusy(true);
+    // 局域网里连不上的地址可能要几秒才失败(手机浏览器更慢)，探活最多等 5 秒，
+    // 超时就按「连不上」提示 —— 不能让保存按钮卡住不动。
+    const probe = new AbortController();
+    const timer = setTimeout(() => probe.abort(), 5000);
+    try {
+      const res = await fetch(serverUrl.replace(/\/+$/, '') + '/api/health', { signal: probe.signal });
+      clearTimeout(timer);
+      const data = await res.json().catch(() => null) as { service?: string } | null;
+      setSrvMsg(data?.service === 'mingli-server'
+        ? '服务器地址已保存并连通：' + serverUrl + '。填账号登录即可同步；连不上时自动退回本机离线。'
+        : '地址已保存，但它没答话(返回的不是本服务)。请核对是否写成 http://局域网IP:8787。');
+    } catch {
+      clearTimeout(timer);
+      setSrvMsg('地址已保存，但现在连不上：检查服务器上 node server.mjs 是否在跑、手机与电脑是否同一 WiFi、防火墙是否放行端口。');
+    } finally { setSrvBusy(false); }
+  }
   async function doLogin() {
     if (!serverUrl || !srvUser || !srvPw) { setSrvMsg('请先填服务器地址与账号密码'); return; }
     setSrvBusy(true); setSrvMsg(undefined);
@@ -232,8 +253,8 @@ export function SettingsPage() {
         </div>;
       })}
     </section>
-    <p className="ai-status" role="status">数据库：{storage ? `${storage.records} 条记录 / 缓存 ${storage.cache} 条 / ${(storage.bytes / 1024).toFixed(0)} KB` : '读取中…'}</p>
-    <div className="button-group"><button className="text-button" type="button" disabled={compacting || !storage} onClick={() => void compress()}>{compacting ? '压缩中…' : '压缩旧记录（缩小数据库）'}</button><button className="text-button" type="button" disabled={testing} onClick={() => void selfTest()}>{testing ? '自检中…' : 'AI 连通自检（微小消耗）'}</button><button className="text-button" type="button" onClick={() => void exportSQLite()}>导出数据库(.sqlite)</button><button className="text-button" type="button" onClick={() => void exportJson()}>导出JSON备份</button><button className="text-button" type="button" onClick={() => void exportSqlText()}>导出SQL文本(.sql)</button></div>
+    <p className="ai-status" role="status">数据库：{storage ? `${storage.records} 条记录 / 缓存 ${storage.cacheEntries === null ? '未知(网页版不统计服务器缓存)' : storage.cacheEntries + ' 条'}${storage.bytes ? ` / ${(storage.bytes / 1024).toFixed(0)} KB` : ''}` : '读取中…'}</p>
+    <div className="button-group"><button className="text-button" type="button" disabled={compacting || storage === null || storage.cacheEntries === null} onClick={() => void compress()}>{compacting ? '压缩中…' : '压缩旧记录（缩小数据库）'}</button><button className="text-button" type="button" disabled={testing} onClick={() => void selfTest()}>{testing ? '自检中…' : 'AI 连通自检（微小消耗）'}</button><button className="text-button" type="button" onClick={() => void exportSQLite()}>导出数据库(.sqlite)</button><button className="text-button" type="button" onClick={() => void exportJson()}>导出JSON备份</button><button className="text-button" type="button" onClick={() => void exportSqlText()}>导出SQL文本(.sql)</button></div>
     {exportNote && <p role="status">{exportNote}</p>}
     <section aria-label="数据导入"><h2>数据导入（.sqlite / .sqlite3 / .sql / .json 备份）</h2>
       <p className="page-description">导入后可继续离线查看；桌面版会写入本机数据库，联网账号会自动同步到服务器。遇到同名记录时按下方选择处理。</p>
@@ -254,7 +275,7 @@ export function SettingsPage() {
     <section className="server-section" aria-label="服务器 API 服务"><h2>服务器通道（默认）</h2>
       <p className="page-description">客户端可独立运行：连得上服务器时，数据与分析都走服务器通道；连不上时自动使用本机离线数据继续，联网后自动汇总同步。</p>
       <div className="settings-form">
-        <label>服务器地址<input aria-label="服务器地址" value={serverUrl} onChange={(e) => setUrl(e.target.value)} placeholder="https://你的服务器:8787" /></label>
+        <label>服务器地址<input aria-label="服务器地址" value={serverUrl} onChange={(e) => setUrl(e.target.value)} placeholder="例如 http://192.168.1.20:8787(手机与电脑连同一个 WiFi)" inputMode="url" autoComplete="off" /></label>
         <div className="button-group"><button className="text-button" type="button" onClick={() => void saveServerUrl()}>保存服务器地址</button></div>
         {!session && <><label>账号<input aria-label="服务器账号" value={srvUser} onChange={(e) => setSrvUser(e.target.value)} autoComplete="username" /></label>
           <label>密码<input aria-label="服务器密码" type="password" value={srvPw} onChange={(e) => setSrvPw(e.target.value)} autoComplete="current-password" /></label>

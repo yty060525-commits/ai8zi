@@ -30,7 +30,10 @@ export function ChartPage({ onRecordCreated }: ChartPageProps) {
       <fieldset className="gender-field"><legend>性别</legend><div className="button-group">{(['male', 'female'] as Gender[]).map((item) => <button type="button" key={item} className={gender === item ? 'choice-button selected' : 'choice-button'} onClick={() => setGender(item)} aria-pressed={gender === item}>{item === 'male' ? '男' : '女'}</button>)}</div></fieldset>
     </section>
     {error && <p className="form-error" role="alert">{error}</p>}<button className="primary-button" type="button" onClick={() => setOpen(true)}>录入四柱八字</button>
-    <BirthInputModal open={open} onClose={() => setOpen(false)} onSubmit={(pillars) => createRecord(pillars)} />
+    {/* 四柱校验(该月找不到日期/时柱不合)是在弹窗提交后才报错的：弹窗还开着时，
+        上面那行错误在遮罩后面、手机上又往往滚不到，用户只看到「点了提交没反应」。
+        所以弹窗内也要出现这一条。 */}
+    <BirthInputModal open={open} onClose={() => { setError(''); setOpen(false); }} onSubmit={(pillars) => createRecord(pillars)} error={error} />
     <ChartChat />
   </main>;
 }

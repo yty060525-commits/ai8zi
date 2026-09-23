@@ -49,11 +49,21 @@ describe('网页直连按当前使用通道路由', () => {
     expect(calls[0]).toContain('moonshot.cn');
   });
 
-  it('所有通道都未配置时给出可读原因', async () => {
+  it('所有通道都未配置时报「未配置」，不是「分析失败」', async () => {
     localStorage.setItem('mingli.provider', 'qwen');
     const res = await browserDirect(record, task);
-    expect(res.status).toBe('failed');
+    // 一个凭据都没填 → not_configured：详情页才会给「去设置填凭据」的引导，
+    // 而不是摆出「余额不足/限流/网络超时」那串无关原因并白跑两轮自动重试。
+    expect(res.status).toBe('not_configured');
     expect(String((res as { error?: string }).error)).toContain('未配置凭据');
+  });
+
+  it('填了凭据但全部调用失败时仍报「分析失败」(不退化成未配置)', async () => {
+    localStorage.setItem('mingli.provider', 'deepseek');
+    localStorage.setItem('mingli.cred.deepseek', 'ds-key');
+    vi.mocked(fetch).mockResolvedValue(new Response('quota', { status: 429 }) as never);
+    const res = await browserDirect(record, task);
+    expect(res.status).toBe('failed');
   });
 
   it('后天调整任务会带上本命结论与资料库(离线备用通道不再凭空发挥)', async () => {

@@ -110,8 +110,11 @@ export function ChartChat() {
     sharedAbort = controller;
     publish({ thread: [...shared.thread, { role: 'user', content: trimmed }] });
     setInput('');
-    const reply = await askChat({ question: trimmed, history, tone: readTone(), recordId: recordId ?? shared.selected?.id ?? null, signal: controller.signal });
+    const reply = await askChat({ question: trimmed, history, tone: readTone(), recordId: recordId ?? shared.selected?.id ?? null, signal: controller.signal }).catch(() => null);
     sharedAbort = null;
+    // 通道被整体取消(停止/清空对话)时也会走到这里：那时会话已经复位，不该再把「已取消」
+    // 当成一条错误摆在用户眼前。
+    if (reply === null) return;
     if (reply.status === 'completed' && reply.answer) {
       publish({ busy: false, thread: [...shared.thread, { role: 'assistant', content: reply.answer as string, about: aboutOf(reply) }] });
       return;

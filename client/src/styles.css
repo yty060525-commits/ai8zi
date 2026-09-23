@@ -1,5 +1,8 @@
 :root { font-family: Arial, "Microsoft YaHei", sans-serif; color: #171717; background: #f7f7f7; font-synthesis: none; }
-* { box-sizing: border-box; } body { margin: 0; min-width: 320px; background: #f7f7f7; } button, input, select { font: inherit; } button { cursor: pointer; }
+* { box-sizing: border-box; } body { margin: 0; min-width: 320px; background: #f7f7f7; overflow-x: hidden; } button, input, select { font: inherit; } button { cursor: pointer; }
+/* 长串不可断字符(记录 id、密钥报错里的 URL)会把页面撑出横向滚动，手机上整页可左右拖、
+   底部导航跟着晃。这里兜住最外层，具体那行自己折起来。 */
+.eyebrow { overflow-wrap: anywhere; }
 .app-shell { min-height: 100vh; } .app-content { max-width: 760px; margin: 0 auto; padding: 34px 22px 104px; } .chart-page, .placeholder-page { background: #fff; border: 1px solid #d0d0d0; padding: 28px; }
 .page-heading { border-bottom: 1px solid #171717; margin-bottom: 26px; } h1 { font-size: 34px; margin: 7px 0 12px; } h2 { font-size: 18px; margin: 0 0 15px; } p { line-height: 1.6; } .eyebrow, small { color: #666; font-size: 12px; letter-spacing: .08em; } .eyebrow { margin: 0; }
 .field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; } label { display: grid; gap: 7px; font-size: 14px; font-weight: 600; } input, select { border: 1px solid #999; border-radius: 0; background: #fff; min-height: 44px; padding: 9px 10px; } input:focus, select:focus, button:focus-visible { outline: 2px solid #171717; outline-offset: 2px; }
@@ -29,6 +32,7 @@
 .gender { display: inline-block; width: fit-content; padding: 2px 7px; border: 1px solid #777; font-size: 13px; }
 .gender-female { border-style: dashed; color: #555; }
 .birth-summary { color: #555; font-size: 14px; }
+.owner-tag { grid-column: 1 / -1; width: fit-content; padding: 1px 6px; border: 1px dashed #777; color: #444; font-size: 12px; }
 .chart-summary { grid-column: 1 / -1; color: #666; font-size: 13px; line-height: 1.45; }
 .row-action { color: #555; font-size: 13px; white-space: nowrap; }
 .empty-records { border: 1px dashed #999; color: #666; margin: 18px 0 0; padding: 28px 16px; text-align: center; }
@@ -51,6 +55,10 @@
 .subsection ul { margin: 8px 0 0; padding-left: 20px; columns: 2; }
 .shen-sha summary { cursor: pointer; font-weight: 600; }
 .danger-button { border: 1px solid #9b3030; background: #fff; color: #8b2020; min-height: 36px; padding: 5px 10px; margin: 0 0 10px 8px; }
+/* 删除二次确认的说明文字：跟按钮同排，手机上自动折到上一行 */
+.danger-hint { display: block; color: #8b2020; font-size: 13px; font-weight: 600; line-height: 1.45; }
+/* 未上传服务器的盘：用与「AI：…」同一行的位置提示，颜色区别于普通状态 */
+.unsynced { color: #8a5a00; }
 .info-grid div { border: 1px solid #ddd; padding: 11px; }
 .info-grid dt { color: #666; font-size: 12px; margin-bottom: 5px; }
 .info-grid dd { margin: 0; font-weight: 600; line-height: 1.5; }

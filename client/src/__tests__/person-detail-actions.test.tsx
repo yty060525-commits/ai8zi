@@ -60,7 +60,7 @@ describe('PersonDetail AI 复制筛选/清除交互', () => {
     render(<PersonDetail personId="copy-person" onBack={vi.fn()} />);
     await screen.findByRole('heading', { name: '人物详情' });
     fireEvent.click(screen.getByRole('button', { name: /清除AI结果与缓存/ }));
-    await waitFor(() => expect(screen.getByText(/已清除该命盘的 AI 结果与命中缓存/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/已清除该命盘的 AI 结果/)).toBeTruthy());
     const saved = await listBaziRecords();
     const record = saved.find((item) => item.id === 'copy-person');
     expect(record?.aiStatus).toBe('not_started');

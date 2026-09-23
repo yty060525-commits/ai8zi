@@ -176,6 +176,8 @@ const ADJUST_PREFIX = '你是资深子平命理师。根据【本命结论】的
 
 export async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask, opts: AnalyzeOptions & { secret?: string } = {}): Promise<DeepSeekResult> {
   const nonAi = record.nonAiResult;
+  // 是否有任何一个通道填了凭据：决定「全部跳过」算未配置还是真失败(见函数末尾)。
+  const anyCredential = opts.secret !== undefined || channelOrder().some((c) => !!getBrowserCredential(c.id));
   // 神煞压缩为「名称@柱位」：与服务器/桌面端同一口径(实测省约 89% 体积)
   const compactShenSha = (shenSha: NonAiChart['shenSha'] | undefined) => {
     if (!shenSha) return undefined;
@@ -310,6 +312,10 @@ export async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask,
       errors.push(channel.label + '：' + (/abort|timeout|timed out/i.test(msg) ? '网络超时或不可达' : msg));
     }
   }
+  // 三个通道一个都没填凭据：这是「未配置」，不是「分析失败」。旧实现在这里也返回
+  // failed，于是详情页挂着「余额不足/限流/网络超时」那一大段误导文案，还白跑两轮自动
+  // 重试(重试判定只看错误文本)，用户对着一个根本没配密钥的界面找密钥之外的原因。
+  if (!anyCredential) return { status: 'not_configured', error: errors.join('；') || '没有可用的通道凭据，请先在设置里配置' };
   return { status: 'failed', error: errors.join('；') || '没有可用的通道凭据，请先在设置里配置' };
 }
 

@@ -34,8 +34,8 @@ describe('本地查表与 lunar-javascript 等价', () => {
           const libNayin = [eight.getYearNaYin(), eight.getMonthNaYin(), eight.getDayNaYin(), eight.getTimeNaYin()];
           expect(chart.naYin).toEqual(libNayin);
 
-          // 十二长生(日主对四支)
-          const libDiShi = [eight.getYearDiShi(), eight.getMonthDiShi(), eight.getDayDiShi(), eight.getTimeDiShi()];
+          // 十二长生(日主对年/月/日三支；时支不列，见 nonAiCalculator 注释)
+          const libDiShi = [eight.getYearDiShi(), eight.getMonthDiShi(), eight.getDayDiShi()];
           expect(chart.twelveLongevity).toEqual(libDiShi);
 
           // 透干十神

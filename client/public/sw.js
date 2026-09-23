@@ -17,6 +17,11 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
   const url = e.request.url;
+  // 同源但**不归本站管**的请求一律放行不碰：主要是本机后端 API(如 /api/…)。
+  // 这些请求若被下面的「缓存优先」命中，会拿到一次旧回包 —— 对 POST 转 GET 的接口、
+  // 或刚写入就回读的列表来说就是数据错乱；网络失败时又会被兜到 index.html，
+  // 让前端把一段 HTML 当 JSON 解析，报出莫名其妙的「分析失败」。
+  if (url.startsWith(self.location.origin) && /\/api\//.test(url)) return;
   if (e.request.mode === 'navigate' || url.indexOf('/index.html') >= 0) {
     // 页面入口：网络优先(在线必是新版)；断网回退到最近缓存的页面。
     // cache: 'no-store' 是关键：GitHub Pages 给 index.html 也发 max-age=600，

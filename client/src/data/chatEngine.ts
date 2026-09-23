@@ -14,9 +14,10 @@
  * ========================================================================== */
 import { invoke } from '@tauri-apps/api/core';
 import type { BaziRecord } from '../types/domain';
-import { listBaziRecords } from './clientRepository';
+import { listBaziRecords, unsyncedRecordIds } from './clientRepository';
 import { isServerMode, serverFetch, ServerError } from './serverClient';
 import { chatDirect, toneInstructionText } from './deepseekAdapter';
+import { getBrowserCredential } from './aiSettings';
 import { countElements, sanitizeChatText } from '../features/chart/elements';
 
 export interface ChatMessage { role: 'user' | 'assistant'; content: string }
@@ -315,6 +316,11 @@ export function buildChatMessages(input: { question: string; history: ChatMessag
 /* ---------- 三通道入口 ---------- */
 export interface AskChatInput { question: string; history?: ChatMessage[]; tone?: number; recordId?: string | null; signal?: AbortSignal }
 
+/** 本机是否至少给一条通道填了凭据(决定服务器报错该报「未配置」还是继续往下走)。 */
+function anyChannelConfigured(): boolean {
+  try { return (['deepseek', 'kimi', 'qwen'] as const).some((id) => !!getBrowserCredential(id)); } catch { return false; }
+}
+
 export async function askChat(input: AskChatInput): Promise<ChatReply> {
   const question = String(input.question || '').trim();
   if (!question) return { status: 'failed', error: '请输入问题' };
@@ -322,6 +328,8 @@ export async function askChat(input: AskChatInput): Promise<ChatReply> {
   const history = Array.isArray(input.history) ? input.history : [];
   const tone = Number.isFinite(input.tone as number) ? Math.max(0, Math.min(100, Math.round(Number(input.tone)))) : 80;
 
+  /* 服务器报错的原因：本机通道接着答时不必带；本机也失败时用它替掉重复的报错。 */
+  let serverReason = '';
   if (isServerMode()) {
     let recordId = input.recordId ?? undefined;
     let periodFacts: Record<string, unknown> | undefined;
@@ -339,15 +347,40 @@ export async function askChat(input: AskChatInput): Promise<ChatReply> {
       try { provider = localStorage.getItem('mingli.provider') ?? undefined; } catch { provider = undefined; }
       const { data } = await serverFetch<ChatReply>('/chat', { method: 'POST', body: { question, history, recordId, tone, periodFacts, provider }, signal: input.signal });
       const answer = data?.status === 'completed' ? sanitizeChatText(String(data.answer ?? '')) : data?.answer;
+      // 服务器按它库里的名下记录作答，说「还没有任何命盘」时本机可能其实有离线建的盘。
+      // 但「本机有盘」不等于「盘没传上去」：刚保存那一下推送还在后台进行，此刻服务器确实看不见，
+      // 而旧文案会让人白跑一趟设置页(其实早已登录、马上就好)。所以现读一次待推送清单再定性。
+      if (data?.status === 'need_record') {
+        const [localCount, unsynced] = await Promise.all([
+          listBaziRecords().then((r) => r.length).catch(() => 0),
+          Promise.resolve().then(() => unsyncedRecordIds()),
+        ]);
+        if (localCount > 0) {
+          return { ...data, reason: unsynced.length
+            ? '本机有 ' + unsynced.length + ' 条命盘还没传上服务器，所以查不到。保持联网，稍等片刻(列表里那条的「未同步」标记消失)后再问一次。'
+            : '本机这些盘都已同步到服务器，却仍查不到你的命盘：可能是当前登录账号与建盘时的账号不同(数据按账号隔离)。请在「设置 → 服务器通道」确认已连接的账号。' };
+        }
+      }
       return { ...data, answer, evidence: data?.evidence };
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return { status: 'failed', error: '已取消' };
       const offline = error instanceof ServerError && error.status === 0;
-      if (!offline) return { status: 'failed', error: error instanceof Error ? error.message : '服务器请求失败' };
-      // 服务器不可达 → 落到本机通道(离线可用)
+      // 服务器答不上来(它自己那条通道没密钥/调用失败)时，本机若配了凭据还能接着答；
+      // 一条都没配才是真的「谁都用不了」，报「未配置」。
+      if (!offline) {
+        const reason = error instanceof Error ? error.message : '服务器请求失败';
+        if (!anyChannelConfigured()) return { status: 'not_configured', error: reason };
+        serverReason = reason; // 本机配了凭据：继续往下落到本机通道
+      }
+      // 服务器不可达 → 同样落到本机通道(离线可用)
     }
   }
-  return askChatLocal({ ...input, question, history, tone });
+  const local = await askChatLocal({ ...input, question, history, tone });
+  // 本机这条也失败时，光说「本机失败」会漏掉真正的原因(往往是服务器那边先报错的那条)。
+  if (serverReason && local.status === 'failed' && !local.error?.includes('已取消')) {
+    return { ...local, error: '服务器：' + serverReason + '；本机通道：' + (local.error || '也未成功') };
+  }
+  return local;
 }
 
 async function askChatLocal(input: { question: string; history: ChatMessage[]; tone: number; recordId?: string | null; signal?: AbortSignal }): Promise<ChatReply> {

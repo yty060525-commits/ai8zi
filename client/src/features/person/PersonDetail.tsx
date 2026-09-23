@@ -480,10 +480,16 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
     cancelAutoRetry();
     autoRetryCountRef.current = 0;
     const cleared = await saveBaziRecord({ ...record, aiTasks: undefined, aiAnalysis: undefined, aiOverview: undefined, aiError: undefined, aiStatus: 'not_started' });
-    try { await clearChartCache({ gender: record.gender, yearPillar: record.yearPillar, monthPillar: record.monthPillar, dayPillar: record.dayPillar, hourPillar: record.hourPillar }); } catch { /* 清缓存失败也继续 */ }
+    // 缓存清没清掉要如实说：网页版的缓存在服务器库里，离线/未登录时根本清不动，
+    // 谎报「已清除」会让人以为下次分析必然重算(其实仍会命中旧缓存)。
+    let cacheNote = '';
+    try {
+      const removed = await clearChartCache({ gender: record.gender, yearPillar: record.yearPillar, monthPillar: record.monthPillar, dayPillar: record.dayPillar, hourPillar: record.hourPillar }, record.id);
+      cacheNote = removed > 0 ? '，并清掉服务器上 ' + removed + ' 条命中缓存' : '（该盘在服务器上本无缓存）';
+    } catch { cacheNote = '，但服务器缓存没清掉：下次分析可能仍复用旧结果'; }
     onUpdated(cleared);
     setDisabledTasks(new Set()); setDisabledDims(new Set());
-    setHint('已清除该命盘的 AI 结果与命中缓存（未重新调用 AI）。需要时请再点“AI 分析”。');
+    setHint('已清除该命盘的 AI 结果' + cacheNote + '（未重新调用 AI）。需要时请再点“AI 分析”。');
   }
   useEffect(() => () => { if (noteTimer.current) clearTimeout(noteTimer.current); if (autoTimerRef.current) clearTimeout(autoTimerRef.current); }, []);
 
@@ -503,8 +509,12 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
       <div className="progress-track" role="progressbar" aria-valuenow={progress?.done ?? 0} aria-valuemin={0} aria-valuemax={progress?.total ?? buildBaziTasks(record).length}><div className="progress-fill" style={{ width: `${Math.round(((progress?.done ?? 0) / (progress?.total ?? buildBaziTasks(record).length)) * 100)}%` }} /></div>
     </div>}
     {record.aiStatus === 'pending' && <p role="status">按任务逐个调用 AI（本命 → 每年 → 每月 → 大运 → 后天调整），每个任务数秒到数十秒；失败会自动重试一次，进度即时保存，中断后可随时继续。</p>}
-    {record.aiStatus === 'not_configured' && <p role="status">AI 尚未可用：请先点页面左上角「设置」，在服务一/服务二中任选一个填写访问凭据并保存，再回来点 AI 分析。</p>}
-    {record.aiStatus === 'failed' && <p role="status">个别任务自动重试多轮后仍未成功。常见原因：余额不足或额度已用完 / 密钥无效 / 请求过于频繁（限流）/ 网络超时或不可达 / 所选服务不可用。请按下方原因处理后，再点 AI 分析（只补失败项，不重复花钱）。</p>}
+    {record.aiStatus === 'not_configured' && <p role="status">AI 尚未可用：请先点页面左上角「设置」，在任一服务(DeepSeek / Kimi / 通义)里填写访问凭据并保存，再回来点 AI 分析。</p>}
+    {record.aiStatus === 'failed' && <p role="status">{/未配置|没有可用的通道凭据/.test(record.aiError ?? '')
+      // 一个凭据都没填时曾按 failed 上报(现已归为 not_configured)，此处兜住历史数据，
+      // 别把「余额不足/限流」那串无关原因摆在一个根本没配密钥的用户面前。
+      ? 'AI 尚未可用：请先点页面左上角「设置」，在任一服务(DeepSeek / Kimi / 通义)里填写访问凭据并保存，再回来点 AI 分析。'
+      : '个别任务自动重试多轮后仍未成功。常见原因：余额不足或额度已用完 / 密钥无效 / 请求过于频繁（限流）/ 网络超时或不可达 / 所选服务不可用。请按下方原因处理后，再点 AI 分析（只补失败项，不重复花钱）。'}</p>}
     {record.aiError && <p role="alert">原因：{safeAiError(record.aiError)}</p>}
     {record.aiAnalysis && <div className="long-text"><strong>格局与强弱</strong><p>{sanitizeAnalysisText(record.aiAnalysis.pattern || '') || '—'} · {sanitizeAnalysisText(record.aiAnalysis.strength || '') || '—'}</p><p>喜：{(record.aiAnalysis.usefulElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}　忌：{(record.aiAnalysis.avoidElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}</p><PointsView text={record.aiAnalysis.explanation} /></div>}
     {/* 全盘总结正文(含古风标题)在下方「② 全盘总结」分组里完整展示；这里只留一处入口提示，避免同一段内容渲染两遍 */}
@@ -552,6 +562,8 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
 export function PersonDetail({ personId, onBack, refreshKey = 0 }: PersonDetailProps) {
   const [record, setRecord] = useState<BaziRecord>();
   const [notice, setNotice] = useState<string>();
+  // 删除要二次确认：手机误触一下就把整条命盘连同已生成的 AI 结果全清掉，且无法撤销。
+  const [confirmDelete, setConfirmDelete] = useState(false);
   useEffect(() => {
     let active = true;
     setRecord(undefined);
@@ -561,7 +573,7 @@ export function PersonDetail({ personId, onBack, refreshKey = 0 }: PersonDetailP
   if (!record) return <main className="person-detail placeholder-page"><header className="page-heading"><h1>人物详情</h1></header><p role="status">未找到人物记录，请返回记录列表。</p><button className="text-button" type="button" onClick={onBack}>返回记录</button></main>;
   const loadedRecord = record;
   const recordId = loadedRecord.id;
-  async function remove() { await deleteBaziRecord(recordId); onBack(); }
+  async function remove() { await deleteBaziRecord(recordId); setConfirmDelete(false); onBack(); }
   async function recalculateNonAi() {
     setNotice(undefined);
     try {
@@ -575,7 +587,9 @@ export function PersonDetail({ personId, onBack, refreshKey = 0 }: PersonDetailP
     }
   }
   return <main className="person-detail">
-    <header className="page-heading detail-top"><div><p className="eyebrow">PERSON RECORD · {record.id}</p><h1>人物详情</h1><p className="page-description">{record.name} 的八字记录与 AI 分析</p></div><div><button className="text-button" type="button" onClick={onBack}>返回记录</button><button className="danger-button" type="button" onClick={() => void remove()}>删除数据</button></div></header>
+    <header className="page-heading detail-top"><div><p className="eyebrow">PERSON RECORD · {record.id}</p><h1>人物详情</h1><p className="page-description">{record.name} 的八字记录与 AI 分析</p></div><div>{confirmDelete
+      ? <div className="button-group" role="group" aria-label="确认删除"><span className="danger-hint">确定删除「{record.name}」？四柱、排盘数据与全部 AI 结果一并清除，无法撤销。</span><button className="danger-button" type="button" onClick={() => void remove()}>确认删除</button><button className="text-button" type="button" onClick={() => setConfirmDelete(false)}>取消</button></div>
+      : <button className="text-button" type="button" onClick={onBack}>返回记录</button>}<button className="danger-button" type="button" onClick={() => setConfirmDelete(true)} hidden={confirmDelete}>删除数据</button></div></header>
     {notice && <p role="status">{notice}</p>}
     <BasicInfo record={record} /><NonAiAnalysis result={record.nonAiResult} record={record} /><div className="section-actions"><button className="text-button" type="button" onClick={() => void recalculateNonAi()}>重新计算非 AI</button></div><AIAnalysis record={record} onUpdated={setRecord} />
   </main>;

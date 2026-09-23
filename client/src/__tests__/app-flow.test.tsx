@@ -142,8 +142,27 @@ describe('simplified chart application flow', () => {
     fireEvent.click(screen.getByRole('button', { name: 'AI 分析' }));
     await waitFor(() => expect(analyzeBazi).toHaveBeenCalledWith(expect.objectContaining({ id: 'zhang-wei' }), expect.objectContaining({ taskId: 'task-01' }), expect.anything()));
     fireEvent.click(screen.getByRole('button', { name: '删除数据' }));
+    // 删除必须二次确认：先只出确认条，记录还在
+    await waitFor(() => expect(screen.getByRole('button', { name: '确认删除' })).toBeTruthy());
+    expect(screen.getByRole('heading', { name: '人物详情' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    expect(screen.queryByRole('button', { name: '确认删除' })).toBeNull();
+    expect(screen.getByRole('heading', { name: '人物详情' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '删除数据' }));
+    fireEvent.click(await screen.findByRole('button', { name: '确认删除' }));
     await waitFor(() => expect(screen.getByRole('heading', { name: '记录' })).toBeTruthy());
     expect(screen.queryByText('张伟')).toBeNull();
+  });
+
+  it('批量导出：没勾人时按钮可点并给出提示，不会导出空文件', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: '记录' }));
+    const exportButton = await screen.findByRole('button', { name: /导出勾选/ });
+    // 旧实现把按钮禁用：点了毫无反应也不解释，用户只能猜。现在必须能点、并且说话。
+    expect(exportButton).toHaveProperty('disabled', false);
+    fireEvent.click(exportButton);
+    await waitFor(() => expect(screen.getByText(/还没有勾选人物/)).toBeTruthy());
+    expect(document.querySelector('.modal')).toBeNull();
   });
 
   it('shows completed AI analysis after the detail action finishes', async () => {

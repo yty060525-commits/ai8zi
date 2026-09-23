@@ -95,6 +95,8 @@ export interface BaziRecord {
   aiTasks?: Record<string, BaziTaskResult>;
   /** 生成这套结果时使用的语气档(0 犀利 .. 50 中立 .. 100 温柔)，默认 80 */
   toneUsed?: number;
+  /** 管理员视图里服务器带回来的所属账号名；本机建的盘没有这个字段。 */
+  username?: string;
 }
 
 export interface BaziAIAnalysis {

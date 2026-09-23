@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { exportableRecords, listBaziRecords, syncAdminAll } from '../../data/clientRepository';
+import { exportableRecords, listBaziRecords, syncAdminAll, unsyncedRecordIds } from '../../data/clientRepository';
 import { exportRecordsSQLite, exportRecordsSQLText } from '../../data/sqliteExport';
 import { getServerSession, isServerMode } from '../../data/serverClient';
 import type { BaziRecord } from '../../types/domain';
@@ -23,6 +23,7 @@ export function RecordsPage({ onOpenPerson, refreshKey = 0 }: RecordsPageProps) 
   const [query, setQuery] = useState('');
   const [descending, setDescending] = useState(false);
   const [records, setRecords] = useState<BaziRecord[]>([]);
+  const [unsynced, setUnsynced] = useState<Set<string>>(new Set());
   const latestRequest = useRef(0);
   const adminScope = isServerMode() && getServerSession()?.role === 'admin';
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -40,7 +41,7 @@ export function RecordsPage({ onOpenPerson, refreshKey = 0 }: RecordsPageProps) 
       try {
         if (adminScope) await syncAdminAll();
         const nextRecords = await listBaziRecords();
-        if (mounted && request === latestRequest.current) setRecords(nextRecords);
+        if (mounted && request === latestRequest.current) { setRecords(nextRecords); setUnsynced(new Set(unsyncedRecordIds())); }
       } catch {
         // Keep the last usable snapshot when an adapter read fails.
       }
@@ -65,7 +66,10 @@ export function RecordsPage({ onOpenPerson, refreshKey = 0 }: RecordsPageProps) 
   const selectedRecords = useMemo(() => records.filter((r) => selectedIds.has(r.id)), [records, selectedIds]);
   const chosenRecords = useMemo(() => records.filter((r) => includedIds.has(r.id)), [records, includedIds]);
 
-  const openPanel = () => { setIncludedIds(new Set(selectedIds)); setPanelOpen(true); };
+  const openPanel = () => {
+    if (selectedIds.size === 0) { showNote('还没有勾选人物：先在下面列表里点小方框勾上要导出的人，再点这个按钮。'); return; }
+    setIncludedIds(new Set(selectedIds)); setPanelOpen(true);
+  };
   const doExport = async (kind: 'sqlite' | 'sql' | 'json') => {
     if (chosenRecords.length === 0) { showNote('请先勾选至少一位人物再导出。'); return; }
       // 存储是瘦身的：导出前还原成完整盘，分享出去的文件才可自解释
@@ -119,13 +123,17 @@ export function RecordsPage({ onOpenPerson, refreshKey = 0 }: RecordsPageProps) 
           <button className="sort-button" type="button" onClick={() => setDescending((value) => !value)}>
             按姓名排序 {descending ? '↓' : '↑'}
           </button>
-          <button className="text-button tiny" type="button" onClick={toggleAll}>{selectedIds.size === records.length && records.length > 0 ? '取消全选' : '全选'}</button>
+          {/* 搜索框里留着关键字时，「全选」只勾得到当前可见的几条，但按钮说的是「全选」。
+              这里把范围写进标签，免得用户以为选中了全部记录却只导出了一小撮。 */}
+          <button className="text-button tiny" type="button" onClick={toggleAll}>{selectedIds.size === records.length && records.length > 0 ? '取消全选' : query.trim() && visibleRecords.length ? '全选当前 ' + visibleRecords.length + ' 条' : '全选'}</button>
         </div>
       </div>
 
       <div className="records-selectbar" aria-label="批量导出">
         <span className="select-summary">{records.length > 0 ? '已选 ' + selectedIds.size + ' / ' + records.length + ' 人' : '暂无记录'}</span>
-        <button className="primary-button export-selected" type="button" disabled={selectedIds.size === 0 || exporting} onClick={() => void openPanel()}>
+        {/* 以前没勾选时按钮直接禁用：点下去没有任何反应，也没有一句提示，用户只能猜。
+            现在按钮保持可点，点了给一句「先勾人」的话术。 */}
+        <button className="primary-button export-selected" type="button" disabled={exporting} onClick={() => void openPanel()}>
           {'导出勾选（' + selectedIds.size + '）…'}
         </button>
         {selectedIds.size > 0 && <button className="text-button tiny" type="button" onClick={() => setSelectedIds(new Set())}>清空勾选</button>}
@@ -146,8 +154,12 @@ export function RecordsPage({ onOpenPerson, refreshKey = 0 }: RecordsPageProps) 
                   <strong>{record.name}</strong>
                   <span className={'gender gender-' + record.gender}>{record.gender === 'male' ? '男' : '女'}</span>
                   <span className="birth-summary">{record.birthYear}年 {record.birthMonth}月 · {record.yearPillar}年 {record.monthPillar}月 {record.dayPillar}日 {record.hourPillar}时</span>
+                  {/* 管理员看的是全服务器所有账号的盘：不标所属账号，同名记录分不清是谁的。 */}
+                  {adminScope && record.username && <span className="owner-tag">账号：{record.username}</span>}
                   {record.nonAiResult && <span className="chart-summary">公历 {record.nonAiResult.solarDate} · 生肖 {record.nonAiResult.zodiac} · 日主 {record.nonAiResult.dayMaster}</span>}
                   <span className="ai-status">AI：{record.aiStatus === 'completed' ? '已完成' : record.aiStatus === 'not_configured' ? '未配置' : record.aiStatus === 'failed' ? '失败' : record.aiStatus === 'pending' ? '分析中' : '未开始'}</span>
+                  {/* 还没推上服务器的盘：不标出来，用户会先在同机「问问 AI」上撞到「还没有任何命盘」。 */}
+                  {unsynced.has(record.id) && <span className="ai-status unsynced">未同步：仅存本机，问 AI 前先在设置里登录服务器</span>}
                   <span className="row-action">查看 →</span>
                 </button>
               </div>

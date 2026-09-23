@@ -23,13 +23,24 @@ describe('non-AI calculator', () => {
     expect(result.forecastRange[0]).toBe(currentYear);
     expect(result.forecastRange[9]).toBe(currentYear + 9);
     expect(result.solarDate).toBe('1984-02-06');
-    expect(result.twelveLongevity).toHaveLength(4);
+    expect(result.twelveLongevity).toHaveLength(3);
     expect(result.shenSha).toEqual(expect.objectContaining({ auspicious: expect.any(Array), inauspicious: expect.any(Array) }));
   });
 
   it('does not silently use a candidate from a different birth year', () => {
     // 四柱与该月对不上必须报错，绝不能悄悄借用别的年份的候选日
     expect(() => calculateNonAi({ birthYear: 1900, birthMonth: 1, yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午' }, 'male')).toThrow(/找不到|不合/);
+  });
+
+  it('时柱回显用户所填，不被库按「正午近似」重算覆盖', () => {
+    // 定位出生日期只用年/月/日三柱，eight.getTime() 因此几乎恒为「午」。
+    // 旧实现把它当作时柱输出：输入癸未 → 界面显示壬午，与同页藏干/十神/纳音全不一致。
+    const r = calculateNonAi({ birthYear: 1990, birthMonth: 5, yearPillar: '庚午', monthPillar: '辛巳', dayPillar: '乙酉', hourPillar: '癸未' }, 'male');
+    expect(r.pillars.hour).toBe('癸未');
+    expect(r.pillars).toEqual({ year: '庚午', month: '辛巳', day: '乙酉', hour: '癸未' });
+    // 十二长生只给年/月/日三支(时支不列)，且顺序与前三柱对齐
+    expect(r.twelveLongevity).toHaveLength(3);
+    expect(r.twelveLongevity[2]).toBe('绝'); // 乙日主坐酉＝绝
   });
 
   it('never calls the network', () => {
