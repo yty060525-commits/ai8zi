@@ -5,7 +5,7 @@ import { exportableRecords, reloadLocalForSession } from '../../data/clientRepos
 import { exportRecordsSQLite, exportRecordsSQLText } from '../../data/sqliteExport';
 import { importRecords, parseBackupFile, type ImportMode } from '../../data/sqlImport';
 import { apiAuth, getServerSession, getServerUrl, setServerSession, setServerUrl, type ServerSession } from '../../data/serverClient';
-import { BUILD_ID, buildLabel, cacheLabel } from '../../utils/buildInfo';
+import { BUILD_ID, GIT_VERSION, buildLabel, cacheLabel } from '../../utils/buildInfo';
 
 type DisplayStatus = '已配置' | '未配置' | '保存中' | '保存失败';
 
@@ -287,7 +287,8 @@ function VersionInfo() {
   const current = cacheLabel();
   const stale = swCache !== current && swCache !== '检测中…' && swCache !== '此环境不支持' && swCache !== '读取失败' && swCache !== '（无）';
   return <section aria-label="版本信息"><h2>版本信息</h2>
-    <p className="ai-status">页面版本：{buildLabel()}（{BUILD_ID}）</p>
+    {GIT_VERSION ? <p className="ai-status">版本号：{GIT_VERSION}（对应快照 build-{GIT_VERSION}，可用 scripts/version.sh restore 回退）</p> : null}
+    <p className="ai-status">构建时间：{buildLabel()}（{BUILD_ID}）</p>
     <p className="ai-status">已缓存版本：{swCache}</p>
     {stale ? <p className="form-error" role="alert">页面与已缓存版本不一致：当前显示的可能不是最新版。请下拉刷新或清除站点数据后重开。</p> : null}
   </section>;

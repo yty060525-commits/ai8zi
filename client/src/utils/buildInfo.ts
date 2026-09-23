@@ -17,3 +17,12 @@ export function buildLabel(id: string = BUILD_ID): string {
 export function cacheLabel(id: string = BUILD_ID): string {
   return 'mingli-' + id;
 }
+
+/** git 版本号「提交序号-短哈希」，与 scripts/version.sh 的快照名同源：
+ *  UI 上看到这串，就能直接 `version.sh restore <同名快照>` 回退。非 git 构建时为空。 */
+export const GIT_VERSION: string = typeof __GIT_VERSION__ === 'string' ? __GIT_VERSION__ : '';
+
+/** 完整版本标签：有 git 号时优先显示它(可回退)，否则退回构建时间。 */
+export function versionLabel(): string {
+  return GIT_VERSION || buildLabel();
+}

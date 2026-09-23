@@ -297,9 +297,6 @@ export async function callProvider(provider, key, messages, effort, mode = 'json
   // Kimi 需要 temperature=1；已关闭思考的 Qwen 用低温度更稳定
   if (provider.id === 'kimi') body.temperature = 1;
   if (provider.id === 'qwen') body.temperature = 0.3;
-  // V4.1：思考模式默认开启；按任务类型控制思考力度(本命/后天调整=high，时段=low 以省时省钱)
-  if (provider.id === 'deepseek' && effort) body.reasoning_effort = effort;
-  if (provider.id !== 'deepseek') body.temperature = 1;
   const controller = new AbortController();
   const startedAt = Date.now();
   const timer = setTimeout(() => controller.abort(), 150_000);

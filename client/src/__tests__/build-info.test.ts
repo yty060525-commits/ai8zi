@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BUILD_ID, buildLabel, cacheLabel } from '../utils/buildInfo';
+import { BUILD_ID, GIT_VERSION, buildLabel, cacheLabel, versionLabel } from '../utils/buildInfo';
 
 describe('版本信息', () => {
   it('构建号被注入：测试环境回退为 unknown，生产构建是时间戳', () => {
@@ -23,5 +23,11 @@ describe('版本信息', () => {
   it('缓存号与 SW 里的命名一致(mingli-<构建号>)', () => {
     expect(cacheLabel('1234567890')).toBe('mingli-1234567890');
     expect(cacheLabel()).toBe('mingli-' + BUILD_ID);
+  });
+
+  it('有 git 号时版本标签用它(能对上快照名)，没有则退回构建时间', () => {
+    // vitest 不走生产 define，所以 GIT_VERSION 这里为空串 → 应退回 buildLabel。
+    expect(typeof GIT_VERSION).toBe('string');
+    expect(versionLabel()).toBe(GIT_VERSION || buildLabel());
   });
 });
