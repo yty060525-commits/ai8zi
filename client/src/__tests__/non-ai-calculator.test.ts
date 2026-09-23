@@ -53,7 +53,7 @@ describe('non-AI calculator', () => {
     expect(result.annualFortunes[0].tenGod).toEqual(expect.any(String));
   });
 
-  it('不再做起运年龄推算；大运对齐公历十年且必须覆盖预测窗口', () => {
+  it('大运按经典起运排定：起点＝起运年，且必覆盖当前年与预测窗口', () => {
     const result = calculateNonAi({ birthYear: 1984, birthMonth: 2, yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午' }, 'male', '2025-03-08T12:34:56.000Z');
     expect((result as unknown as Record<string, unknown>).fortuneMethod).toBeUndefined();
     expect((result as unknown as Record<string, unknown>).fortuneStart).toBeUndefined();
@@ -67,8 +67,11 @@ describe('non-AI calculator', () => {
     // 预测窗口 [currentYear, currentYear+9] 与大运集合有重叠（编排器按重叠挑选大运任务）
     const overlapsWindow = result.greatFortunes.filter((g) => g.startYear <= currentYear + 9 && g.endYear >= currentYear);
     expect(overlapsWindow.length).toBeGreaterThanOrEqual(1);
-    // 且第一步大运起点必为十年整数，保证跨盘可复现
-    expect(result.greatFortunes[0].startYear % 10).toBe(0);
+    // 起点不再是「十年整数边界」：那等于把每个人的大运都对齐到墙上时钟，谁都是同一套。
+    // 1984-02-06 生男，距下一节约 9 年余 → 起运 1993，首柱丁卯即从 1993 起。
+    expect(result.luckStart).not.toBeNull();
+    expect(result.luckStart!.years).toBeGreaterThan(0);
+    expect(result.greatFortunes[0].startYear).toBe(1993);
     expect(result.tenGodDetails!.heavenly).toHaveLength(4);
     expect(result.tenGodDetails!.hidden).toHaveLength(4);
     expect(result.tenGodDetails!.hidden[1]).toHaveLength(3);
@@ -101,4 +104,47 @@ describe('non-AI calculator', () => {
     expect(result.hiddenStems[1]).toEqual(['丙', '庚', '戊']);
     expect(result.tenGodDetails.hidden[1].map((item) => item.tenGod)).toEqual(['七杀', '比肩', '偏印']);
   });
+
+  /* 大运曾经压根不做起运推算：第 0 步对齐到「当前公历十年」，于是干支↔年份的对应
+     随时间漂移，任何人的「丁卯运 2020-2029」都不是他自己的那一运。
+     这里拿 lunar-javascript 自己的 getYun().getDaYun() 当外部真值来核，
+     顺带把阳男/阴男/阳女/阴女四种顺逆都覆盖一遍。 */
+  describe('大运与起运(对照 lunar-javascript)', () => {
+    const cases: Array<{ label: string; input: Parameters<typeof calculateNonAi>[0]; gender: 'male' | 'female'; yunGender: number }> = [
+      { label: '阳男顺排', input: { birthYear: 1984, birthMonth: 2, yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午' }, gender: 'male', yunGender: 1 },
+      { label: '阳女逆排', input: { birthYear: 1984, birthMonth: 2, yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午' }, gender: 'female', yunGender: 0 },
+      { label: '阴男逆排', input: { birthYear: 1990, birthMonth: 1, yearPillar: '己巳', monthPillar: '丙子', dayPillar: '庚午', hourPillar: '壬午' }, gender: 'male', yunGender: 1 },
+      { label: '阴女顺排', input: { birthYear: 1990, birthMonth: 1, yearPillar: '己巳', monthPillar: '丙子', dayPillar: '庚午', hourPillar: '壬午' }, gender: 'female', yunGender: 0 },
+    ];
+    for (const c of cases) {
+      it(`${c.label}：起运年与每柱干支/起始年都与库一致`, async () => {
+        const { Solar } = await import('lunar-javascript');
+        const result = calculateNonAi(c.input, c.gender, '2026-06-01T04:00:00.000Z');
+        expect(result.luckStart).not.toBeNull();
+        // 出生日由「年月+三柱」定位而来，用它向库要起运与大运序列作为真值
+        const y = Number(/^(\d{4})/.exec(result.solarDate)![1]);
+        const mo = Number(/^(\d{4})-(\d{2})/.exec(result.solarDate)![2]);
+        const dd = Number(/^(\d{4})-(\d{2})-(\d{2})/.exec(result.solarDate)![3]);
+        const born = Solar.fromYmdHms(y, mo, dd, 12, 30, 0);
+        const yun = born.getLunar().getEightChar().getYun(c.yunGender);
+        expect(result.luckStart!.date).toBe(String(yun.getStartSolar().toYmd()));
+        // 库的第 1..N 步大运(第 0 项是出生到起运那段，无干支)就是我们的九柱
+        const da = yun.getDaYun(1 + result.greatFortunes.length).slice(1);
+        expect(da).toHaveLength(result.greatFortunes.length);
+        result.greatFortunes.forEach((row, i) => {
+          expect(row.ganZhi).toBe(da[i].getGanZhi());
+          // 库按「起运日期所在公历年」给区间；我们按干支年(立春)归整，最多差 1 年。
+          expect(Math.abs(row.startYear - da[i].getStartYear())).toBeLessThanOrEqual(1);
+        });
+        // 相邻两柱必相差整 10 年、且方向沿六十甲子单调顺/逆
+        expect(result.greatFortunes.every((g, i) => i === 0 || g.startYear === result.greatFortunes[i - 1].startYear + 10)).toBe(true);
+        const deltas = result.greatFortunes.map((g) => GZ60.indexOf(g.ganZhi));
+        const step = deltas[1] - deltas[0];
+        expect(deltas.every((v, i) => i === 0 || v === ((deltas[0] + step * i) % 60 + 60) % 60)).toBe(true);
+        expect(step === 1 || step === -1).toBe(true);
+      });
+    }
+  });
 });
+
+const GZ60 = Array.from({ length: 60 }, (_, n) => '甲乙丙丁戊己庚辛壬癸'[n % 10] + '子丑寅卯辰巳午未申酉戌亥'[n % 12]);

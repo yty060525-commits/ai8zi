@@ -54,6 +54,8 @@ export interface NonAiChart {
   forecastRange: number[];
   relationships: RelationshipFacts;
   greatFortunes: Array<{ ganZhi: string; startYear: number; endYear: number; tenGod?: string; relationships: RelationshipFacts }>;
+  /** 起运(出生到起运的跨度与公历日期)：大运各柱的起点由它决定。老记录无此字段。 */
+  luckStart?: { years: number; months: number; days: number; date: string } | null;
   annualFortunes: FortunePeriod[];
   monthlyFortunes: FortunePeriod[];
   twelveLongevity: string[];

@@ -21,7 +21,8 @@ export { ELEMENT_RULE_VERSION, countElements }; // 口径唯一真源在 ./eleme
  *     阴阳(干序奇偶)决定正偏。
  *  4) 地支关系：六合 (a+b)%12=1；六冲 |a-b|=6；六害 (a+b)%12=7；
  *     三合 a%4=b%4(申子辰0 巳酉丑1 寅午戌2 亥卯未3)；六破/三刑为规范对与同余类。
- *  5) 大运 = 月柱序数沿顺逆每次 ±1(十年一柱)，起点按出生年到当前年所经历的整十年锚定；不做起运年龄/日期推算。
+ *  5) 大运 = 月柱序数沿顺逆每次 ±1(十年一柱)，起点由「起运」推算：出生时刻到相邻节令
+ *     的距离按每 3 天折 1 年(流派1)。缺精确出生日期时不硬编，退回对齐公历十年边界。
  *  6) 流年干支：立春锚定当前纪年序数，此后公历年每年 +1(mod 60)。
  *  7) 流月：每年 12 个节月(立春=寅月…)，月干由年干五虎遁：
  *     寅月干 = (年干序%5)*2+2，逐月 +1 —— 与 lunar-javascript buildLiuYue 同式。
@@ -31,6 +32,41 @@ export { ELEMENT_RULE_VERSION, countElements }; // 口径唯一真源在 ./eleme
  * ========================================================================== */
 
 const YANG = '甲丙戊庚壬';                        // 阳干(序数为偶)
+
+/** 起运信息：从出生到「起运」的时间跨度与对应的公历日期。 */
+export interface LuckStart {
+  years: number; months: number; days: number;
+  /** 起运的公历日期 yyyy-mm-dd；库未给出时为空串 */
+  date: string;
+}
+
+/** 起运推算：顺行取出生后下一个节、逆行取出生前上一个节，距离按每 3 天折 1 年、
+ *  每 1 天折 4 个月(流派1)。方向由库按性别+年干阴阳自定，故此处不传方向。
+ *  失败(极端日期/库异常)返回 null，让调用方走兜底而不是抛错打断排盘。 */
+function computeLuckStart(at: ReturnType<typeof Solar.fromYmdHms>, gender: Gender): LuckStart | null {
+  try {
+    const yun = at.getLunar().getEightChar().getYun(gender === 'male' ? 1 : 0);
+    const solar = yun.getStartSolar();
+    if (!solar) return null;
+    return {
+      years: Number(yun.getStartYear()) || 0,
+      months: Number(yun.getStartMonth()) || 0,
+      days: Number(yun.getStartDay()) || 0,
+      date: String(solar.toYmd()),
+    };
+  } catch { return null; }
+}
+
+/** 公历日期落在哪一「干支年」：立春(含当天)起算新一年，之前属上一年。
+ *  固定按 2/4 判定 —— 实测各年立春只在 2/3~2/5 之间，而起运日期由「出生日 + 折年数」
+ *  得到、跨度以年计，±1 天的误差不会改变大运段的十年归属，故无需引入学交节时刻。 */
+function ganzhiYearOf(date: string): number | undefined {
+  const m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(date);
+  if (!m) return undefined;
+  const year = Number(m[1]);
+  const beforeLichun = Number(m[2]) < 2 || (Number(m[2]) === 2 && Number(m[3]) < 4);
+  return beforeLichun ? year - 1 : year;
+}
 
 /** 六破规范对(小序在前)：子酉、丑辰、寅亥、卯午、巳申、未戌 */
 const PO_PAIRS = [[0, 9], [1, 4], [2, 11], [3, 6], [5, 8], [7, 10]] as const;
@@ -523,6 +559,10 @@ export function calculateNonAi(
   const day = eight.getDayGan();
   const forward = fortuneDirection(input.yearPillar[0], gender);
   const chenggu = calculateChenggu(lunar.getYearInGanZhiExact(), lunar.getMonth(), lunar.getDay(), input.hourPillar[1]);
+  /* 起运：以定位到的出生日(正午近似)推算。产品没有「出生时刻」这一栏，所以这里的
+     日期准、时辰不准 —— 距节令不足一天时折成月数会偏，但比起旧实现「压根不做起运」
+     已是质的改进；缺字段或库异常时返回 null 走兜底。 */
+  const luckStart = computeLuckStart(candidate, gender);
 
   // 五行计数：口径见 countElements(单一真源，供老库回填与聊天/证据复用)。
   const { elements: counts, elementRatio } = countElements(pillars);
@@ -564,17 +604,17 @@ export function calculateNonAi(
     });
   });
 
-  // 大运：月柱序数沿顺逆每次 ±1(十年一柱)。
-  // 不做起运年龄推算 —— 改为把大运段对齐到「当前所处的公历十年」：
-  //   第 0 步覆盖 [窗口首年, 窗口末年]，其后每步 +10 年，干支同步沿六十甲子 ±1。
-  //   这样未来十年的大运任务必然存在且连续，且不依赖任何估算量。
+  // 大运：月柱序数沿顺逆每次 ±1(十年一柱)，起点＝起运那一年的干支年。
+  // 旧实现把第 0 步对齐到「当前所处的公历十年」，于是干支↔年份的对应随时间漂移，
+  // 任何人看到的「丁卯运 2020-2029」都不是这个人的丁卯运。现按经典起运排定。
   const monthIndex = gzIndex(input.monthPillar);
   const step = forward ? 1 : -1;
-  const windowStart = currentYear;                       // 预测窗口首年(立春年)
-  const alignedStart = Math.floor(windowStart / 10) * 10; // 对齐到十年边界，稳定可复现
+  const luckYear = luckStart ? ganzhiYearOf(luckStart.date) : undefined;
+  // 兜底：万一取不到起运(库异常)，退回旧的十年边界锚点，至少不丢时段任务。
+  const firstStartYear = luckYear ?? Math.floor(currentYear / 10) * 10;
   const greatFortunes = Array.from({ length: GREAT }, (_, k) => {
     const ganZhi = gzAt(monthIndex + step * (k + 1));
-    const startYear = alignedStart + k * 10;
+    const startYear = firstStartYear + k * 10;
     const participants = [...natalItems, { value: ganZhi, layer: 'great-fortune' as const, name: String(startYear) }];
     return { ganZhi, startYear, endYear: startYear + 9, tenGod: tenGodOf(day, ganZhi[0]), relationships: fortuneFacts(ganZhi, pillars), relationshipDetails: pairHits(participants) };
   });
@@ -601,6 +641,7 @@ export function calculateNonAi(
 
     tenGodDetails,
     greatFortunes,
+    luckStart,
     annualFortunes,
     monthlyFortunes,
     // 十二长生：日主对四支(本地查表)，与库 getXXxDiShi 同口径

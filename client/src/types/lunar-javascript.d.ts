@@ -29,9 +29,14 @@ declare module 'lunar-javascript' {
     getYearShiShenZhi(): unknown; getMonthShiShenZhi(): unknown; getDayShiShenZhi(): unknown; getTimeShiShenZhi(): unknown;
     getYearNaYin(): string; getMonthNaYin(): string; getDayNaYin(): string; getTimeNaYin(): string;
     getDayGan(): string; getYearDiShi(): string; getMonthDiShi(): string; getDayDiShi(): string; getTimeDiShi(): string;
-    getYun(gender: number, sect: number): Yun;
+    getYun(gender: number, sect?: number): Yun;
   }
-  interface Yun { getStartSolar(): Solar; getDaYun(count: number): DaYun[]; }
+  interface Yun {
+    getStartSolar(): Solar;
+    /** 起运跨度：流派1(sect 缺省)只精确到年，月/日恒为 0 */
+    getStartYear(): number; getStartMonth(): number; getStartDay(): number;
+    getDaYun(count?: number): DaYun[];
+  }
   interface DaYun { getGanZhi(): string; getStartYear(): number; getEndYear(): number; }
   export const Solar: {
     fromYmdHms(year: number, month: number, day: number, hour: number, minute: number, second: number): Solar;

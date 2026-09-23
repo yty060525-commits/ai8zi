@@ -34,7 +34,9 @@ const horizonOf = (record: BaziRecord) => {
 };
 
 /** 找到任务对应的大运段：优先用任务自带的内联行(最新且权威)，再按 startYear 精确匹配，最后按年份落区间兜底。
- *  兜底是必要的：旧记录的大运任务存的是「起运年龄推算」得到的 startYear(如 2019)，与现在对齐十年边界的值(2020)不同。 */
+ *  兜底是为了存量记录：它们的大运任务存的是旧口径(大运对齐公历十年边界)得到的年份，
+ *  与现在按起运排定的区间常不重合。取最近一段只保证标题有干支可显示，不代表区间正确 ——
+ *  要拿到本人真实的大运，需在详情页重算非 AI。 */
 export const findDecade = (record: BaziRecord, task: { year?: number; decade?: { ganZhi: string; startYear: number; endYear: number } }) => {
   if (task.decade?.ganZhi) return task.decade;
   const list = record.nonAiResult?.greatFortunes ?? [];
@@ -121,6 +123,15 @@ function BasicInfo({ record }: { record: BaziRecord }) {
   </section>;
 }
 const listText = (value: string[] | string[][]) => value.map((item) => Array.isArray(item) ? item.join('、') : item).join(' · ') || '—';
+/** 起运文案：几岁起运 + 当前正走哪一运。老记录没算过起运时如实说「未记录」，
+ *  引导去点「重新计算非 AI」，而不是悄悄沿用旧的十年边界对齐结果。 */
+export const luckStartText = (result: NonAiChart, nowYear: number): string => {
+  const start = result.luckStart;
+  if (!start?.date) return '未记录（点下方「重新计算非 AI」可补算）';
+  const current = (result.greatFortunes ?? []).find((g) => g.startYear <= nowYear && nowYear <= g.endYear);
+  const age = `${start.years}岁${start.months ? start.months + '个月' : ''}`;
+  return `出生后约 ${age}（${start.date} 前后）起运${current ? `；今年正走 ${current.ganZhi} 运（${current.startYear}-${current.endYear}）` : '；当前已出排定的大运区间'}`;
+};
 const mapText = (value: Record<string, number>) => Object.entries(value).map(([key, count]) => `${key} ${count}`).join(' · ') || '—';
 /** 五行比例按百分比展示(原始值是 0~1 的小数，直接打出来是 0.375 这种看不懂的数)。
  *  分母是实际观测数(四干 + 四支本气 = 8)，为 0 时不硬凑百分比。
@@ -139,6 +150,7 @@ function NonAiAnalysis({ result, record }: { result?: NonAiChart; record: BaziRe
     ['公历日期', result.solarDate],
     ['五行', mapText(result.elements)], ['五行比例', formatElementRatio(result.elementRatio)],
     ['日主', result.dayMaster], ['十二长生', listText(result.twelveLongevity)],
+    ['起运', luckStartText(result, new Date().getFullYear())],
     ['袁天罡称骨', result.chenggu ? `${result.chenggu.totalText}（年 ${result.chenggu.parts.year}·月 ${result.chenggu.parts.month}·日 ${result.chenggu.parts.day}·时 ${result.chenggu.parts.hour}，${result.chenggu.ruleVersion}）` : '—'],
   ];
   const columns: [string, string][] = [['四柱', fields[0][1]], ['藏干', listText(result.hiddenStems)], ['藏干十神', result.tenGodDetails.hidden.map((items) => items.map((item) => `${item.stem}:${item.tenGod}`).join('、')).join(' · ') || '—'], ['十神', listText(result.tenGods)], ['纳音', listText(result.naYin)]];
