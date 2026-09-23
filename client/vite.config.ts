@@ -30,5 +30,7 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     include: ['src/__tests__/**/*.test.{ts,tsx}'],
+    // 每个测试文件加载前先上网络闸口：任何用例都不许真连外部 AI 服务(见 src/test-setup/netGuard.ts)
+    setupFiles: ['./src/test-setup/netGuard.ts'],
   },
 });

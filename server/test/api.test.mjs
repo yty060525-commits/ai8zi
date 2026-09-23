@@ -1,6 +1,7 @@
 import { test, before, after, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import './netGuard.mjs'; // import 即上闸：本文件任何用例都不许真连外部 AI 服务
 import { openDatabase } from '../db.mjs';
 import { createApp } from '../app.mjs';
 

@@ -1,5 +1,6 @@
 import { test, before, after, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import './netGuard.mjs'; // import 即上闸：聊天用例一律走假 provider，不许真连 AI
 import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
