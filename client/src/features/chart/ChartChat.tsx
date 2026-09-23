@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { askChat, type ChatMessage, type ChatReply } from '../../data/chatEngine';
 import { listBaziRecords } from '../../data/clientRepository';
 import { cancelAiSession } from '../../data/deepseekAdapter';
+import { isServerMode } from '../../data/serverClient';
 
 /** 读取与「AI 分析」同一把语气滑杆(0 犀利 .. 100 温柔)，默认 80。 */
 function readTone(): number {
@@ -126,10 +127,15 @@ export function ChartChat() {
       return;
     }
     const keyMissing = reply.status === 'not_configured';
+    // 通道原始错误串(「DeepSeek：未配置凭据；…」)不外露，一律换成一句人话；
+    // 连着服务器时密钥该填在服务器那边，界面却只写「去设置」会把人领到本机凭据框。
+    const serverSide = keyMissing && isServerMode();
     publish({
       busy: false,
       needKey: keyMissing,
-      error: keyMissing ? '尚未配置 AI 密钥：配置后即可向我提问(服务器通道或本机通道均可)。' : (reply.error || '回答失败，请稍后重试'),
+      error: keyMissing
+        ? (serverSide ? '服务器那边还没配 AI 密钥(需要在服务器上配置，本客户端的设置页管不到它)；想马上能问：点左上角「设置」给任一通道填凭据，就走本机通道回答。' : '尚未配置 AI 密钥：配置后即可向我提问(服务器通道或本机通道均可)。')
+        : (reply.error || '回答失败，请稍后重试'),
     });
   }
 
@@ -166,7 +172,7 @@ export function ChartChat() {
       {people.map((person) => <button type="button" key={person.id} className={'choice-button' + (person.id === selected?.id ? ' selected' : '')} title="指定该命主后提问" onClick={() => { publish({ selected: person }); setPickOpen(false); }}>{person.name}</button>)}
       {selected ? <button type="button" className="text-button chat-clear-person" onClick={() => { publish({ selected: null }); setPickOpen(false); }}>取消指定</button> : null}
     </div> : null}
-    {error ? <p className="form-error" role="alert">{error}{needKey ? <button type="button" className="text-button chat-settings-link" onClick={openSettings}>去设置 ›</button> : null}</p> : null}
+    {error ? <p className="form-error" role="alert">{error}{needKey && !isServerMode() ? <button type="button" className="text-button chat-settings-link" onClick={openSettings}>去设置 ›</button> : null}</p> : null}
     <div className="chat-input-row">
       <input value={input} maxLength={500} disabled={busy} placeholder="输入命理问题(500 字以内)" aria-label="命理问题"
         onChange={(event) => { if (shared.error) publish({ error: '', needKey: false }); setInput(event.target.value); }}

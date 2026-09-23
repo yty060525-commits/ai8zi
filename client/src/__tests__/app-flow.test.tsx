@@ -186,9 +186,9 @@ describe('simplified chart application flow', () => {
     expect(screen.getByText('1. 2029年(乙巳)：机会窗口，宜主动争取。')).toBeTruthy();
   });
 
-  it('recalculates non-AI data in place and clears prior AI state without calling AI', async () => {
+  it('重新计算非 AI：只换排盘数据，不动已生成的 AI 结果，也不调用 AI', async () => {
     vi.mocked(analyzeBazi).mockClear();
-    initializeMockSession([mockPeople[0]], [{ ...mockPersonDetails[0], record: { ...mockPersonDetails[0].record, birthYear: 1984, birthMonth: 2, aiTasks: { old: { task: { taskId: 'old', type: 'baseline' }, status: 'completed' } } } }]);
+    initializeMockSession([mockPeople[0]], [{ ...mockPersonDetails[0], record: { ...mockPersonDetails[0].record, birthYear: 1984, birthMonth: 2, aiStatus: 'completed', aiTasks: { old: { task: { taskId: 'old', type: 'baseline' }, status: 'completed' } } } }]);
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: '记录' }));
     fireEvent.click(await screen.findByRole('button', { name: '查看张伟' }));
@@ -198,10 +198,10 @@ describe('simplified chart application flow', () => {
     const saved = await listBaziRecords();
     const record = saved.find((item) => item.id === 'zhang-wei');
     expect(record?.nonAiResult).toBeDefined();
-    expect(record?.aiStatus).toBe('not_started');
-    expect(record?.aiAnalysis).toBeUndefined();
-    expect(record?.aiOverview).toBeUndefined();
-    expect(record?.aiTasks).toBeUndefined();
+    // 提示语只说「非 AI 已重新计算」：旧实现顺手把 AI 结果全清了，用户点一下就没了一批
+    // 花过钱的分析 —— 与文案不符，也超出该按钮的职责(清 AI 另有「清除AI结果与缓存」)。
+    expect(record?.aiStatus).toBe('completed');
+    expect(record?.aiTasks).toBeDefined();
     expect(analyzeBazi).not.toHaveBeenCalled();
   });
 

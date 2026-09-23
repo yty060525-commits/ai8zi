@@ -321,6 +321,15 @@ function anyChannelConfigured(): boolean {
   try { return (['deepseek', 'kimi', 'qwen'] as const).some((id) => !!getBrowserCredential(id)); } catch { return false; }
 }
 
+/** 「谁都没配」这句话该指向哪儿：连着服务器时密钥在服务器那边，界面却写着「去设置」，
+ *  用户点开的是本机凭据框 —— 填了也不会让服务器那条通道动起来。 */
+function serverOnlyReason(detail?: string): string {
+  const where = isServerMode()
+    ? '服务器那边还没配 AI 密钥(需要在服务器上配置，本客户端的设置页管不到它)；想马上能问：点左上角「设置」给任一通道填凭据，就走本机通道回答。'
+    : '尚未配置 AI 密钥：配置后即可向我提问(服务器通道或本机通道均可)。';
+  return where + (detail ? '（' + detail + '）' : '');
+}
+
 export async function askChat(input: AskChatInput): Promise<ChatReply> {
   const question = String(input.question || '').trim();
   if (!question) return { status: 'failed', error: '请输入问题' };
@@ -361,7 +370,7 @@ export async function askChat(input: AskChatInput): Promise<ChatReply> {
             : '本机这些盘都已同步到服务器，却仍查不到你的命盘：可能是当前登录账号与建盘时的账号不同(数据按账号隔离)。请在「设置 → 服务器通道」确认已连接的账号。' };
         }
       }
-      return { ...data, answer, evidence: data?.evidence };
+      return { ...data, answer: data?.status === 'not_configured' && data.error ? serverOnlyReason(data.error) : answer, evidence: data?.evidence };
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return { status: 'failed', error: '已取消' };
       const offline = error instanceof ServerError && error.status === 0;
@@ -369,7 +378,7 @@ export async function askChat(input: AskChatInput): Promise<ChatReply> {
       // 一条都没配才是真的「谁都用不了」，报「未配置」。
       if (!offline) {
         const reason = error instanceof Error ? error.message : '服务器请求失败';
-        if (!anyChannelConfigured()) return { status: 'not_configured', error: reason };
+        if (!anyChannelConfigured()) return { status: 'not_configured', error: serverOnlyReason(reason) };
         serverReason = reason; // 本机配了凭据：继续往下落到本机通道
       }
       // 服务器不可达 → 同样落到本机通道(离线可用)
@@ -380,6 +389,8 @@ export async function askChat(input: AskChatInput): Promise<ChatReply> {
   if (serverReason && local.status === 'failed' && !local.error?.includes('已取消')) {
     return { ...local, error: '服务器：' + serverReason + '；本机通道：' + (local.error || '也未成功') };
   }
+  // 本机也没配凭据、而用户其实连着服务器：别让人跑去填一个用不上的本机密钥。
+  if (local.status === 'not_configured' && isServerMode()) return { ...local, error: serverOnlyReason(local.error) };
   return local;
 }
 

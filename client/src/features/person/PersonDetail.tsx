@@ -4,6 +4,7 @@ import { ABORTED_MESSAGE, buildBaziTasks, isRetryableFailure, orchestrateBaziAna
 import { beginAiSession, cancelAiSession } from '../../data/deepseekAdapter';
 import { clearChartCache } from '../../data/storageInfo';
 import { sanitizeAnalysisText } from '../chart/elements';
+import { isServerMode } from '../../data/serverClient';
 import type { BaziRecord, BaziTaskResult, NonAiChart } from '../../types/domain';
 import { interpersonalZodiac, zodiacOfBranch } from '../../utils/interpersonal';
 
@@ -286,6 +287,13 @@ function PointsView({ text }: { text?: string }) {
   ))}</div>;
 }
 
+/* 「没密钥」这句话该指向哪儿：连着服务器时分析默认由服务器完成，但本客户端的设置页只能填
+   本机三条通道的凭据(服务器那侧的密钥要在服务器上配)。旧文案让人去填一个用不上的地方，
+   所以两条路都说清楚：要么在服务器上给 AI 配密钥，要么在本机填凭据改用本机通道。 */
+const keyMissingHint = isServerMode()
+  ? 'AI 尚未可用：现在连着服务器，分析默认由服务器完成，而服务器那边还没配 AI 密钥(需要在服务器上配置，本客户端的设置页管不到它)。想马上能用：点页面左上角「设置」，在任一服务(DeepSeek / Kimi / 通义)里填写访问凭据并保存，分析就会改走本机通道。'
+  : 'AI 尚未可用：请先点页面左上角「设置」，在任一服务(DeepSeek / Kimi / 通义)里填写访问凭据并保存，再回来点 AI 分析。';
+
 function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (next: BaziRecord) => void }) {
   const [progress, setProgress] = useState<{ done: number; total: number; label: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -509,11 +517,11 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
       <div className="progress-track" role="progressbar" aria-valuenow={progress?.done ?? 0} aria-valuemin={0} aria-valuemax={progress?.total ?? buildBaziTasks(record).length}><div className="progress-fill" style={{ width: `${Math.round(((progress?.done ?? 0) / (progress?.total ?? buildBaziTasks(record).length)) * 100)}%` }} /></div>
     </div>}
     {record.aiStatus === 'pending' && <p role="status">按任务逐个调用 AI（本命 → 每年 → 每月 → 大运 → 后天调整），每个任务数秒到数十秒；失败会自动重试一次，进度即时保存，中断后可随时继续。</p>}
-    {record.aiStatus === 'not_configured' && <p role="status">AI 尚未可用：请先点页面左上角「设置」，在任一服务(DeepSeek / Kimi / 通义)里填写访问凭据并保存，再回来点 AI 分析。</p>}
+    {record.aiStatus === 'not_configured' && <p role="status">{keyMissingHint}</p>}
     {record.aiStatus === 'failed' && <p role="status">{/未配置|没有可用的通道凭据/.test(record.aiError ?? '')
       // 一个凭据都没填时曾按 failed 上报(现已归为 not_configured)，此处兜住历史数据，
       // 别把「余额不足/限流」那串无关原因摆在一个根本没配密钥的用户面前。
-      ? 'AI 尚未可用：请先点页面左上角「设置」，在任一服务(DeepSeek / Kimi / 通义)里填写访问凭据并保存，再回来点 AI 分析。'
+      ? keyMissingHint
       : '个别任务自动重试多轮后仍未成功。常见原因：余额不足或额度已用完 / 密钥无效 / 请求过于频繁（限流）/ 网络超时或不可达 / 所选服务不可用。请按下方原因处理后，再点 AI 分析（只补失败项，不重复花钱）。'}</p>}
     {record.aiError && <p role="alert">原因：{safeAiError(record.aiError)}</p>}
     {record.aiAnalysis && <div className="long-text"><strong>格局与强弱</strong><p>{sanitizeAnalysisText(record.aiAnalysis.pattern || '') || '—'} · {sanitizeAnalysisText(record.aiAnalysis.strength || '') || '—'}</p><p>喜：{(record.aiAnalysis.usefulElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}　忌：{(record.aiAnalysis.avoidElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}</p><PointsView text={record.aiAnalysis.explanation} /></div>}
@@ -579,8 +587,9 @@ export function PersonDetail({ personId, onBack, refreshKey = 0 }: PersonDetailP
     try {
       const { calculateNonAi } = await import('../chart/nonAiCalculator');
       const nonAiResult = calculateNonAi({ birthYear: loadedRecord.birthYear, birthMonth: loadedRecord.birthMonth, yearPillar: loadedRecord.yearPillar, monthPillar: loadedRecord.monthPillar, dayPillar: loadedRecord.dayPillar, hourPillar: loadedRecord.hourPillar }, loadedRecord.gender, loadedRecord.createdAt);
-      const updated = await saveBaziRecord({ ...loadedRecord, nonAiResult, aiStatus: 'not_started', aiAnalysis: undefined, aiOverview: undefined, aiError: undefined, aiTasks: undefined });
+      const updated = await saveBaziRecord({ ...loadedRecord, nonAiResult });
       setRecord(updated);
+      // 这句承诺的是「重算了排盘数据」，顺手把 AI 结果一起清了反而与提示不符(而且用户没要求)。
       setNotice('非 AI 已重新计算');
     } catch (error) {
       setNotice(`非 AI 计算失败：${error instanceof Error ? error.message : '计算失败'}`);
