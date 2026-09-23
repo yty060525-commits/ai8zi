@@ -51,4 +51,16 @@ describe('旺衰评分(引擎算定，AI 不得重判)', () => {
     console.log('LABELS', [...labels].join(','));
     expect(labels.size).toBeGreaterThanOrEqual(3);
   });
+
+  /* 提示词让 AI 同时引用「助身方得分 / 克泄耗方得分 / 净分」三项。逐项取整后再相减
+     会出现 34.8 − 79.2 = −44.5 这种对不上的账，模型照抄就被用户当成算错。 */
+  it('显示口径自洽：净分恒等于取整后的助身分减克泄耗分', () => {
+    const G = '甲乙丙丁戊己庚辛壬癸', Z = '子丑寅卯辰巳午未申酉戌亥';
+    const sixty = Array.from({ length: 60 }, (_, n) => G[n % 10] + Z[n % 12]);
+    for (let i = 0; i < 60; i += 1) {
+      const p = [sixty[i], sixty[(i + 13) % 60], sixty[(i + 29) % 60], sixty[(i + 41) % 60]];
+      const s = run(p);
+      expect(Math.round((s.support - s.drain) * 10) / 10).toBe(s.net);
+    }
+  });
 });

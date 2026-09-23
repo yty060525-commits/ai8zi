@@ -227,7 +227,11 @@ export function scoreStrength(pillars: string[], dayStem: string): StrengthScore
   }
 
   const label = index >= 25 ? '身强' : index <= -25 ? '身弱' : index > 0 ? '中和偏旺' : '中和偏弱';
-  return { support: Math.round(support * 10) / 10, drain: Math.round(drain * 10) / 10, net: Math.round(net * 10) / 10, index, label, inSeason, monthHasSupport, detail };
+  /* 三个显示值各自取整后，会出现「净分 ≠ 助身 − 克泄耗」(如 34.8 − 79.2 = −44.4 却显示 −44.5)。
+     提示词要求 AI 同时引用这三项，对不上就会被当成算错。故以取整后的两项为准重算净分。 */
+  const shownSupport = Math.round(support * 10) / 10;
+  const shownDrain = Math.round(drain * 10) / 10;
+  return { support: shownSupport, drain: shownDrain, net: Math.round((shownSupport - shownDrain) * 10) / 10, index, label, inSeason, monthHasSupport, detail };
 }
 
 export interface PatternInfo {
@@ -315,10 +319,19 @@ export function derivePattern(pillars: string[], dayStem: string): PatternInfo {
   const tg2 = tenGodOf(dayStem, main);
   return { name: tg2 + '格', tenGod: tg2, basis: '月令' + monthGz + '本气' + main + '未透天干，直取本气' + tg2 + '为格' };
 }
-/** 变格候选提示：只给线索，最终由 AI 复核(但必须写明是否采用)。 */
-export function specialPatternHint(score: StrengthScore): string | undefined {
-  if (score.index >= 75 && score.inSeason) return '专旺候选：日主极旺成势(指数' + score.index + ')，若满盘无有力财官则按专旺顺势取用';
-  if (score.index <= -75 && !score.monthHasSupport) return '从格候选：日主极弱无根(指数' + score.index + ')，若印比皆虚浮受制则按从格顺势取用';
+/** 变格候选提示：只给线索，最终由 AI 复核(但必须写明是否采用)。
+ *  专旺古法不许官杀(克我者)混局，旧实现只看总分+得令、不查官杀，14/110 例把带庚辛
+ *  透干的盘提示成专旺候选。从格则要求四柱连一点印比之根都没有 —— 用评分明细判，
+ *  比旧的「月支藏干无印比」严格(那会把年时两处印比漏掉，实测滥发 1782 例)。 */
+export function specialPatternHint(score: StrengthScore, pillars: string[] = [], dayStem = ''): string | undefined {
+  const hasSupportRoot = (score.detail ?? []).some((d) => d.side === 'support' && d.weight > 0);
+  const officerCount = (pillars.length === 4 && dayStem)
+    ? pillars.flatMap((p, i) => (i === 2 ? [p[0]] : [p[0], ...(HIDDEN_STEMS[p[1]] ?? [])]))
+      .map((s) => tenGodOf(dayStem, s))
+      .filter((t) => t === '正官' || t === '七杀').length
+    : 0;
+  if (score.index >= 75 && score.inSeason && officerCount === 0) return '专旺候选：日主极旺成势(指数' + score.index + ')，满盘无官杀，若亦无有力财食则按专旺顺势取用';
+  if (score.index <= -75 && !hasSupportRoot) return '从格候选：日主极弱无根(指数' + score.index + ')，四柱明细中不见有力印比，若确皆虚浮受制则按从格顺势取用';
   return undefined;
 }
 
@@ -648,7 +661,7 @@ export function calculateNonAi(
     twelveLongevity: pillars.map((pillar) => longevityOf(day, pillar[1])),
     // 旺衰与格局：引擎算定的确定结论，提示词要求 AI 沿用不重判
     strengthScore: strengthScore,
-    patternFacts: Object.assign({}, derivePattern(pillars, day), { special: specialPatternHint(strengthScore) }),
+    patternFacts: Object.assign({}, derivePattern(pillars, day), { special: specialPatternHint(strengthScore, pillars, day) }),
     shenSha: buildShenShaResult(pillars),
     shenShaRuleVersion: SHEN_SHA_RULE_VERSION,
     chenggu,
