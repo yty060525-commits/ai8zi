@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { calculateNonAi, chinaYear } from '../features/chart/nonAiCalculator';
+import { zodiacOfBranch } from '../utils/interpersonal';
 
 describe('non-AI calculator', () => {
   it('calculates the year in China Standard Time', () => {
@@ -114,6 +115,16 @@ describe('non-AI calculator', () => {
     const result = calculateNonAi({ birthYear: 1984, birthMonth: 5, yearPillar: '甲子', monthPillar: '己巳', dayPillar: '庚子', hourPillar: '壬午' }, 'male');
     expect(result.hiddenStems[1]).toEqual(['丙', '庚', '戊']);
     expect(result.tenGodDetails.hidden[1].map((item) => item.tenGod)).toEqual(['七杀', '比肩', '偏印']);
+  });
+
+  it('本命生肖按立春年柱(非春节)：立春后·春节前出生与年支一致，不再自相矛盾', () => {
+    // 2024 立春≈2/4、春节 2/10。2024-02-06 生 → 年柱甲辰(辰=龙)，但库 getYearShengXiao()
+    // 按正月初一仍算「兔(卯)」→ 详情页「本命生肖 兔」与「年支 辰」/「我属龙」互相打架(线上实测复现)。
+    const r = calculateNonAi({ birthYear: 2024, birthMonth: 2, yearPillar: '甲辰', monthPillar: '丙寅', dayPillar: '庚子', hourPillar: '壬午' }, 'male');
+    expect(r.pillars.year).toBe('甲辰');
+    expect(r.zodiac).toBe('龙');
+    // 不变式：本命生肖恒等于年柱地支的属相(与命理「年柱/大运同以立春为界」一致)
+    expect(r.zodiac).toBe(zodiacOfBranch(r.pillars.year[1]));
   });
 
   /* 大运曾经压根不做起运推算：第 0 步对齐到「当前公历十年」，于是干支↔年份的对应

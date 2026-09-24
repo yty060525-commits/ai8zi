@@ -4,6 +4,7 @@ export { chinaYear }; // 兼容既有调用点
 
 import { computeShenSha } from './shenSha';
 import { STEMS, BRANCHES, ELEMENTS, HIDDEN_STEMS, stemElementIndex, ELEMENT_RULE_VERSION, countElements } from './elements';
+import { zodiacOfBranch } from '../../utils/interpersonal';
 import type { BaziRecord, Gender, NonAiChart, RelationshipFacts, RelationshipDetail, FortunePeriod, ShenShaItem } from '../../types/domain';
 export { ELEMENT_RULE_VERSION, countElements }; // 口径唯一真源在 ./elements，这里转出以兼容既有引用
 
@@ -740,7 +741,9 @@ export function calculateNonAi(
     pillars: { year: pillars[0], month: pillars[1], day: pillars[2], hour: pillars[3] },
     solarDate: candidate.toYmd(),
     lunarDate: lunar.toString(),
-    zodiac: lunar.getYearShengXiao(),
+    // 本命生肖取「年柱地支」的属相，与八字年柱同为立春口径——不能用库的 getYearShengXiao()
+    // (它按正月初一/春节切年)，否则立春后、春节前出生会出现「年柱辰(龙) / 生肖兔」自相矛盾(实测 2024-02-06)。
+    zodiac: zodiacOfBranch(pillars[0][1]),
     elements: counts,
     elementRatio,
     elementRuleVersion: ELEMENT_RULE_VERSION,
