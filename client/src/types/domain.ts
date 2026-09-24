@@ -128,7 +128,7 @@ export interface AiFindings {
   annuals: Array<{ key: string; heading: string; text: string }>;
   monthlies: Array<{ key: string; heading: string; text: string }>;
 }
-export interface BaziTaskResult { task: BaziAnalysisTask; status: 'completed' | 'failed' | 'not_configured'; analysis?: BaziAIAnalysis; error?: string; }
+export interface BaziTaskResult { task: BaziAnalysisTask; status: 'completed' | 'failed' | 'not_configured'; analysis?: BaziAIAnalysis; error?: string; /** 产出这条结果的引擎：'local'=本地离线规则引擎(第四路)，缺省/'cloud'=云端大模型。切换引擎时据此判定是否复用；界面对本地结果打绿点标注。 */ source?: 'cloud' | 'local'; }
 
 export interface Person {
   id: string;

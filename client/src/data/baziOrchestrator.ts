@@ -2,6 +2,7 @@ import type { AiFindings, BaziAIAnalysis, BaziAnalysisTask, BaziRecord, BaziTask
 import * as adapter from './deepseekAdapter';
 import { chinaYearMonth } from '../utils/date';
 import { ELEMENT_GUIDES, primaryElement, type ElementGuide } from './elementKnowledge';
+import { buildLocalTaskAnalysis } from './localAnalysis';
 import { sanitizeAnalysisText } from '../features/chart/elements';
 export type TaskRunner = (task: BaziAnalysisTask, payload: { nonAiResult: BaziRecord['nonAiResult']; task: BaziAnalysisTask }) => Promise<BaziTaskResult>;
 export interface AiProgress { done: number; total: number; label: string; record: BaziRecord; }
@@ -19,6 +20,9 @@ export interface OrchestrateOptions {
   tone?: number;
   /** 窗口起点时刻(默认今天)；只有测试与预建盘需要固定它。 */
   now?: Date;
+  /** 本地离线（第四路）：为真时若未显式传入 runner，改用本地规则引擎产出各篇正文，
+   *  结果照常写进 record.aiTasks 并打 source='local'。绝不触网、不耗额度。 */
+  local?: boolean;
 }
 
 const isTest = typeof import.meta !== 'undefined' && import.meta.env?.MODE === 'test';
@@ -32,6 +36,8 @@ export const isRetryableFailure = (error: string | undefined): boolean => {
   if (!error) return false;
   if (/not_configured|未配置|credential|keyring/i.test(error)) return false;
   if (/HTTP 40[0-9]|HTTP 404/i.test(error)) return false;
+  // 本地引擎缺该时段排盘数据：重跑还是缺，重试毫无意义(也绝不该把它当可恢复故障循环)。
+  if (/local_unavailable/i.test(error)) return false;
   return true;
 };
 
@@ -237,17 +243,30 @@ export function collectFindings(record: BaziRecord, aiTasks: Record<string, Bazi
 
 const makeDefaultRunner = (record: BaziRecord, signal?: AbortSignal, tone?: number): TaskRunner => async (task) => {
   const result = await adapter.analyzeBazi(record, task, { signal, tone });
-  return { task, status: result.status, analysis: 'analysis' in result ? result.analysis : undefined, error: 'error' in result ? result.error : undefined };
+  return { task, status: result.status, analysis: 'analysis' in result ? result.analysis : undefined, error: 'error' in result ? result.error : undefined, source: 'cloud' as const };
 };
 
-/** 历史脏结果(completed 但无正文)不能算「已有结果」：既不该复用，也不该让总结误以为跑过。 */
-const reusableResult = (item: BaziTaskResult | undefined): boolean =>
-  item?.status === 'completed' && !!item.analysis && (!!item.analysis.explanation || !!item.analysis.pattern);
+/** 本地离线（第四路）runner：由 localAnalysis 规则引擎就地就排盘事实产出与云端各篇同构的正文。
+ *  不触网、不耗额度；缺该时段排盘数据时以 local_unavailable 失败(非可重试)，如实反映而不编造。 */
+const makeLocalRunner = (record: BaziRecord, now?: Date): TaskRunner => async (task) => {
+  const analysis = buildLocalTaskAnalysis(record, task, now ?? new Date());
+  return analysis
+    ? { task, status: 'completed' as const, analysis, source: 'local' as const }
+    : { task, status: 'failed' as const, error: 'local_unavailable: 缺少该时段排盘数据，请先「重新计算非 AI」', source: 'local' as const };
+};
+
+/** 历史脏结果(completed 但无正文)不能算「已有结果」：既不该复用，也不该让总结误以为跑过。
+ *  引擎不同也绝不复用：云端结果不在本地模式复用、本地结果不在云端模式复用 —— 切换生成方式即整轮重算，
+ *  使「本地正文」与「云端正文」不互相冒充(source 缺省视作云端，兼容加字段前的存量结果)。 */
+const reusableResult = (item: BaziTaskResult | undefined, local = false): boolean =>
+  item?.status === 'completed' && !!item.analysis && (!!item.analysis.explanation || !!item.analysis.pattern)
+  && (((item.source ?? 'cloud') === 'local') === local);
 
 export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskRunner, onProgress?: ProgressFn, options: OrchestrateOptions = {}): Promise<BaziRecord> {
   const { signal, retries = 1 } = options;
   const retryDelayMs = options.retryDelayMs ?? (isTest ? 0 : DEFAULT_RETRY_DELAY_MS);
-  const actualRunner: TaskRunner = runner ?? makeDefaultRunner(record, signal, options?.tone);
+  // 未显式传 runner 时：本地离线（第四路）用规则引擎，否则走云端大模型。窗口起点在下面固定后喂给本地 runner。
+  const actualRunner: TaskRunner = runner ?? (options.local ? makeLocalRunner(record, options.now) : makeDefaultRunner(record, signal, options?.tone));
   // 窗口起点在一次分析内固定：跨月长跑时「第 9 项/共 24 项」不会中途变样
   const now = options.now ?? new Date();
   const tasks = buildBaziTasks(record, now);
@@ -319,8 +338,8 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
   const step = async (task: BaziAnalysisTask): Promise<BaziTaskResult> => {
     ensureLive();
     const prev = aiTasks[task.taskId];
-    // 历史脏结果(completed 但无正文)必须重跑
-    const reusable = reusableResult(prev);
+    // 历史脏结果(completed 但无正文)必须重跑；引擎不同(如本地↔云端切换)也重跑
+    const reusable = reusableResult(prev, !!options.local);
     if (reusable) {
       done += 1;
       const progress: AiProgress = { done, total: totalShown(), label: taskLabel(task), record: snapshot() };

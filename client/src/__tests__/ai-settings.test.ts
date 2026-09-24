@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { clearAiCredential, getAiProviderStatus, resetAiSettingsForTests, saveAiCredential, setAiProvider } from '../data/aiSettings';
+import { clearAiCredential, getAiProviderStatus, isOfflineMode, resetAiSettingsForTests, saveAiCredential, setAiProvider, setOfflineMode } from '../data/aiSettings';
 import { invoke } from '@tauri-apps/api/core';
 import { vi } from 'vitest';
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
@@ -23,5 +23,30 @@ describe('AI settings adapter', () => {
     expect(await getAiProviderStatus()).toEqual({ selectedProvider: 'kimi', deepseek: 'not_configured', kimi: 'configured' });
     expect(await clearAiCredential('kimi')).toBe('not_configured');
     expect(invoke).toHaveBeenCalledWith('clear_ai_credential', { provider: 'kimi' });
+  });
+});
+
+describe('本地离线（第四路）开关', () => {
+  it('默认关闭：云端通道仍是默认生成方式', () => {
+    expect(isOfflineMode()).toBe(false);
+  });
+  it('开启后持久化在 localStorage，且绝不上行服务器/桌面端（不调用 invoke）', () => {
+    vi.mocked(invoke).mockClear();
+    expect(setOfflineMode(true)).toBe(true);
+    expect(isOfflineMode()).toBe(true);
+    expect(localStorage.getItem('mingli.offline')).toBe('1');
+    expect(invoke).not.toHaveBeenCalled();
+  });
+  it('与云端通道选择彼此独立：切离线不改 mingli.provider，切回也不残留', () => {
+    setOfflineMode(true);
+    localStorage.setItem('mingli.provider', 'deepseek');
+    setOfflineMode(false);
+    expect(isOfflineMode()).toBe(false);
+    // 关闭离线不应顺带清掉云端通道选择
+    expect(localStorage.getItem('mingli.provider')).toBe('deepseek');
+  });
+  it('免密即可用：不依赖任何凭据配置状态', () => {
+    setOfflineMode(true);
+    expect(isOfflineMode()).toBe(true); // 没填任何 key 也能开
   });
 });

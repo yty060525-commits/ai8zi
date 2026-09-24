@@ -63,10 +63,26 @@ export async function setSelectedService(service: ServiceId): Promise<ServiceId>
 /** 通道显示名（与服务器/桌面端一致）。 */
 export const PROVIDER_LABEL: Record<AiProvider, string> = { deepseek: 'DeepSeek', kimi: 'Kimi', qwen: 'Qwen3.8-Flash' };
 
+/* ── 本地离线（第四路）开关 ────────────────────────────────────────────────
+   「第四路」= 本地规则引擎，免密、不联网、不消耗额度。刻意不进 AiProvider/ServiceId 枚举、
+   也不经 set_ai_provider 上行：它是**本机每台设备各管各的**生成方式开关，不该同步、
+   更不该让云端三通道 / 服务器 / Rust 的去重·前缀 parity·回退逻辑认识一个永不出网的 provider。
+   浏览器与桌面 WebView 都有 localStorage，够它持久化。开启后主「AI 分析」改由本地 runner
+   产出，结果照常写进 record.aiTasks（会同步、聊天能引用），并按 source==='local' 打绿点标注。 */
+const OFFLINE_KEY = 'mingli.offline';
+export function isOfflineMode(): boolean {
+  try { return localStorage.getItem(OFFLINE_KEY) === '1'; } catch { return false; }
+}
+export function setOfflineMode(on: boolean): boolean {
+  try { if (on) localStorage.setItem(OFFLINE_KEY, '1'); else localStorage.removeItem(OFFLINE_KEY); } catch { /* 隐私模式忽略：本会话内仍可切换 */ }
+  return on;
+}
+
 /** 测试专用：清空本机(浏览器)凭据与通道选择，避免用例之间互相污染。 */
 export function resetAiSettingsForTests(): void {
   try {
     localStorage.removeItem('mingli.provider');
+    localStorage.removeItem(OFFLINE_KEY);
     for (const p of ['deepseek', 'kimi', 'qwen'] as AiProvider[]) localStorage.removeItem('mingli.cred.' + p);
   } catch { /* 非浏览器环境忽略 */ }
 }

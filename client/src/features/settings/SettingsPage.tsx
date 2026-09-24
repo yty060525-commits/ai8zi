@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
-import { getServiceStatus, clearServiceCredential, saveServiceCredential, setSelectedService, serviceProvider, serviceOf, PROVIDER_LABEL, type ServiceId } from '../../data/aiSettings';
+import { getServiceStatus, clearServiceCredential, saveServiceCredential, setSelectedService, serviceProvider, serviceOf, PROVIDER_LABEL, isOfflineMode, setOfflineMode, type ServiceId } from '../../data/aiSettings';
 import { compactRecords, getStorageStats, runAiSelfTest, type AiSelfTest } from '../../data/storageInfo';
 import { reloadLocalForSession } from '../../data/clientRepository';
 import { importRecords, parseBackupFile, type ImportMode } from '../../data/sqlImport';
@@ -19,6 +19,9 @@ export function SettingsPage() {
   const [secrets, setSecrets] = useState<Record<ServiceId, string>>({ serviceOne: '', serviceTwo: '', serviceThree: '' });
   const [busyService, setBusyService] = useState<ServiceId | null>(null);
   const [currentProvider, setCurrentProvider] = useState<'deepseek' | 'kimi' | 'qwen'>('qwen');
+  // 本地离线（第四路）开关：本机各管各的，只在 localStorage 里记，绝不上行服务器/桌面端点。
+  const [offline, setOffline] = useState<boolean>(() => isOfflineMode());
+  const [offlineNotice, setOfflineNotice] = useState<string>();
   const [switching, setSwitching] = useState(false);
   const [notice, setNotice] = useState<Partial<Record<ServiceId, string>>>({});
   const [status, setStatus] = useState<DisplayStatus>('未配置');
@@ -195,7 +198,7 @@ export function SettingsPage() {
       <p className="page-description">三条通道各自独立保存，互不影响。当前生效的那条会标注「使用中」并优先调用，失败时自动依次回退到已配置的其它通道。</p>
       // 「使用中」曾被理解成「这条已经配好了、正在跑」：一条凭据都没填时，页面同时摆出
       // 「使用中」和「已配置 0 / 3 条」两句互相矛盾的话。这里说清楚它是被选中的那条、但还没填。
-      <p className="current-channel" role="status">当前使用：<strong>{PROVIDER_LABEL[currentProvider]}</strong>{statuses[currentProvider === 'deepseek' ? 'serviceOne' : currentProvider === 'kimi' ? 'serviceTwo' : 'serviceThree'] === '已配置' ? '' : '（该通道尚未配置，会直接使用其它已配置通道）'}　·　已配置 {configuredCount} / {services.length} 条{configuredCount === 0 ? '：三条都还没填凭据，现在哪一条都调不动，先在下面任一条里粘贴凭据并保存' : ''}</p>
+      <p className="current-channel" role="status">{offline ? <>当前使用：<strong>本地离线（第四路）</strong>（点「AI 分析」即由本机批断；下面选中的云端通道留作切回后重算的默认）　·　</> : <>当前使用：<strong>{PROVIDER_LABEL[currentProvider]}</strong>{statuses[currentProvider === 'deepseek' ? 'serviceOne' : currentProvider === 'kimi' ? 'serviceTwo' : 'serviceThree'] === '已配置' ? '' : '（该通道尚未配置，会直接使用其它已配置通道）'}　·　</>}已配置 {configuredCount} / {services.length} 条{configuredCount === 0 && !offline ? '：三条云端通道都还没填凭据，先在下面任一条里粘贴凭据并保存（或直接用上面的本地离线）' : ''}</p>
       {services.map((service) => {
         const st = statuses[service.id];
         const busy = busyService === service.id;
@@ -215,6 +218,20 @@ export function SettingsPage() {
           </div>
         </div>;
       })}
+      {/* 第四路：本地规则引擎。免密、不联网、不消耗额度，是本机「生成方式」开关而非云端通道，
+          所以不进上面的三条凭据流；开着它点「AI 分析」即由本机批断，结果仍写入命盘并同步。 */}
+      <div className={offline ? 'channel-block current' : 'channel-block'} aria-label="本地离线 第四路">
+        <div className="channel-head">
+          <strong>本地离线（第四路）</strong>
+          <span className="channel-status ok">免密 · 随时可用</span>
+          {offline ? <span className="channel-current">使用中（本机）</span> : null}
+          {offlineNotice ? <span className="channel-notice" role="status">{offlineNotice}</span> : null}
+        </div>
+        <div className="channel-row">
+          <span className="copy-help">不联网、不消耗云端调用：由本机规则引擎就排盘事实直接批断，结果同样写入命盘并随账号同步；切回云端通道再点「AI 分析」会用云端结果重算覆盖。仅影响本机。</span>
+          <button className={offline ? 'text-button' : 'primary-button'} type="button" onClick={() => { const next = setOfflineMode(!offline); setOffline(next); setOfflineNotice(next ? '已切换为本地离线批断（仅本机）' : '已切回云端通道'); setTimeout(() => setOfflineNotice(undefined), 4000); }}>{offline ? '切回云端通道' : '设为使用（离线批断）'}</button>
+        </div>
+      </div>
     </section>
     <p className="ai-status" role="status">数据库：{storage ? `${storage.records} 条记录 / 缓存 ${storage.cacheEntries === null ? '未知(网页版不统计服务器缓存)' : storage.cacheEntries + ' 条'}${storage.bytes ? ` / ${(storage.bytes / 1024).toFixed(0)} KB` : ''}` : '读取中…'}</p>
     <div className="button-group"><button className="text-button" type="button" disabled={compacting || storage === null || storage.cacheEntries === null} onClick={() => void compress()}>{compacting ? '压缩中…' : '压缩旧记录（缩小数据库）'}</button><button className="text-button" type="button" disabled={testing} onClick={() => void selfTest()}>{testing ? '自检中…' : 'AI 连通自检（微小消耗）'}</button></div>

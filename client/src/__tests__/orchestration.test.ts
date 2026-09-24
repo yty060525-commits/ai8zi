@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildBaziTasks, orchestrateBaziAnalysis, sanitizeAnalysis } from '../data/baziOrchestrator';
+import { buildBaziTasks, isRetryableFailure, orchestrateBaziAnalysis, sanitizeAnalysis } from '../data/baziOrchestrator';
+import { calculateNonAi } from '../features/chart/nonAiCalculator';
 import { ELEMENT_GUIDES } from '../data/elementKnowledge';
 import type { BaziAnalysisTask, BaziRecord } from '../types/domain';
 
@@ -277,5 +278,55 @@ describe('全盘总结任务(task-31)', () => {
         : { task, status: 'failed', error: 'HTTP 400 bad request' };
     }, undefined, { retries: 0 });
     expect(calls).not.toContain('task-31');
+  });
+});
+
+/* ── 本地离线（第四路）批量：不传 runner、local:true 走规则引擎，结果写进 aiTasks 且打 source ── */
+const fullRecord = (gender: 'male' | 'female'): BaziRecord => {
+  const nonAiResult = calculateNonAi({ birthYear: 1984, birthMonth: 2, yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午' }, gender, '2026-06-01T04:00:00.000Z');
+  return { id: 'lo', name: '离线第四路测', gender, birthYear: 1984, birthMonth: 2, createdAt: '2025-01-01T00:00:00.000Z', yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午', nonAiResult, aiStatus: 'not_started' } as unknown as BaziRecord;
+};
+const OFFLINE_NOW = new Date('2026-06-15T00:00:00.000Z');
+
+describe('本地离线（第四路）批量', () => {
+  it('未传 runner 且 local:true：全时段结果 source=local、结构齐、正文无英文(全程不触网)', async () => {
+    const result = await orchestrateBaziAnalysis(fullRecord('male'), undefined, undefined, { local: true, now: OFFLINE_NOW, retryDelayMs: 0 });
+    const vals = Object.values(result.aiTasks ?? {});
+    expect(vals.length).toBeGreaterThan(20);
+    expect(vals.every((r) => r.status === 'completed')).toBe(true);
+    expect(vals.every((r) => r.source === 'local')).toBe(true);
+    const base = result.aiTasks?.['task-01']?.analysis?.explanation ?? '';
+    expect(base).toContain('【身强身弱与喜忌】');
+    expect(base).toContain('【爱情】');
+    expect(base).not.toMatch(/[A-Za-z]/);
+    const ann = vals.find((r) => r.task.type === 'annual')?.analysis?.explanation ?? '';
+    expect(ann).toContain('【刑冲克害批注】');
+    expect(result.aiOverview?.explanation).toContain('【核心结论】');
+    expect(vals.find((r) => r.task.type === 'adjustment')?.status).toBe('completed');
+    expect(result.aiStatus).toBe('completed');
+  });
+
+  it('引擎切换即重算：本地结果在云端模式下不被复用，会被云端结果覆盖', async () => {
+    const localRun = await orchestrateBaziAnalysis(fullRecord('male'), undefined, undefined, { local: true, now: OFFLINE_NOW, retryDelayMs: 0 });
+    let cloudCalls = 0;
+    const cloudRunner = async (task: BaziAnalysisTask) => {
+      cloudCalls += 1;
+      // 本命给出喜用(木)，使云端这轮同样产出「后天调整」，与本地那轮任务集对齐，便于断言全覆盖。
+      const analysis = task.type === 'baseline'
+        ? { pattern: '偏财格', strength: '身弱', usefulElements: ['木'], avoidElements: ['金'], explanation: okText }
+        : { ...okAnalysis, explanation: task.type === 'overview' ? OVERVIEW_TEXT_FULL : okText };
+      return { task, status: 'completed' as const, analysis, source: 'cloud' as const };
+    };
+    const cloudRun = await orchestrateBaziAnalysis(localRun, cloudRunner, undefined, { now: OFFLINE_NOW, retryDelayMs: 0 });
+    expect(cloudCalls).toBeGreaterThan(0);
+    expect(Object.values(cloudRun.aiTasks ?? {}).every((r) => r.source === 'cloud')).toBe(true);
+    // 反向：云端结果在同为云端的模式下会被复用(不重复发)
+    let again = 0;
+    await orchestrateBaziAnalysis(cloudRun, async (task) => { again += 1; return { task, status: 'completed' as const, analysis: okAnalysis, source: 'cloud' as const }; }, undefined, { now: OFFLINE_NOW, retryDelayMs: 0 });
+    expect(again).toBe(0); // 全部命中同引擎已完成结果
+  });
+
+  it('local_unavailable 判为不可重试(缺数据不空转重试)', () => {
+    expect(isRetryableFailure('local_unavailable: 缺少该时段排盘数据')).toBe(false);
   });
 });

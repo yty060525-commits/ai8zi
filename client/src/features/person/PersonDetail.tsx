@@ -6,6 +6,7 @@ import { clearChartCache } from '../../data/storageInfo';
 import { sanitizeAnalysisText } from '../chart/elements';
 import { isServerMode } from '../../data/serverClient';
 import { buildLocalAnalysis, buildLocalTaskAnalysis, canBuildLocalAnalysis } from '../../data/localAnalysis';
+import { isOfflineMode } from '../../data/aiSettings';
 import type { BaziRecord, BaziTaskResult, NonAiChart } from '../../types/domain';
 import { interpersonalZodiac, zodiacOfBranch } from '../../utils/interpersonal';
 
@@ -335,6 +336,10 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
   const openSettings = () => window.dispatchEvent(new Event('mingli:open-settings'));
 
   const aiResults = Object.values(record.aiTasks ?? {});
+  // 本机当前是否把「本地离线（第四路）」当作生成方式（读 localStorage，每次进详情页重算，不进 record）。
+  const offlineActive = isOfflineMode();
+  // 这套已生成结果里是否混有本地批断：用于顶部一句轻量说明，提示绿点含义与「可用云端重算覆盖」。
+  const hasLocalResults = aiResults.some((item) => item.source === 'local');
   // 列表里有一条「未配置」，整条记录却常是 completed(其余任务成功)：此时上面的 not_configured
   // 引导不出现，用户只看到一句「状态：已完成」加一堆「未配置」的条目，不知道该去哪儿补。
   const hasUnconfiguredTask = aiResults.some((item) => item.status === 'not_configured');
@@ -442,12 +447,31 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
     let enteredBusy = false;
     try {
       const currentTone = toneRef.current;
+      const offline = isOfflineMode();   // 本机是否把「本地离线（第四路）」当作生成方式
+      // 离线模式要有完整排盘数据才能产出各篇正文：没有数据时如实挡下，绝不拿空盘硬凑批断。
+      if (offline && !canBuildLocalAnalysis(base)) {
+        setHint('本地离线（第四路）需要先有排盘数据：请点上方「重新计算非 AI」，再点 AI 分析。');
+        return;
+      }
+      // 引擎切换 = 整轮重算并覆盖：先清掉「另一种引擎」留下的旧结果。
+      // 不逐条覆盖是因为新引擎未必产出同一批任务(如云端本命无喜用则不出「后天调整」)，
+      // 残留一条另一引擎的正文既会让绿点标注自相矛盾，也会让聊天/复制里混进两种来源的文本。
+      const hasWrongEngine = Object.values(base.aiTasks ?? {}).some((r) => (((r.source) ?? 'cloud') === 'local') !== offline);
+      if (hasWrongEngine) {
+        const cleared = await saveBaziRecord({ ...base, aiTasks: undefined, aiAnalysis: undefined, aiOverview: undefined, aiError: undefined, aiStatus: 'not_started' });
+        onUpdated(cleared);
+        base = cleared;
+        setHint(offline ? '已切换到本地离线（第四路）：正在用本机规则引擎重算并覆盖云端结果…' : '已切回云端通道：正在用云端重算并覆盖本地批断结果…');
+      }
       const expectedIds = expectedTaskIds(base, horizonRef.current);
       const completeTasks = expectedIds.filter((id) => {
         const item = base.aiTasks?.[id];
         return item?.status === 'completed' && !!item.analysis && (!!item.analysis.explanation || !!item.analysis.pattern);
       });
-      if (expectedIds.length > 0 && completeTasks.length === expectedIds.length) {
+      // 引擎是否一致：本轮要用的生成方式(离线/云端)与已有结果的来源相同。缺省 source 视为云端。
+      // 不一致时不走「命中缓存」早退，直接进入重算 —— 让切换第四路/切回云端能覆盖彼此。
+      const engineMatch = completeTasks.every((id) => (((base.aiTasks?.[id]?.source) ?? 'cloud') === 'local') === offline);
+      if (expectedIds.length > 0 && completeTasks.length === expectedIds.length && engineMatch) {
         const ran = usedTone(base.id);   // 本机这条盘上次生成用的语气；undefined = 本机还没跑过(可能是同步/换设备来的)
         // 本机没跑过、或语气与上次一致 → 视为命中缓存，绝不当成「改语气」把整盘成果清掉重算。
         if (ran === undefined || ran === currentTone) {
@@ -478,7 +502,7 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
             lastSnapshot = persisted;
             onUpdated(persisted);
           } catch { /* 单次进度落库失败不中断整体，最终结果会整体保存 */ }
-        }, { signal: controller.signal, tone: currentTone, now: horizonRef.current });
+        }, { signal: controller.signal, tone: currentTone, now: horizonRef.current, local: offline });
         const saved = await saveBaziRecord({ ...finished });   // 同上：不把语气写进同步记录
         markUsedTone(record.id, currentTone);   // 本机记住：这条盘这次是用 currentTone 生成的
         lastSnapshot = saved;
@@ -545,6 +569,8 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
       <span className="tone-scale"><em>犀利</em><em>中立</em><em>温柔夸夸</em></span>
     </div>
     <p className="ai-status" role="status">状态：{statusText[record.aiStatus]}</p>
+    {offlineActive && <p className="ai-mode-note" role="status">当前为本地离线（第四路）：点「AI 分析」由本机规则引擎就上方排盘事实直接批断，不联网、不消耗额度；结果同样写入本条命盘并随账号同步，可随时切回云端通道用大模型重算覆盖。</p>}
+    {!offlineActive && aiResults.some((r) => r.source === 'local') && <p className="ai-mode-note" role="status">下方带 <span className="local-dot" aria-hidden="true" /> 的段落为上次本地离线批断的结果；当前已选云端通道，点「AI 分析」会用云端结果重算并覆盖它们。</p>}
     {hint && <p role="status">{hint}</p>}
     {autoWaiting && <div className="button-group"><button className="text-button" type="button" onClick={cancelAutoRetryFromHint}>取消自动重试</button></div>}
     {(progress || busy || (record.aiStatus === 'pending' && !progress)) && <div className="progress-block" aria-label="AI 分析进度">
@@ -559,7 +585,7 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
       ? keyMissingHint
       : '个别任务自动重试多轮后仍未成功。常见原因：余额不足或额度已用完 / 密钥无效 / 请求过于频繁（限流）/ 网络超时或不可达 / 所选服务不可用。请按下方原因处理后，再点 AI 分析（只补失败项，不重复花钱）。'}</p>}
     {record.aiError && !/未配置|没有可用的通道凭据/.test(record.aiError) && <p role="alert">原因：{safeAiError(record.aiError)}</p>}
-    {record.aiAnalysis && <div className="long-text"><strong>格局与强弱</strong><p>{sanitizeAnalysisText(record.aiAnalysis.pattern || '') || '—'} · {sanitizeAnalysisText(record.aiAnalysis.strength || '') || '—'}</p><p>喜：{(record.aiAnalysis.usefulElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}　忌：{(record.aiAnalysis.avoidElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}</p><PointsView text={record.aiAnalysis.explanation} /></div>}
+    {record.aiAnalysis && <div className="long-text"><strong>格局与强弱</strong>{record.aiTasks?.['task-01']?.source === 'local' ? <span className="local-dot" title="本地离线批断（第四路）" aria-label="本地离线批断" /> : null}<p>{sanitizeAnalysisText(record.aiAnalysis.pattern || '') || '—'} · {sanitizeAnalysisText(record.aiAnalysis.strength || '') || '—'}</p><p>喜：{(record.aiAnalysis.usefulElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}　忌：{(record.aiAnalysis.avoidElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}</p><PointsView text={record.aiAnalysis.explanation} /></div>}
     {/* 全盘总结正文(含古风标题)在下方「② 全盘总结」分组里完整展示；这里只留一处入口提示，避免同一段内容渲染两遍 */}
     {record.aiOverview && <p className="long-text" aria-label="全盘总结提要"><strong>全盘总结已完成：</strong>值得关注的年份与机会/风险窗口见下方「② 全盘总结」段落。</p>}
     {aiResults.length > 0 && <div className="ai-scopes">
@@ -593,7 +619,7 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
             const analysis = item.analysis;
             const lead = analysis && (analysis.pattern || analysis.strength) ? <p className="scope-lead">格局：{sanitizeAnalysisText(analysis.pattern || '') || '—'} · 强弱：{sanitizeAnalysisText(analysis.strength || '') || '—'}　喜：{(analysis.usefulElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}　忌：{(analysis.avoidElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}</p> : null;
             return <details key={group.key + '-' + idx} className="scope-item" open={group.key === 'baseline' && item.status === 'completed'}>
-              <summary>{describeScope(item, record)}<span className="scope-status">　{statusText[item.status === 'completed' ? 'completed' : item.status === 'failed' ? 'failed' : 'not_configured']}</span></summary>
+              <summary>{describeScope(item, record)}{item.source === 'local' ? <span className="local-dot" title="本地离线批断（第四路）：不联网、可随时用云端重算覆盖" aria-label="本地离线批断" /> : null}<span className="scope-status">　{statusText[item.status === 'completed' ? 'completed' : item.status === 'failed' ? 'failed' : 'not_configured']}</span></summary>
               {item.status === 'completed' && analysis ? <div className="scope-body">{analysis.title ? <p className="scope-title"><strong>{sanitizeAnalysisText(analysis.title)}</strong></p> : null}{lead}<PointsView text={analysis.explanation} /></div> : item.status === 'failed' ? (busy ? <p className="retry-hint">该任务失败，正在自动重新调用 AI…</p> : <p className="form-error">自动重试多轮后仍失败：{safeAiError(item.error ?? '未知错误')}</p>) : item.status === 'not_configured' ? <p>未配置密钥，本项未生成。<button type="button" className="text-button chat-settings-link" onClick={openSettings}>去设置 ›</button></p> : null}
             </details>;
           })}
