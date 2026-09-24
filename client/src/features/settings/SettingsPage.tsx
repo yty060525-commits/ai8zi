@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { getServiceStatus, clearServiceCredential, saveServiceCredential, setSelectedService, serviceProvider, serviceOf, PROVIDER_LABEL, type ServiceId } from '../../data/aiSettings';
+import { isLocalSystemEnabled, isLocalSystemUnlocked, lockLocalSystem, setLocalSystemEnabled, unlockLocalSystem } from '../../data/localSystem';
 import { compactRecords, getStorageStats, runAiSelfTest, type AiSelfTest } from '../../data/storageInfo';
 import { reloadLocalForSession } from '../../data/clientRepository';
 import { importRecords, parseBackupFile, type ImportMode } from '../../data/sqlImport';
@@ -37,6 +38,29 @@ export function SettingsPage() {
   const [srvBusy, setSrvBusy] = useState(false);
   const [srvMsg, setSrvMsg] = useState<string>();
   const [session, setSession] = useState<ServerSession | null>(() => getServerSession());
+
+  // 本地系统（本机规则引擎）：要先用密钥开通，再手动勾选才接管「AI 分析」。初始化即读本机状态。
+  const [localUnlocked, setLocalUnlocked] = useState<boolean>(() => isLocalSystemUnlocked());
+  const [localOn, setLocalOn] = useState<boolean>(() => isLocalSystemEnabled());
+  const [localKey, setLocalKey] = useState('');
+  const [localNote, setLocalNote] = useState<string>();
+  const flashLocalNote = (text: string) => { setLocalNote(text); setTimeout(() => setLocalNote(undefined), 4000); };
+  function doUnlockLocal() {
+    if (!localKey.trim()) { flashLocalNote('请先粘贴密钥'); return; }
+    if (!unlockLocalSystem(localKey)) { flashLocalNote('密钥不正确：本地系统未开通'); setLocalKey(''); return; }
+    setLocalUnlocked(true); setLocalKey('');
+    flashLocalNote('已开通本地系统：勾选下方「使用本地系统」即可接管 AI 分析');
+  }
+  function doLockLocal() {
+    lockLocalSystem();
+    setLocalUnlocked(false); setLocalOn(false); setLocalKey('');
+    flashLocalNote('已撤销开通：本地系统已关闭并清除本机密钥标记');
+  }
+  function toggleLocal(on: boolean) {
+    const applied = setLocalSystemEnabled(on);
+    setLocalOn(applied);
+    flashLocalNote(applied ? '已启用本地系统：点「AI 分析」改由本机规则引擎批断（仅本机）' : '已关闭本地系统：切回云端通道');
+  }
 
   useEffect(() => {
     let active = true;
@@ -196,13 +220,13 @@ export function SettingsPage() {
       // 「使用中」曾被理解成「这条已经配好了、正在跑」：一条凭据都没填时，页面同时摆出
       // 「使用中」和「已配置 0 / 3 条」两句互相矛盾的话。这里说清楚它是被选中的那条、但还没填。
       <p className="current-channel" role="status">当前使用：<strong>{PROVIDER_LABEL[currentProvider]}</strong>{statuses[currentProvider === 'deepseek' ? 'serviceOne' : currentProvider === 'kimi' ? 'serviceTwo' : 'serviceThree'] === '已配置' ? '' : '（该通道尚未配置，会直接使用其它已配置通道）'}　·　已配置 {configuredCount} / {services.length} 条{configuredCount === 0 ? '：三条通道都还没填凭据，先在下面任一条里粘贴凭据并保存' : ''}</p>
-      {/* 本地离线（第四路）已下架：设置页入口与详情页本地批断按钮一并收起，开关默认关
-          （aiSettings.isOfflineMode 恒为 false）。已生成的本地结果仍在盘上，但这页不再提供
-          切换入口 —— 日后重新上架时，把下面那一段 channel-block 恢复回来即可。 */}
       {services.map((service) => {
         const st = statuses[service.id];
         const busy = busyService === service.id;
         const isCurrent = serviceProvider(service.id) === currentProvider;
+        // 本地系统挂在 Qwen 一块里（用户指定「跟 qwen 走一个系统」）：它跟 qwen 共用这一格的位置与
+        // 视觉，但**不共用凭据槽** —— 上面那串是云端 key，这里是本机解锁码，两者互不影响。
+        const isQwen = service.id === 'serviceThree';
         return <div className={isCurrent ? 'channel-block current' : 'channel-block'} key={service.id} aria-label={service.label + ' 通道'}>
           <div className="channel-head">
             <strong>{service.label}</strong>
@@ -216,6 +240,21 @@ export function SettingsPage() {
             <button className="primary-button" type="button" disabled={busy} onClick={() => void saveOne(service.id)}>{busy ? '处理中…' : '保存'}</button>
             <button className="text-button" type="button" disabled={busy} onClick={() => void clearOne(service.id)}>清除</button>
           </div>
+          {isQwen && <div className="local-unlock" aria-label="本地系统">
+            <div className="local-unlock-head">
+              <strong>本地系统（本机规则引擎）</strong>
+              <span className={localUnlocked ? 'channel-status ok' : 'channel-status'}>{localUnlocked ? '已开通' : '未开通'}</span>
+              {localNote && <span className="channel-notice" role="status">{localNote}</span>}
+            </div>
+            <p className="copy-help">不联网、不消耗用度：由本机规则引擎就排盘事实直接批断，结果同样写入命盘并随账号同步。需粘贴密钥开通，开通后再勾选才接管「AI 分析」；仅影响本机，随时可取消勾选切回云端。</p>
+            {!localUnlocked
+              ? <div className="channel-row"><input aria-label="本地系统密钥" type="password" autoComplete="off" placeholder="粘贴密钥以开通本地系统" value={localKey} onChange={(event) => setLocalKey(event.target.value)} />
+                <button className="primary-button" type="button" onClick={doUnlockLocal}>开通</button></div>
+              : <div className="local-unlock-row">
+                <label className="checkbox-inline"><input type="checkbox" checked={localOn} onChange={(event) => toggleLocal(event.target.checked)} />使用本地系统（不联网批断）</label>
+                <button className="text-button" type="button" onClick={doLockLocal}>撤销开通（清除密钥）</button>
+              </div>}
+          </div>}
         </div>;
       })}
     </section>

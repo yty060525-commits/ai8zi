@@ -70,21 +70,17 @@ export const PROVIDER_LABEL: Record<AiProvider, string> = { deepseek: 'DeepSeek'
    浏览器与桌面 WebView 都有 localStorage，够它持久化。开启后主「AI 分析」改由本地 runner
    产出，结果照常写进 record.aiTasks（会同步、聊天能引用），并按 source==='local' 打绿点标注。
 
-   **此功能已下架**，设置页入口与详情页本地批断按钮都收起了，所以这里必须**默认关**：
-   入口没了而开关还开着，等于用户永远关不掉一个仍在生效的生成方式 —— 点「AI 分析」
-   会被本地引擎静默接管，连"切回云端"的开关都不在界面上。旧值一律按关处理，
-   已跑过的本地结果仍留在盘上(存量不动)，切回云端后点「AI 分析」即用云端结果覆盖。
-   日后重新上架时，连同设置页那一块入口一起恢复即可。 */
+   这里只负责**如实存取**这个开关（0/1 与 localStorage 一致），不做任何拦截。
+   它是否允许被打开由上层 `localSystem.ts` 的密钥解锁把关：**别在这里加"恒 false"之类的
+   暗门** —— 上一版就是这么干的（功能下架时把读写都改成空操作），后果是"入口藏起来了、
+   开关却还开着"且界面上再也关不掉。闸门只应有一处，且必须有个看得见的开关与之配对。 */
 const OFFLINE_KEY = 'mingli.offline';
 export function isOfflineMode(): boolean {
-  // 功能下架期间恒为 false：不再读 localStorage —— 入口没了却让残留的 '1' 继续生效，
-  // 用户会被本地引擎静默接管且在界面上找不到任何开关把它关掉。
-  try { localStorage.removeItem(OFFLINE_KEY); } catch { /* 隐私模式忽略 */ }
-  return false;
+  try { return localStorage.getItem(OFFLINE_KEY) === '1'; } catch { return false; }
 }
 export function setOfflineMode(on: boolean): boolean {
-  try { localStorage.removeItem(OFFLINE_KEY); } catch { /* 隐私模式忽略 */ }
-  return false;
+  try { if (on) localStorage.setItem(OFFLINE_KEY, '1'); else localStorage.removeItem(OFFLINE_KEY); } catch { /* 隐私模式忽略：本会话内仍可切换 */ }
+  return on;
 }
 
 /** 测试专用：清空本机(浏览器)凭据与通道选择，避免用例之间互相污染。 */
@@ -92,6 +88,8 @@ export function resetAiSettingsForTests(): void {
   try {
     localStorage.removeItem('mingli.provider');
     localStorage.removeItem(OFFLINE_KEY);
+    localStorage.removeItem('mingli.local.unlocked');
+    localStorage.removeItem('mingli.local.on');
     for (const p of ['deepseek', 'kimi', 'qwen'] as AiProvider[]) localStorage.removeItem('mingli.cred.' + p);
   } catch { /* 非浏览器环境忽略 */ }
 }

@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SettingsPage } from '../features/settings/SettingsPage';
-import { resetAiSettingsForTests } from '../data/aiSettings';
+import { isOfflineMode, resetAiSettingsForTests } from '../data/aiSettings';
+import { LOCAL_SYSTEM_KEY, isLocalSystemEnabled, isLocalSystemUnlocked, resetLocalSystemForTests } from '../data/localSystem';
 import { invoke } from '@tauri-apps/api/core';
 import { vi } from 'vitest';
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
@@ -18,7 +19,7 @@ const happyPath = async (command: string) => command === 'get_ai_provider_status
   : 'not_configured';
 
 // 每个用例后恢复默认桩：否则某个用例改过的 invoke 实现会污染后续用例(曾导致覆盖测试误判)
-afterEach(() => { cleanup(); resetAiSettingsForTests(); vi.mocked(invoke).mockImplementation(happyPath); vi.clearAllTimers?.(); });
+afterEach(() => { cleanup(); resetAiSettingsForTests(); resetLocalSystemForTests(); vi.mocked(invoke).mockImplementation(happyPath); vi.clearAllTimers?.(); });
 
 describe('SettingsPage', () => {
   it('lists all three model channels at once and never shows secret/limit wording', async () => {
@@ -28,7 +29,10 @@ describe('SettingsPage', () => {
     expect(screen.getByLabelText('DeepSeek 访问凭据')).toBeTruthy();
     expect(screen.getByLabelText('Kimi 访问凭据')).toBeTruthy();
     expect(screen.getByLabelText('Qwen3.8-Flash 访问凭据')).toBeTruthy();
-    expect(screen.queryByText(/模型|API|额度|费用|密钥/)).toBeNull();
+    // 「密钥」二字是本地系统解锁块的必然用词（用户 2026-09-25 指定「输入密钥开通」），
+    // 故只放行这一处；其余措辞仍禁止出现在云端三条通道周围。
+    expect(screen.getAllByText(/密钥/).length).toBe(1);
+    expect(screen.queryByText(/模型|API|额度|费用/)).toBeNull();
   });
 
   it('saves each channel independently without switching modes', async () => {
@@ -112,5 +116,64 @@ describe('SettingsPage', () => {
     await waitFor(() => expect(screen.getByText('已用新凭据覆盖原有配置')).toBeTruthy(), { timeout: 3000 });
     expect(document.body.textContent).not.toContain('first-key');
     expect(document.body.textContent).not.toContain('second-key');
+  });
+
+  it('本地系统默认锁着：只给密钥输入框，不给「使用本地系统」勾选框', () => {
+    render(<SettingsPage />);
+    expect(screen.getByLabelText('本地系统密钥')).toBeTruthy();
+    expect(screen.getByText('未开通')).toBeTruthy();
+    // 没输密钥之前不该出现能直接接管 AI 分析的勾选框
+    expect(screen.queryByRole('checkbox', { name: /使用本地系统/ })).toBeNull();
+  });
+
+  it('密钥输错：如实报错、不开通、也不出现勾选框', async () => {
+    render(<SettingsPage />);
+    const key = screen.getByLabelText('本地系统密钥') as HTMLInputElement;
+    fireEvent.change(key, { target: { value: 'not-the-key' } });
+    fireEvent.click(screen.getByRole('button', { name: '开通' }));
+    await waitFor(() => expect(screen.getByText(/密钥不正确/)).toBeTruthy());
+    expect(screen.getByText('未开通')).toBeTruthy();
+    expect(screen.queryByRole('checkbox', { name: /使用本地系统/ })).toBeNull();
+    expect(isLocalSystemUnlocked()).toBe(false);
+  });
+
+  it('密钥正确才开通，开通后出现勾选框且默认不勾（不自动接管）', async () => {
+    render(<SettingsPage />);
+    const key = screen.getByLabelText('本地系统密钥') as HTMLInputElement;
+    fireEvent.change(key, { target: { value: LOCAL_SYSTEM_KEY } });
+    fireEvent.click(screen.getByRole('button', { name: '开通' }));
+    await waitFor(() => expect(screen.getByText('已开通')).toBeTruthy());
+    const box = screen.getByRole('checkbox', { name: /使用本地系统/ }) as HTMLInputElement;
+    expect(box.checked, '刚开通时不该自动启用').toBe(false);
+    expect(isLocalSystemEnabled()).toBe(false);
+    // 勾选后才真的接管
+    fireEvent.click(box);
+    await waitFor(() => expect(isLocalSystemEnabled()).toBe(true));
+    expect(isOfflineMode()).toBe(true);
+  });
+
+  it('撤销开通会连带把本地系统关掉，回去只剩密钥输入框', async () => {
+    render(<SettingsPage />);
+    const key = screen.getByLabelText('本地系统密钥') as HTMLInputElement;
+    fireEvent.change(key, { target: { value: LOCAL_SYSTEM_KEY } });
+    fireEvent.click(screen.getByRole('button', { name: '开通' }));
+    await waitFor(() => expect(screen.getByText('已开通')).toBeTruthy());
+    fireEvent.click(screen.getByRole('checkbox', { name: /使用本地系统/ }));
+    await waitFor(() => expect(isLocalSystemEnabled()).toBe(true));
+
+    fireEvent.click(screen.getByRole('button', { name: /撤销开通/ }));
+    await waitFor(() => expect(screen.getByText('未开通')).toBeTruthy());
+    expect(screen.queryByRole('checkbox', { name: /使用本地系统/ })).toBeNull();
+    expect(isLocalSystemEnabled()).toBe(false);
+    // 关键：底层开关也关掉了，不留「引擎还在跑、界面关不掉」的残留
+    expect(isOfflineMode()).toBe(false);
+  });
+
+  it('渲染时不泄漏密钥明文', async () => {
+    render(<SettingsPage />);
+    fireEvent.change(screen.getByLabelText('本地系统密钥'), { target: { value: LOCAL_SYSTEM_KEY } });
+    fireEvent.click(screen.getByRole('button', { name: '开通' }));
+    await waitFor(() => expect(screen.getByText('已开通')).toBeTruthy());
+    expect(document.body.textContent).not.toContain(LOCAL_SYSTEM_KEY);
   });
 });
