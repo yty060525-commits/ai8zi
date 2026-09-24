@@ -15,8 +15,9 @@
  * 约束：正文一律中文、零拉丁字母；断不到的字段就跳过对应句，绝不为凑篇幅编造；
  * explanation 复用现有【主题】+编号点的渲染/复制管线(splitSections/PointsView)，零改渲染层。
  * ========================================================================== */
-import { STEMS, BRANCHES, ELEMENTS, stemElementIndex } from '../features/chart/elements';
-import type { BaziRecord, NonAiChart } from '../types/domain';
+import { STEMS, BRANCHES, ELEMENTS, stemElementIndex, HIDDEN_STEMS } from '../features/chart/elements';
+import { ELEMENT_GUIDES, primaryElement, type ElementKey } from './elementKnowledge';
+import type { BaziAIAnalysis, BaziAnalysisTask, BaziRecord, FortunePeriod, NonAiChart } from '../types/domain';
 
 export const LOCAL_ANALYSIS_ENGINE_VERSION = 'local-rules-v2';
 
@@ -137,6 +138,18 @@ function summarizeTiaohou(raw: string): string {
   const body = cut.join('，').replace(/[（(][^）)]*[）)]/g, '').replace(/：.*$/, '').trim();
   return body || raw.split('·')[0] || '';
 }
+
+type Block = { head: string; points: string[] };
+/** 兜底去拉丁：资料库(如 ELEMENT_GUIDES)偶夹「AI」等英文，正文一律转中文并清残留字母。 */
+const deLatin = (s: string): string =>
+  s.replace(/AI/g, '人工智能').replace(/[A-Za-z]+/g, '').replace(/ {2,}/g, ' ').replace(/ +([，。、；：）])/g, '$1').trim();
+/** 统一渲染：每节「【head】\n1. …\n2. …」，与云端正文同构，喂 splitSections/PointsView。 */
+const renderBlocks = (blocks: Block[]): string =>
+  blocks.map((b) => `【${b.head}】\n` + b.points.map((p, i) => `${i + 1}. ${deLatin(p).replace(/[。；]$/, '')}。`).join('\n')).join('\n');
+const blockAdd = (blocks: Block[]) => (head: string, points: Array<string | false | null | undefined>) => {
+  const ps = points.filter((p): p is string => !!p && String(p).trim().length > 0);
+  if (ps.length) blocks.push({ head, points: ps });
+};
 
 /** 由旺衰档位与「从格/专旺」特殊格局，按扶抑口径推喜/忌五行(确定性)。 */
 function deriveUsefulAvoid(dayIdx: number, label?: string, special?: string): { useful: string[]; avoid: string[] } {
@@ -348,7 +361,7 @@ export function buildLocalAnalysis(record: BaziRecord, now: Date = new Date()): 
     add('总评与行为建议', points);
   }
 
-  const explanation = blocks.map((b) => `【${b.head}】\n` + b.points.map((p, i) => `${i + 1}. ${p.replace(/[。；]$/, '')}。`).join('\n')).join('\n');
+  const explanation = renderBlocks(blocks);
 
   return {
     pattern: pattern?.name ?? '—',
@@ -359,4 +372,220 @@ export function buildLocalAnalysis(record: BaziRecord, now: Date = new Date()): 
     engineVersion: LOCAL_ANALYSIS_ENGINE_VERSION,
     generatedAt: now.toISOString(),
   };
+}
+
+/* =============================================================================
+ * 分时段本地批断：让「第四路」不止出本命，流年/流月/大运/后天调整/全盘总结均可离线复算，
+ * 小节结构与 REQUIRED_SECTIONS(orchestrator) 及云端各篇正文对齐，从而可作为 orchestrateBaziAnalysis
+ * 的可插拔 runner 直接顶替网络通道(不联网、不花额度)。
+ * ========================================================================== */
+
+interface Core {
+  n: NonAiChart; gender: 'male' | 'female'; dayStem: string; dayIdx: number; dayElement: string; label: string;
+  useful: string[]; avoid: string[]; pattern?: NonAiChart['patternFacts']; score?: NonAiChart['strengthScore'];
+}
+function deriveCore(record: BaziRecord): Core | null {
+  const n = record.nonAiResult;
+  if (!n?.pillars) return null;
+  const dayStem = n.pillars.day?.[0] ?? '';
+  const dayIdx = STEMS.includes(dayStem) ? stemElementIndex(dayStem) : -1;
+  const dayElement = dayIdx >= 0 ? ELEMENTS[dayIdx] : '';
+  const score = n.strengthScore;
+  const label = score?.label ?? '中和';
+  const { useful, avoid } = dayIdx >= 0 ? deriveUsefulAvoid(dayIdx, score?.label, n.patternFacts?.special) : { useful: [], avoid: [] };
+  return { n, gender: record.gender === 'female' ? 'female' : 'male', dayStem, dayIdx, dayElement, label, useful, avoid, pattern: n.patternFacts, score };
+}
+
+const branchMainElement = (b: string): string => {
+  const s = (HIDDEN_STEMS[b] ?? [])[0] ?? '';
+  return STEMS.includes(s) ? ELEMENTS[stemElementIndex(s)] : '';
+};
+/** 时段干支相对本命喜忌的「加/减力」定性(确定性)：天干五行 + 地支本气五行，落在喜用侧记加力、忌神侧记减力。 */
+function periodVerdict(gz: string, core: Core): { stem: string; branch: string; helpEl: string[]; harmEl: string[]; verdict: '加力' | '减力' | '并见' } {
+  const stem = gz[0] ?? '';
+  const branch = gz[1] ?? '';
+  const els: string[] = [];
+  if (STEMS.includes(stem)) els.push(ELEMENTS[stemElementIndex(stem)]);
+  const bme = branchMainElement(branch);
+  if (bme) els.push(bme);
+  const helpEl = [...new Set(els.filter((e) => core.useful.includes(e)))];
+  const harmEl = [...new Set(els.filter((e) => core.avoid.includes(e)))];
+  const verdict = helpEl.length > harmEl.length ? '加力' : harmEl.length > helpEl.length ? '减力' : '并见';
+  return { stem, branch, helpEl, harmEl, verdict };
+}
+
+/** 时段与本命之间的刑冲合害，逐条列出(优先取结构化 relationshipDetails，退取 relationships 串)。 */
+function periodRelationPoints(period: FortunePeriod | NonAiChart['greatFortunes'][number]): string[] {
+  const pts: string[] = [];
+  const seen = new Set<string>();
+  const details = ((period as FortunePeriod).relationshipDetails ?? []) as NonAiChart['relationshipDetails'];
+  for (const rd of details) {
+    if (rd.sourceLayer === 'natal' && rd.targetLayer === 'natal') continue;   // 只留「时段↔本命」之交
+    const tc = RELATION_TYPE_CN[rd.type]; if (!tc) continue;
+    const pair = [rd.sourcePillar, rd.targetPillar].sort().join('|'); const key = tc + pair; if (seen.has(key)) continue; seen.add(key);
+    const st = rd.status === 'half-combination' ? '半合' : rd.status === 'partial-punishment' ? '刑而不全' : rd.status === 'binding' ? '合绊' : '';
+    pts.push(`${tc}${st ? `（${st}）` : ''}：${rd.sourcePillar} 与 ${rd.targetPillar}，${RELATION_NOTE[tc] ?? ''}。`);
+    if (pts.length >= 5) return pts;
+  }
+  if (!pts.length) {
+    for (const [k, arr] of Object.entries(period.relationships ?? {})) {
+      const tc = RELATION_TYPE_CN[k]; if (!tc) continue;
+      for (const s of (arr ?? [])) { pts.push(`${tc}：${s.replace('与', ' 与 ')}，${RELATION_NOTE[tc] ?? ''}。`); if (pts.length >= 5) return pts; }
+    }
+  }
+  return pts;
+}
+
+const VERDICT_WORD: Record<string, string> = { 加力: '加力（顺）', 减力: '减力（逆）', 并见: '喜忌并见（顺逆交参）' };
+const TITLE_TAIL: Record<string, string> = { 加力: '进气', 减力: '当戒', 并见: '顺逆参半' };
+
+function buildPeriodAnalysis(core: Core, period: FortunePeriod | NonAiChart['greatFortunes'][number] | undefined, scope: 'annual' | 'monthly' | 'decade'): BaziAIAnalysis | null {
+  if (!period?.ganZhi) return null;
+  const gz = period.ganZhi; const tenGod = period.tenGod ?? '';
+  const { verdict, harmEl } = periodVerdict(gz, core);
+  const scopeWord = scope === 'annual' ? '流年' : scope === 'monthly' ? '流月' : '大运';
+  const weak = core.label === '身弱' || core.label === '中和偏弱';
+  const dayPillar = core.n.pillars?.day ?? '';
+  const spouseClash = (period.relationships?.chong ?? []).some((s) => s.includes(dayPillar));
+  const blocks: Block[] = []; const add = blockAdd(blocks);
+
+  const energyNote = verdict === '加力'
+    ? `喜用${core.useful.join('、')}得助，${weak ? '元气得以培补' : '气象愈发流通'}，本期宜顺势而为`
+    : verdict === '减力'
+      ? `忌神${harmEl.join('、') || core.avoid.join('、')}当令，${ELEMENT_HEALTH[core.dayElement] ?? '身心'}易受牵制，本期宜守不宜攻`
+      : `喜忌之神并至，吉凶随具体事类而分，须逐事权衡`;
+  const tenGodSex = TEN_GOD_SEX[tenGod] ?? '';
+  const tenGodCareer = TEN_GOD_CAREER[tenGod] ?? '';
+
+  add('健康', [
+    `本期${scopeWord}${gz}${tenGod ? '行' + tenGod + '之令' : ''}，相对本命为${VERDICT_WORD[verdict]}——${energyNote}。`,
+    verdict === '减力' ? `${ELEMENT_HEALTH[core.dayElement] ?? '体质'}本季易显不足，作息宜规律、避免透支，情绪与睡眠尤须照看。` : `${ELEMENT_HEALTH[core.dayElement] ?? '体质'}得养，可借本期主动调理旧患、巩固根本。`,
+  ]);
+  add('事业', [
+    tenGodCareer ? `${tenGod ? tenGod + '临期，' : ''}事业取向偏「${tenGodCareer}」，${tenGodSex}` : `${tenGodSex || '本期事业以守成为主。'}`,
+    verdict === '加力' ? '气势顺遂，宜进取、可承接更重的责任或推进停滞之事。' : verdict === '减力' ? '宜低调守成、防小人口舌，忌冒进扩张或与人硬碰。' : '有可为亦有掣肘，抓稳关键环节、勿全面铺开。',
+    spouseClash || (period.relationships?.chong ?? []).length ? '本期逢冲，主迁移、变动与拆合，凡涉及转岗、搬迁、合作聚散，宜早做预案、以静制动。' : '',
+  ]);
+  add('财运', [
+    TEN_GOD_GROUP[tenGod] === '财' || TEN_GOD_GROUP[tenGod] === '食伤'
+      ? (verdict === '加力' ? '财星得食伤相生、或财临喜用，本期财源活络，求财可进取，仍忌贪大。' : '财星虽动却犯忌，看似有机会，实则耗多进少，忌投机借贷。')
+      : (verdict === '减力' ? '本期财星不显且忌神当令，以正职稳收为主，严控不必要开支。' : '财运平稳，量入为出、按计划推进即可。'),
+    weak ? '身弱任财本不易，聚财宜借团队与长期置业，不宜单打独斗博快钱。' : '身旺能任财，进可图大利，惟防比劫分夺、账目须清。',
+  ]);
+  // 爱情：按「配偶星是否被本期引动」与「配偶宫(日支)是否逢冲」定性。
+  {
+    const spouseGroup = core.gender === 'female' ? '官杀' : '财';
+    const spouseLabel = spouseGroup === '财' ? '妻星' : '夫星';
+    const movedByPeriod = TEN_GOD_GROUP[tenGod] === spouseGroup;
+    const loveLine = movedByPeriod
+      ? (verdict === '加力' ? `本期${spouseLabel}被引动且向喜用，感情机会增多、利婚恋推进，单身者宜主动把握。` : `${spouseLabel}临忌被引动，感情易生波折，沟通须柔、忌逞强硬碰。`)
+      : spouseClash ? '配偶宫逢冲，感情聚少离多或起变化，多包容体谅则无大碍。' : '感情宫位未受特别引动，以平常心维持既有关系即可。';
+    add('爱情', [loveLine]);
+  }
+  add('刑冲克害批注', periodRelationPoints(period));
+
+  return {
+    pattern: core.pattern?.name ?? '—',
+    strength: `${core.label}·本期${VERDICT_WORD[verdict]}`,
+    usefulElements: core.useful,
+    avoidElements: core.avoid,
+    explanation: renderBlocks(blocks),
+    title: `${gz}${scopeWord}·${tenGod || '行令'}${TITLE_TAIL[verdict]}`,
+  };
+}
+
+/** 后天调整与职业适配：直接取本命主喜用五行的调养/行业/健康底稿(与云端同源资料库)。 */
+function buildAdjustment(core: Core): BaziAIAnalysis | null {
+  const favorite = primaryElement(core.useful) as ElementKey | undefined;
+  if (!favorite) return null;
+  const g = ELEMENT_GUIDES[favorite];
+  const blocks: Block[] = []; const add = blockAdd(blocks);
+  add('后天调整', g.lifestyle.split('\n').filter(Boolean));
+  add('事业适配', [...g.career.split('\n').filter(Boolean), `惟${core.label === '身弱' ? '身弱宜依托团队与平台、不宜孤军创业' : '身旺可主动开拓、担当实权'}，方不負喜用${favorite}之力。`]);
+  add('健康注意', [g.health, `日常多以${favorite}行之性调摄，起居有常、动静相宜。`]);
+  return {
+    pattern: core.pattern?.name ?? '—', strength: core.label,
+    usefulElements: core.useful, avoidElements: core.avoid,
+    explanation: renderBlocks(blocks), title: `补益喜用·${favorite}`,
+  };
+}
+
+/** 全盘总结：本命结论 + 未来十年大运走向 + 逐年加减力挑出的关键节点 + 行动建议。 */
+function buildOverview(core: Core, now: Date): BaziAIAnalysis | null {
+  const fromYear = now.getUTCFullYear();
+  const annuals = (core.n.annualFortunes ?? []).filter((a) => a.year >= fromYear && a.year <= fromYear + 9);
+  const weak = core.label === '身弱' || core.label === '中和偏弱';
+  const strategy = weak ? '补印比、固根本' : '泄秀任事、把旺气导向财官';
+  const blocks: Block[] = []; const add = blockAdd(blocks);
+
+  // 未来十年所经大运(取起点落在窗口内的运，最多两步)
+  const gfs = core.n.greatFortunes ?? [];
+  const upcoming = gfs.filter((g) => g.endYear >= fromYear).slice(0, 2);
+  const decadeNote = upcoming.length
+    ? `未来十年先走${upcoming.map((g) => `${g.ganZhi}（${g.tenGod ?? '行令'}）`).join('、')}运，整体以「${strategy}」为核心策略。`
+    : '';
+
+  const rated = annuals.map((a) => ({ a, v: periodVerdict(a.ganZhi ?? '', core).verdict }));
+  const risk = rated.filter((x) => x.v === '减力');
+  const opp = rated.filter((x) => x.v === '加力');
+  const trendWord = risk.length > opp.length ? '先抑后扬、起伏偏压' : opp.length > risk.length ? '总体向喜、机会有多' : '顺逆交替、平中见波';
+
+  add('核心结论', [
+    `命局${core.pattern ? `属${core.pattern.name}、` : ''}日主${core.dayStem}${core.dayElement}判为${core.label}，喜用${core.useful.join('、')}、忌${core.avoid.join('、')}。`,
+    decadeNote || '（未取到未来大运段，可先补算排盘数据再评十年大势。）',
+    `流年走势呈「${trendWord}」之象：其中${risk.length ? risk.map((x) => x.a.year).join('、') + '年为压力窗口' : '无明显忌年'}，${opp.length ? opp.map((x) => x.a.year).join('、') + '年为回升窗口' : '暂无显著进气之年'}。`,
+  ]);
+
+  const nodePoints: string[] = [];
+  for (const { a, v } of rated) {
+    if (v === '并见') continue;
+    const clash = (a.relationships?.chong ?? []).length > 0 || (a.relationships?.xing ?? []).length > 0;
+    if (v === '减力' || (v === '加力' && clash)) {
+      const why = a.tenGod ? `${a.ganZhi}行${a.tenGod}之令` : `${a.ganZhi}临期`;
+      const tag = v === '减力' ? (clash ? '重大风险窗口' : '需谨慎之年') : '机会与压力并见之年';
+      const advice = v === '减力'
+        ? `宜低调守成、避高风险投资与跳槽远行，多亲近${core.useful.join('、')}以化${core.avoid.join('、')}之扰。`
+        : `进气虽可进取，惟逢冲刑主变动，成事同时防人际与健康之消耗，宜有预案。`;
+      nodePoints.push(`${a.year}年（${a.ganZhi}）：${why}${clash ? '，并与本命构成冲刑、根基受动' : ''}，属${tag}。建议：${advice}`);
+    } else if (v === '加力') {
+      nodePoints.push(`${a.year}年（${a.ganZhi}）：喜用进气、${a.tenGod ? a.tenGod + '得力，' : ''}宜把握机会窗口，进取求成、拓展人脉与平台。建议：借${core.useful.join('、')}之方乘势推进。`);
+    }
+    if (nodePoints.length >= 6) break;
+  }
+  add('值得关注的时间节点', nodePoints.length ? nodePoints : ['未来十年各年均无显著犯忌或进气之年，宜按部就班、以本命喜忌常调之。']);
+
+  const g = primaryElement(core.useful) ? ELEMENT_GUIDES[primaryElement(core.useful) as ElementKey] : undefined;
+  add('行动建议', [
+    g ? `五行调理：${g.lifestyle.split('\n')[0]}` : `日常多亲近喜用${core.useful.join('、')}之方位与颜色（${core.useful.map((e) => ELEMENT_COLOR[e]).join('、')}）。`,
+    `事业策略：${weak ? '身弱不胜财官，宜依托团队、长辈与平台，以印比帮身的方式稳根基，忌孤军创业。' : '身旺能任事，可主动担当开拓，惟防过刚与比劫分夺。'}`,
+    g ? `健康管理：${g.health}` : `重点养护${ELEMENT_HEALTH[core.dayElement] ?? '整体体质'}，逢忌神之年月尤须规律作息、及时体检。`,
+  ]);
+
+  return {
+    pattern: core.pattern?.name ?? '—', strength: core.label,
+    usefulElements: core.useful, avoidElements: core.avoid,
+    explanation: renderBlocks(blocks), title: `未来十年大势·${trendWord}`,
+  };
+}
+
+const findAnnual = (n: NonAiChart, year?: number) => (year === undefined ? undefined : n.annualFortunes?.find((a) => a.year === year));
+const findMonthly = (n: NonAiChart, year?: number, month?: number) => (year === undefined || month === undefined ? undefined : n.monthlyFortunes?.find((m) => m.year === year && m.month === month));
+const findDecade = (n: NonAiChart, year?: number) => (year === undefined ? undefined : n.greatFortunes?.find((g) => year >= g.startYear && year <= g.endYear));
+
+/** 主分发入口：给定任务，产出与云端各篇正文同构的本地批断；缺该时段排盘数据返回 null。 */
+export function buildLocalTaskAnalysis(record: BaziRecord, task: BaziAnalysisTask, now: Date = new Date()): BaziAIAnalysis | null {
+  const core = deriveCore(record);
+  if (!core) return null;
+  switch (task.type) {
+    case 'baseline': {
+      const a = buildLocalAnalysis(record, now);
+      return a ? { pattern: a.pattern, strength: a.strength, usefulElements: a.usefulElements, avoidElements: a.avoidElements, explanation: a.explanation } : null;
+    }
+    case 'annual': return buildPeriodAnalysis(core, task.annual ?? findAnnual(core.n, task.year), 'annual');
+    case 'monthly': return buildPeriodAnalysis(core, task.monthly ?? findMonthly(core.n, task.year, task.month), 'monthly');
+    case 'decade': return buildPeriodAnalysis(core, task.decade ?? findDecade(core.n, task.year), 'decade');
+    case 'adjustment': return buildAdjustment(core);
+    case 'overview': return buildOverview(core, now);
+    default: return null;
+  }
 }

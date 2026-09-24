@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { calculateNonAi } from '../features/chart/nonAiCalculator';
-import { buildLocalAnalysis, canBuildLocalAnalysis, LOCAL_ANALYSIS_ENGINE_VERSION } from '../data/localAnalysis';
-import type { BaziRecord } from '../types/domain';
+import { buildLocalAnalysis, buildLocalTaskAnalysis, canBuildLocalAnalysis, LOCAL_ANALYSIS_ENGINE_VERSION } from '../data/localAnalysis';
+import { REQUIRED_SECTIONS } from '../data/baziOrchestrator';
+import type { BaziAnalysisTask, BaziRecord } from '../types/domain';
 
 const asRecord = (input: Parameters<typeof calculateNonAi>[0], gender: 'male' | 'female'): BaziRecord => {
   const nonAiResult = calculateNonAi(input, gender, '2026-06-01T04:00:00.000Z');
@@ -68,5 +69,38 @@ describe('本地离线批断引擎(第四路)', () => {
     const bare = { ...chart, nonAiResult: undefined } as BaziRecord;
     expect(canBuildLocalAnalysis(bare)).toBe(false);
     expect(buildLocalAnalysis(bare)).toBeNull();
+  });
+});
+
+describe('本地分时段批断(流年/流月/大运/后天调整/全盘总结)', () => {
+  const n = asRecord({ birthYear: 1984, birthMonth: 2, yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午' }, 'male').nonAiResult!;
+  const rec = { gender: 'male', nonAiResult: n } as unknown as BaziRecord;
+  const now = new Date('2026-06-01T00:00:00Z');
+  const decade = n.greatFortunes.find((g) => g.startYear > 2026) ?? n.greatFortunes[0];
+  const cases: Array<[string, BaziAnalysisTask]> = [
+    ['annual', { taskId: 'a', type: 'annual', year: 2026, annual: n.annualFortunes.find((a) => a.year === 2026) }],
+    ['monthly', { taskId: 'm', type: 'monthly', year: 2026, month: 1, monthly: n.monthlyFortunes.find((x) => x.year === 2026 && x.month === 1) }],
+    ['decade', { taskId: 'd', type: 'decade', year: decade.startYear, decade }],
+    ['adjustment', { taskId: 'adj', type: 'adjustment' }],
+    ['overview', { taskId: 'ov', type: 'overview' }],
+  ];
+  for (const [label, task] of cases) {
+    it(`${label} 产出该篇全部必需小节、正文零拉丁字母`, () => {
+      const a = buildLocalTaskAnalysis(rec, task, now);
+      expect(a, `${label} 应有正文`).not.toBeNull();
+      const text = a!.explanation;
+      expect(text).not.toMatch(/[A-Za-z]/);
+      expect(text).not.toMatch(/模型|API|DeepSeek|Kimi|Qwen|通义|Bearer|sk-/);
+      for (const sec of REQUIRED_SECTIONS[task.type] ?? []) expect(text).toContain('【' + sec + '】');
+    });
+  }
+  it('流年/流月/大运带标题，且喜忌与本命一致', () => {
+    const a = buildLocalTaskAnalysis(rec, { taskId: 'a', type: 'annual', year: 2026, annual: n.annualFortunes.find((x) => x.year === 2026) }, now)!;
+    expect(a.title).toBeTruthy();
+    const base = buildLocalAnalysis(rec, now)!;
+    expect(a.usefulElements).toEqual(base.usefulElements);
+  });
+  it('缺该时段排盘数据时该任务返回空(不编造)', () => {
+    expect(buildLocalTaskAnalysis(rec, { taskId: 'z', type: 'annual', year: 3000 }, now)).toBeNull();
   });
 });
