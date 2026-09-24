@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { isOfflineMode, resetAiSettingsForTests } from '../data/aiSettings';
 import {
-  LOCAL_SYSTEM_KEY, isLocalSystemEnabled, isLocalSystemUnlocked, lockLocalSystem,
+  isLocalSystemEnabled, isLocalSystemUnlocked, lockLocalSystem,
   resetLocalSystemForTests, setLocalSystemEnabled, unlockLocalSystem, verifyLocalKey,
 } from '../data/localSystem';
+
+/** 用户手里的那串解锁码。源码里已不再以明文出现(改成取反表)，测试里保留明文来验证
+ *  「填对码才开通」这条行为 —— 明文只活在本文件，不进打包产物。改锁时这里也要跟着换。 */
+const LOCAL_SYSTEM_KEY = 'mingli-local-2026';
 
 afterEach(() => { resetAiSettingsForTests(); resetLocalSystemForTests(); });
 

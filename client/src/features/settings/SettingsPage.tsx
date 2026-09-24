@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { getServiceStatus, clearServiceCredential, saveServiceCredential, setSelectedService, serviceProvider, serviceOf, PROVIDER_LABEL, type ServiceId } from '../../data/aiSettings';
 import { isLocalSystemEnabled, isLocalSystemUnlocked, lockLocalSystem, setLocalSystemEnabled, unlockLocalSystem } from '../../data/localSystem';
+import { useSecretTitleTap } from './secretEntrance';
 import { compactRecords, getStorageStats, runAiSelfTest, type AiSelfTest } from '../../data/storageInfo';
 import { reloadLocalForSession } from '../../data/clientRepository';
 import { importRecords, parseBackupFile, type ImportMode } from '../../data/sqlImport';
@@ -16,6 +17,10 @@ const services: Array<{ id: ServiceId; label: string }> = [
 ];
 
 export function SettingsPage() {
+  // 本地系统的解锁块默认**不渲染**：设置页上看不到任何「本地系统」字样，只有走暗门才现身。
+  // 已在用的设备例外——否则已经开着本地引擎的人既看不到状态、也没法关掉它。
+  const [revealed, setRevealed] = useState<boolean>(() => isLocalSystemUnlocked());
+  const { onClick: onHeadingTap } = useSecretTitleTap(() => setRevealed(true), !revealed);
   const [statuses, setStatuses] = useState<Record<ServiceId, DisplayStatus>>({ serviceOne: '未配置', serviceTwo: '未配置', serviceThree: '未配置' });
   const [secrets, setSecrets] = useState<Record<ServiceId, string>>({ serviceOne: '', serviceTwo: '', serviceThree: '' });
   const [busyService, setBusyService] = useState<ServiceId | null>(null);
@@ -214,7 +219,7 @@ export function SettingsPage() {
   }
 
   return <main className="settings-page">
-    <header className="page-heading"><p className="eyebrow">LOCAL SETTINGS</p><h1>设置</h1><p className="page-description">管理内部服务的访问配置。</p></header>
+    <header className="page-heading"><p className="eyebrow">LOCAL SETTINGS</p><h1 onClick={onHeadingTap}>设置</h1><p className="page-description">管理内部服务的访问配置。</p></header>
     <section aria-label="AI 通道" aria-labelledby="channels-title"><h2 id="channels-title">AI 通道（三条可同时配置）</h2>
       <p className="page-description">三条通道各自独立保存，互不影响。当前生效的那条会标注「使用中」并优先调用，失败时自动依次回退到已配置的其它通道。</p>
       // 「使用中」曾被理解成「这条已经配好了、正在跑」：一条凭据都没填时，页面同时摆出
@@ -240,7 +245,7 @@ export function SettingsPage() {
             <button className="primary-button" type="button" disabled={busy} onClick={() => void saveOne(service.id)}>{busy ? '处理中…' : '保存'}</button>
             <button className="text-button" type="button" disabled={busy} onClick={() => void clearOne(service.id)}>清除</button>
           </div>
-          {isQwen && <div className="local-unlock" aria-label="本地系统">
+          {isQwen && revealed && <div className="local-unlock" aria-label="本地系统">
             <div className="local-unlock-head">
               <strong>本地系统（本机规则引擎）</strong>
               <span className={localUnlocked ? 'channel-status ok' : 'channel-status'}>{localUnlocked ? '已开通' : '未开通'}</span>
