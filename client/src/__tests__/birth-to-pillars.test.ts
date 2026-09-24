@@ -3,8 +3,8 @@ import { applyTrueSolar, calculateNonAi, computePillarsFromDate, equationOfTimeM
 
 /* 首页「按生日自动排四柱」的正向换算：公历日期时刻 → 年月日时四柱。
    口径要点：年/月/日三柱取该日正午(与 calculateNonAi 定位日期一致，避子夜换日歧义)；
-   时柱按当日日干五鼠遁(晚子时不换日)，不用历法库 getTime()——它在 23 点后按早子时换日，
-   会与 calculateNonAi 的时柱校验冲突，令自动排出的命盘保存即报错。 */
+   时柱按当日日干五鼠遁，不用历法库 getTime()。computePillarsFromDate 纯函数默认「晚子时不换日」
+   （23 点归当日），排盘页的「早子时换日」开关打开时传 ziShiftDay:true → 23 点后日柱进一。 */
 describe('computePillarsFromDate 生日→四柱(与命盘引擎同口径)', () => {
   it('已知向量：普通日/立春前/立春后/跨年/当前年', () => {
     expect(computePillarsFromDate({ year: 1990, month: 5, day: 15, hour: 10, minute: 30 }))
@@ -19,7 +19,7 @@ describe('computePillarsFromDate 生日→四柱(与命盘引擎同口径)', () 
       .toEqual({ yearPillar: '癸卯', monthPillar: '甲子', dayPillar: '甲子', hourPillar: '甲子' });
   });
 
-  it('子夜 23 点后按时柱归当日：得「丙子」而非库 getTime 的「戊子」(晚子时不换日)', () => {
+  it('纯函数默认(开关关)：23 点后仍归当日子时，得「庚辰/丙子」不换日', () => {
     const p = computePillarsFromDate({ year: 1990, month: 5, day: 15, hour: 23, minute: 30 });
     expect(p.dayPillar).toBe('庚辰');
     expect(p.hourPillar).toBe('丙子');
@@ -118,5 +118,43 @@ describe('applyTrueSolar / equationOfTimeMinutes 真太阳时修正', () => {
         { birthYear: dt.year, birthMonth: dt.month, ...pillars }, 'female', new Date().toISOString(),
       ), `经度 ${lng} → ${JSON.stringify(dt)}`).not.toThrow();
     }
+  });
+});
+
+/* 早子时换日(排盘页开关「开」= ziShiftDay:true)。以下干支均取自探针实测，非手推。 */
+describe('computePillarsFromDate 早子时换日(ziShiftDay:true)', () => {
+  it('23 点后日柱进一、时柱用次日日干起遁，年/月柱不动', () => {
+    // 1990-05-15 23:30：不换日日柱庚辰/时丙子；换日→次日 05-16 干支辛巳、时干随之为戊子。
+    expect(computePillarsFromDate({ year: 1990, month: 5, day: 15, hour: 23, minute: 30 }, { ziShiftDay: true }))
+      .toEqual({ yearPillar: '庚午', monthPillar: '辛巳', dayPillar: '辛巳', hourPillar: '戊子' });
+    // 1984-02-02 23:00：日柱丙寅→次日丁卯、时柱戊子→庚子。
+    expect(computePillarsFromDate({ year: 1984, month: 2, day: 2, hour: 23 }, { ziShiftDay: true }))
+      .toEqual({ yearPillar: '癸亥', monthPillar: '乙丑', dayPillar: '丁卯', hourPillar: '庚子' });
+  });
+
+  it('边界：未到 23 点、以及零点(0 点归当日子时)都不进一', () => {
+    expect(computePillarsFromDate({ year: 1990, month: 5, day: 15, hour: 22, minute: 59 }, { ziShiftDay: true }).dayPillar).toBe('庚辰');
+    expect(computePillarsFromDate({ year: 1990, month: 5, day: 15, hour: 0, minute: 30 }, { ziShiftDay: true }))
+      .toEqual({ yearPillar: '庚午', monthPillar: '辛巳', dayPillar: '庚辰', hourPillar: '丙子' });
+  });
+
+  it('换日盘经 calculateNonAi(带真实 birthDay)：生日不变、日主为次日干、过引擎校验', () => {
+    const pillars = computePillarsFromDate({ year: 1990, month: 5, day: 15, hour: 23, minute: 30 }, { ziShiftDay: true });
+    const chart = calculateNonAi({ birthYear: 1990, birthMonth: 5, birthDay: 15, ...pillars }, 'male', new Date().toISOString());
+    expect(chart.pillars.day).toBe('辛巳');       // 日柱进一
+    expect(chart.dayMaster).toBe('辛');            // 日主随之为次日干
+    expect(chart.solarDate).toBe('1990-05-15');    // 真实公历生日不变(没被带偏到 05-16)
+    expect(chart.lunarDate).toContain('四月廿一');   // 农历也锚在当日
+    expect((chart as { birthDay?: number }).birthDay).toBe(15);
+    // 幂等：重算(换设备/重新计算非 AI)结果一致，仍锚当日。
+    const again = calculateNonAi({ birthYear: 1990, birthMonth: 5, birthDay: chart.birthDay, ...pillars }, 'male', new Date().toISOString());
+    expect(again.solarDate).toBe('1990-05-15');
+    expect(again.dayMaster).toBe('辛');
+  });
+
+  it('反证：只换日柱、不带 birthDay 回灌会被三柱反查定位到次日(故必须持久化真实生日)', () => {
+    const pillars = computePillarsFromDate({ year: 1990, month: 5, day: 15, hour: 23, minute: 30 }, { ziShiftDay: true });
+    const chart = calculateNonAi({ birthYear: 1990, birthMonth: 5, ...pillars }, 'male', new Date().toISOString());
+    expect(chart.solarDate).toBe('1990-05-16');   // 无真实日锚点 → 日柱辛巳反查落回 05-16
   });
 });

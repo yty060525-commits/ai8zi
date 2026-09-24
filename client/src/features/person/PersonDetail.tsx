@@ -680,7 +680,8 @@ export function PersonDetail({ personId, onBack, refreshKey = 0 }: PersonDetailP
     setNotice(undefined);
     try {
       const { calculateNonAi } = await import('../chart/nonAiCalculator');
-      const nonAiResult = calculateNonAi({ birthYear: loadedRecord.birthYear, birthMonth: loadedRecord.birthMonth, yearPillar: loadedRecord.yearPillar, monthPillar: loadedRecord.monthPillar, dayPillar: loadedRecord.dayPillar, hourPillar: loadedRecord.hourPillar }, loadedRecord.gender, loadedRecord.createdAt);
+      // 带上真实出生日(nonAiResult.birthDay)：换日盘的日柱是次日干支，若不锚回真实日，重算会把公历/农历/起运带偏到次日。
+      const nonAiResult = calculateNonAi({ birthYear: loadedRecord.birthYear, birthMonth: loadedRecord.birthMonth, birthDay: loadedRecord.nonAiResult?.birthDay, yearPillar: loadedRecord.yearPillar, monthPillar: loadedRecord.monthPillar, dayPillar: loadedRecord.dayPillar, hourPillar: loadedRecord.hourPillar }, loadedRecord.gender, loadedRecord.createdAt);
       const updated = await saveBaziRecord({ ...loadedRecord, nonAiResult });
       // 存回去的是瘦身版(pruneRecord)，返回那份的数组是这次现算的、按点击时刻排的。
       // 直接用它会绕过读取侧的过期任务清洗，「AI 分析」的预期清单就会和界面上的
