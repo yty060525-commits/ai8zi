@@ -46,6 +46,20 @@ describe('SettingsPage', () => {
     expect(screen.queryByText(/模型|API|额度|费用/)).toBeNull();
   });
 
+  it('注释不许漏到页面上：源码里的 // 写在 JSX 子节点位置会被当文字渲染', async () => {
+    // 曾有一段解释「使用中」措辞的 `//` 注释直接放在 JSX 子节点里 —— 那不是注释，
+    // 是会被渲染成页面正文的两行中文，用户在设置页顶部能看见。
+    render(<SettingsPage />);
+    await waitFor(() => expect(screen.getByText(/当前使用：/)).toBeTruthy());
+    // 用 textContent 不用 innerText：jsdom 不实现 innerText，读到 undefined 会让
+    // not.toContain 变成「undefined 不含某串」——恒真的空断言。
+    const text = document.body.textContent ?? '';
+    expect(text).not.toContain('曾被理解成');
+    expect(text).not.toContain('这里说清楚它是被选中的那条');
+    // 更一般的一道网：整页不该出现以 // 开头的裸注释文本
+    expect(text).not.toMatch(/^\s*\/\//m);
+  });
+
   it('saves each channel independently without switching modes', async () => {
     render(<SettingsPage />);
     const ds = screen.getByLabelText('DeepSeek 访问凭据') as HTMLInputElement;
