@@ -196,6 +196,9 @@ export function SettingsPage() {
       // 「使用中」曾被理解成「这条已经配好了、正在跑」：一条凭据都没填时，页面同时摆出
       // 「使用中」和「已配置 0 / 3 条」两句互相矛盾的话。这里说清楚它是被选中的那条、但还没填。
       <p className="current-channel" role="status">当前使用：<strong>{PROVIDER_LABEL[currentProvider]}</strong>{statuses[currentProvider === 'deepseek' ? 'serviceOne' : currentProvider === 'kimi' ? 'serviceTwo' : 'serviceThree'] === '已配置' ? '' : '（该通道尚未配置，会直接使用其它已配置通道）'}　·　已配置 {configuredCount} / {services.length} 条{configuredCount === 0 ? '：三条通道都还没填凭据，先在下面任一条里粘贴凭据并保存' : ''}</p>
+      {/* 本地离线（第四路）已下架：设置页入口与详情页本地批断按钮一并收起，开关默认关
+          （aiSettings.isOfflineMode 恒为 false）。已生成的本地结果仍在盘上，但这页不再提供
+          切换入口 —— 日后重新上架时，把下面那一段 channel-block 恢复回来即可。 */}
       {services.map((service) => {
         const st = statuses[service.id];
         const busy = busyService === service.id;

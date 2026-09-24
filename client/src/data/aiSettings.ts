@@ -68,14 +68,23 @@ export const PROVIDER_LABEL: Record<AiProvider, string> = { deepseek: 'DeepSeek'
    也不经 set_ai_provider 上行：它是**本机每台设备各管各的**生成方式开关，不该同步、
    更不该让云端三通道 / 服务器 / Rust 的去重·前缀 parity·回退逻辑认识一个永不出网的 provider。
    浏览器与桌面 WebView 都有 localStorage，够它持久化。开启后主「AI 分析」改由本地 runner
-   产出，结果照常写进 record.aiTasks（会同步、聊天能引用），并按 source==='local' 打绿点标注。 */
+   产出，结果照常写进 record.aiTasks（会同步、聊天能引用），并按 source==='local' 打绿点标注。
+
+   **此功能已下架**，设置页入口与详情页本地批断按钮都收起了，所以这里必须**默认关**：
+   入口没了而开关还开着，等于用户永远关不掉一个仍在生效的生成方式 —— 点「AI 分析」
+   会被本地引擎静默接管，连"切回云端"的开关都不在界面上。旧值一律按关处理，
+   已跑过的本地结果仍留在盘上(存量不动)，切回云端后点「AI 分析」即用云端结果覆盖。
+   日后重新上架时，连同设置页那一块入口一起恢复即可。 */
 const OFFLINE_KEY = 'mingli.offline';
 export function isOfflineMode(): boolean {
-  try { return localStorage.getItem(OFFLINE_KEY) === '1'; } catch { return false; }
+  // 功能下架期间恒为 false：不再读 localStorage —— 入口没了却让残留的 '1' 继续生效，
+  // 用户会被本地引擎静默接管且在界面上找不到任何开关把它关掉。
+  try { localStorage.removeItem(OFFLINE_KEY); } catch { /* 隐私模式忽略 */ }
+  return false;
 }
 export function setOfflineMode(on: boolean): boolean {
-  try { if (on) localStorage.setItem(OFFLINE_KEY, '1'); else localStorage.removeItem(OFFLINE_KEY); } catch { /* 隐私模式忽略：本会话内仍可切换 */ }
-  return on;
+  try { localStorage.removeItem(OFFLINE_KEY); } catch { /* 隐私模式忽略 */ }
+  return false;
 }
 
 /** 测试专用：清空本机(浏览器)凭据与通道选择，避免用例之间互相污染。 */

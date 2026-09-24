@@ -26,27 +26,33 @@ describe('AI settings adapter', () => {
   });
 });
 
-describe('本地离线（第四路）开关', () => {
+describe('本地离线（第四路）开关：已下架，恒为关', () => {
   it('默认关闭：云端通道仍是默认生成方式', () => {
     expect(isOfflineMode()).toBe(false);
   });
-  it('开启后持久化在 localStorage，且绝不上行服务器/桌面端（不调用 invoke）', () => {
+  it('即使 localStorage 里留着旧值 1 也一律按关处理（入口已收起，不能让用户关不掉的开关继续生效）', () => {
+    localStorage.setItem('mingli.offline', '1');
+    expect(isOfflineMode()).toBe(false);
+  });
+  it('setOfflineMode 是空操作：不写不读，且绝不上行服务器/桌面端（不调用 invoke）', () => {
     vi.mocked(invoke).mockClear();
-    expect(setOfflineMode(true)).toBe(true);
-    expect(isOfflineMode()).toBe(true);
-    expect(localStorage.getItem('mingli.offline')).toBe('1');
+    expect(setOfflineMode(true)).toBe(false);
+    expect(isOfflineMode()).toBe(false);
+    expect(localStorage.getItem('mingli.offline')).toBe(null);
     expect(invoke).not.toHaveBeenCalled();
   });
-  it('与云端通道选择彼此独立：切离线不改 mingli.provider，切回也不残留', () => {
+  it('开启调用会清掉旧值，不残留', () => {
+    localStorage.setItem('mingli.offline', '1');
+    setOfflineMode(true);
+    expect(localStorage.getItem('mingli.offline')).toBe(null);
+    expect(isOfflineMode()).toBe(false);
+  });
+  it('与云端通道选择彼此独立：动离线开关不改 mingli.provider', () => {
     setOfflineMode(true);
     localStorage.setItem('mingli.provider', 'deepseek');
     setOfflineMode(false);
     expect(isOfflineMode()).toBe(false);
     // 关闭离线不应顺带清掉云端通道选择
     expect(localStorage.getItem('mingli.provider')).toBe('deepseek');
-  });
-  it('免密即可用：不依赖任何凭据配置状态', () => {
-    setOfflineMode(true);
-    expect(isOfflineMode()).toBe(true); // 没填任何 key 也能开
   });
 });
