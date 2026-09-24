@@ -5,6 +5,7 @@ import { beginAiSession, cancelAiSession } from '../../data/deepseekAdapter';
 import { clearChartCache } from '../../data/storageInfo';
 import { sanitizeAnalysisText } from '../chart/elements';
 import { isServerMode } from '../../data/serverClient';
+import { buildLocalAnalysis, canBuildLocalAnalysis, type LocalAnalysis } from '../../data/localAnalysis';
 import type { BaziRecord, BaziTaskResult, NonAiChart } from '../../types/domain';
 import { interpersonalZodiac, zodiacOfBranch } from '../../utils/interpersonal';
 
@@ -601,6 +602,32 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
     </div>}
   </section>;
 }
+/* 本地批断（离线·第四路）：不联网、不调大模型、不耗额度，由 localAnalysis 规则引擎
+   就上方排盘事实直接批断。结果只存组件 state、绝不写进 record——record 会同步上行服务器、
+   下发别的设备，把本地批断塞进去会污染云端 AI 结果与 aiStatus。每次点击现算，确定性可复现。 */
+function LocalAnalysisSection({ record }: { record: BaziRecord }) {
+  const [result, setResult] = useState<LocalAnalysis | null>(null);
+  const [note, setNote] = useState<string>();
+  const disabled = !canBuildLocalAnalysis(record);
+  const run = () => {
+    try {
+      const r = buildLocalAnalysis(record);
+      setResult(r);
+      setNote(r ? undefined : '缺少基础排盘数据：请先点上方「重新计算非 AI」再来本地批断。');
+    } catch (error) {
+      setResult(null);
+      setNote('本地批断失败：' + (error instanceof Error ? error.message : String(error)));
+    }
+  };
+  const copyAll = async () => { if (result) { await copy(result.explanation || ''); setNote('已复制本地批断'); } };
+  return <section className="detail-section" aria-label="本地批断">
+    <div className="section-heading"><div><p className="eyebrow">03 / LOCAL READING</p><h2>本地批断（离线）</h2></div>
+      <div className="button-group"><button className="primary-button" type="button" onClick={run} disabled={disabled}>{disabled ? '先算排盘数据' : '生成本地批断'}</button>{result && <button className="text-button" type="button" onClick={() => void copyAll()}>复制本地批断</button>}</div></div>
+    <p className="local-note">不联网、不调用云端服务、不消耗额度：由本地规则引擎就上方排盘事实直接批断，供参考与兜底；多因素权衡的综合细断请以「AI 分析」为准。</p>
+    {note && <p role="status">{note}</p>}
+    {result && <div className="long-text"><p className="scope-lead">格局：{sanitizeAnalysisText(result.pattern) || '—'} · 强弱：{result.strength}　喜：{result.usefulElements.join('、') || '—'}　忌：{result.avoidElements.join('、') || '—'}</p><PointsView text={result.explanation} /></div>}
+  </section>;
+}
 export function PersonDetail({ personId, onBack, refreshKey = 0 }: PersonDetailProps) {
   const [record, setRecord] = useState<BaziRecord>();
   const [notice, setNotice] = useState<string>();
@@ -639,6 +666,6 @@ export function PersonDetail({ personId, onBack, refreshKey = 0 }: PersonDetailP
       ? <div className="button-group" role="group" aria-label="确认删除"><span className="danger-hint">确定删除「{record.name}」？四柱、排盘数据与全部 AI 结果一并清除，无法撤销。</span><button className="danger-button" type="button" onClick={() => void remove()}>确认删除</button><button className="text-button" type="button" onClick={() => setConfirmDelete(false)}>取消</button></div>
       : <button className="text-button" type="button" onClick={onBack}>返回记录</button>}<button className="danger-button" type="button" onClick={() => setConfirmDelete(true)} hidden={confirmDelete}>删除数据</button></div></header>
     {notice && <p role="status">{notice}</p>}
-    <BasicInfo record={record} /><NonAiAnalysis result={record.nonAiResult} record={record} /><div className="section-actions"><button className="text-button" type="button" onClick={() => void recalculateNonAi()}>重新计算非 AI</button></div><AIAnalysis record={record} onUpdated={setRecord} />
+    <BasicInfo record={record} /><NonAiAnalysis result={record.nonAiResult} record={record} /><div className="section-actions"><button className="text-button" type="button" onClick={() => void recalculateNonAi()}>重新计算非 AI</button></div><LocalAnalysisSection record={record} /><AIAnalysis record={record} onUpdated={setRecord} />
   </main>;
 }
