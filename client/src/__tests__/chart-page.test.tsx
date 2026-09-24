@@ -13,7 +13,10 @@ describe('ChartPage simplified form', () => {
     expect(screen.getByLabelText('出生月')).toBeTruthy();
     expect(screen.getByRole('group', { name: '性别' })).toBeTruthy();
     expect(screen.queryByText('分类')).toBeNull();
-    expect(screen.queryByRole('button', { name: /公历|农历/ })).toBeNull();
+    // 历法选择现在是刻意提供的(阳历/农历)，默认阳历；不再有「公历/农历」二选一的旧式录入按钮组以外形态
+    expect(screen.getByRole('group', { name: '历法' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '阳历(公历)' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '农历(夏历)' })).toBeTruthy();
     expect(screen.queryByText(/额度|费用|基础排盘结果|排盘状态/)).toBeNull();
   });
 
@@ -79,5 +82,88 @@ describe('ChartPage simplified form', () => {
     expect(screen.queryByLabelText('出生日')).toBeNull();
     expect(screen.queryByLabelText('时(0–23)')).toBeNull();
     expect(screen.getByLabelText('出生月')).toBeTruthy();
+  });
+
+  it('农历模式：切到农历后标签随之改，存的是换算出的公历年月并通过引擎校验', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2025-03-08T12:34:56.000Z'));
+    const onRecordCreated = vi.fn();
+    render(<ChartPage onRecordCreated={onRecordCreated} />);
+    fireEvent.click(screen.getByRole('button', { name: '农历(夏历)' }));
+    // 农历态下月/日标签改成农历口径，并出现「闰月」勾选
+    expect(screen.getByLabelText('月(农历)')).toBeTruthy();
+    expect(screen.getByLabelText('日(初几)')).toBeTruthy();
+    expect(screen.getByLabelText('闰月')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('姓名'), { target: { value: '农历命主' } });
+    fireEvent.change(screen.getByLabelText('出生年'), { target: { value: '1990' } });
+    fireEvent.change(screen.getByLabelText('月(农历)'), { target: { value: '5' } });
+    fireEvent.change(screen.getByLabelText('日(初几)'), { target: { value: '15' } });
+    fireEvent.change(screen.getByLabelText('时(0–23)'), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText('分(0–59)'), { target: { value: '30' } });
+    fireEvent.click(screen.getByRole('button', { name: '排盘并保存' }));
+    await act(async () => { for (let i = 0; i < 60; i += 1) await Promise.resolve(); });
+    // 农历 1990 五月十五 = 公历 1990-06-07：库中存公历年月，若误存农历 5 月则引擎在该月找不到此四柱会报错
+    expect(onRecordCreated).toHaveBeenCalledWith(expect.objectContaining({ birthYear: 1990, birthMonth: 6, nonAiResult: expect.objectContaining({ dayMaster: expect.any(String) }) }));
+    expect(screen.queryByRole('alert')).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it('农历闰月：勾选闰月后按闰月换算，非法农历日期给出中文提示且不落库', async () => {
+    vi.useFakeTimers();
+    const onRecordCreated = vi.fn();
+    render(<ChartPage onRecordCreated={onRecordCreated} />);
+    fireEvent.click(screen.getByRole('button', { name: '农历(夏历)' }));
+    fireEvent.change(screen.getByLabelText('姓名'), { target: { value: '闰命主' } });
+    fireEvent.change(screen.getByLabelText('出生年'), { target: { value: '2023' } });
+    fireEvent.change(screen.getByLabelText('月(农历)'), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText('日(初几)'), { target: { value: '1' } });
+    fireEvent.click(screen.getByLabelText('闰月')); // 2023 有闰二月 → 公历 2023-03-22
+    fireEvent.click(screen.getByRole('button', { name: '排盘并保存' }));
+    await act(async () => { for (let i = 0; i < 60; i += 1) await Promise.resolve(); });
+    expect(onRecordCreated).toHaveBeenCalledWith(expect.objectContaining({ birthYear: 2023, birthMonth: 3 }));
+    vi.useRealTimers();
+
+    // 换一条不存在的闰月(2023 无闰五)：应中文提示、不落库
+    cleanup();
+    const onSecond = vi.fn();
+    render(<ChartPage onRecordCreated={onSecond} />);
+    fireEvent.click(screen.getByRole('button', { name: '农历(夏历)' }));
+    fireEvent.change(screen.getByLabelText('姓名'), { target: { value: '错命主' } });
+    fireEvent.change(screen.getByLabelText('出生年'), { target: { value: '2023' } });
+    fireEvent.change(screen.getByLabelText('月(农历)'), { target: { value: '5' } });
+    fireEvent.change(screen.getByLabelText('日(初几)'), { target: { value: '1' } });
+    fireEvent.click(screen.getByLabelText('闰月'));
+    fireEvent.click(screen.getByRole('button', { name: '排盘并保存' }));
+    await act(async () => { for (let i = 0; i < 30; i += 1) await Promise.resolve(); });
+    expect(screen.getByRole('alert').textContent).toContain('该农历日期不存在');
+    expect(onSecond).not.toHaveBeenCalled();
+  });
+
+  it('真太阳时省→市联动：选市后按该市经度修正，改变时柱；未选市给出提示', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2025-03-08T12:34:56.000Z'));
+    const onRecordCreated = vi.fn();
+    render(<ChartPage onRecordCreated={onRecordCreated} />);
+    fireEvent.change(screen.getByLabelText('姓名'), { target: { value: '乌市命主' } });
+    fireEvent.change(screen.getByLabelText('出生年'), { target: { value: '2025' } });
+    fireEvent.change(screen.getByLabelText('出生月'), { target: { value: '6' } });
+    fireEvent.change(screen.getByLabelText('出生日'), { target: { value: '21' } });
+    fireEvent.change(screen.getByLabelText('时(0–23)'), { target: { value: '10' } });
+    // 选了省但未选市 → 提示，不落库
+    fireEvent.change(screen.getByLabelText('真太阳时·省'), { target: { value: '新疆' } });
+    expect(screen.getByLabelText('市')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '排盘并保存' }));
+    await act(async () => { for (let i = 0; i < 30; i += 1) await Promise.resolve(); });
+    expect(screen.getByRole('alert').textContent).toContain('请选择出生所在城市');
+    expect(onRecordCreated).not.toHaveBeenCalled();
+    // 选乌鲁木齐(87.6°E)：提示显经度，10:00 修正后落辰时(北京则巳时)
+    fireEvent.change(screen.getByLabelText('市'), { target: { value: '乌鲁木齐' } });
+    expect(screen.getByText(/87\.6°E/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '排盘并保存' }));
+    await act(async () => { for (let i = 0; i < 60; i += 1) await Promise.resolve(); });
+    expect(onRecordCreated).toHaveBeenCalledWith(expect.objectContaining({
+      hourPillar: expect.stringMatching(/辰$/),
+    }));
+    vi.useRealTimers();
   });
 });

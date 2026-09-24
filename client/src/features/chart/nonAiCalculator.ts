@@ -1,4 +1,4 @@
-import { Solar } from 'lunar-javascript';
+import { Solar, Lunar } from 'lunar-javascript';
 import { chinaYear } from '../../utils/date';
 export { chinaYear }; // 兼容既有调用点
 
@@ -607,6 +607,14 @@ export function applyTrueSolar(
   const offsetMin = (longitude - 120) * 4 + equationOfTimeMinutes(naive.year, naive.month, naive.day);
   const shifted = new Date(Date.UTC(naive.year, naive.month - 1, naive.day, naive.hour, naive.minute) + Math.round(offsetMin * 60000));
   return { year: shifted.getUTCFullYear(), month: shifted.getUTCMonth() + 1, day: shifted.getUTCDate(), hour: shifted.getUTCHours(), minute: shifted.getUTCMinutes() };
+}
+
+/** 农历(夏历)→公历：month 取 1–12，闰月传负值(如 -2=闰二月)。
+ *  非法农历(月/日超出、该年无此闰月、年份越界)由 lunar-javascript 抛错，交由调用方兜中文提示；
+ *  这里不吞异常——静默回退会把错误日期排成看似正常的命盘。转换后请再走 applyTrueSolar / computePillarsFromDate。 */
+export function lunarToSolar(year: number, month: number, day: number): { year: number; month: number; day: number } {
+  const solar = Lunar.fromYmd(year, month, day).getSolar();
+  return { year: solar.getYear(), month: solar.getMonth(), day: solar.getDay() };
 }
 
 export function calculateNonAi(

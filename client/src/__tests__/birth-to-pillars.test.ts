@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyTrueSolar, calculateNonAi, computePillarsFromDate, equationOfTimeMinutes } from '../features/chart/nonAiCalculator';
+import { applyTrueSolar, calculateNonAi, computePillarsFromDate, equationOfTimeMinutes, lunarToSolar } from '../features/chart/nonAiCalculator';
 
 /* 首页「按生日自动排四柱」的正向换算：公历日期时刻 → 年月日时四柱。
    口径要点：年/月/日三柱取该日正午(与 calculateNonAi 定位日期一致，避子夜换日歧义)；
@@ -51,7 +51,35 @@ describe('computePillarsFromDate 生日→四柱(与命盘引擎同口径)', () 
   });
 });
 
-/* 真太阳时(选 A：经度差×4分 + 均时差)。数值取自公开天文近似式实测，非臆测。 */
+/* 农历(夏历)→公历：闰月传负数月，非法农历日由 lunar-javascript 抛错。
+   向量取自库实测(见 scripts 探针)，非臆测。 */
+describe('lunarToSolar 农历→公历', () => {
+  it('普通农历日期换算为对应公历日', () => {
+    expect(lunarToSolar(1990, 5, 15)).toEqual({ year: 1990, month: 6, day: 7 });
+    expect(lunarToSolar(2024, 1, 1)).toEqual({ year: 2024, month: 2, day: 10 }); // 正月初一
+  });
+
+  it('闰月用负数月：2023 闰二月初一 → 公历 2023-03-22', () => {
+    expect(lunarToSolar(2023, -2, 1)).toEqual({ year: 2023, month: 3, day: 22 });
+  });
+
+  it('非法农历(该年无此闰月 / 月只 29 天却填 30)一律抛错，交上层兜中文提示', () => {
+    expect(() => lunarToSolar(2023, -5, 1)).toThrow(); // 2023 无闰五月
+    expect(() => lunarToSolar(2024, 9, 30)).toThrow(); // 该农历九月只有 29 天
+    expect(() => lunarToSolar(2024, 1, 30)).toThrow(); // 该农历正月只有 29 天
+  });
+
+  it('农历→公历后接 computePillarsFromDate：与直接按该公历日排柱一致，且过引擎校验', () => {
+    const solar = lunarToSolar(1990, 5, 15); // 1990-6-7
+    const fromLunar = computePillarsFromDate({ ...solar, hour: 10, minute: 30 });
+    const fromSolar = computePillarsFromDate({ year: 1990, month: 6, day: 7, hour: 10, minute: 30 });
+    expect(fromLunar).toEqual(fromSolar);
+    expect(() => calculateNonAi(
+      { birthYear: solar.year, birthMonth: solar.month, ...fromLunar }, 'male', new Date().toISOString(),
+    )).not.toThrow();
+  });
+});
+
 describe('applyTrueSolar / equationOfTimeMinutes 真太阳时修正', () => {
   it('均时差极值：2 月中旬约 −14.6 分、11 月初约 +16.4 分(与公开值同号同量级)', () => {
     expect(equationOfTimeMinutes(2025, 2, 12)).toBeGreaterThan(-15.5);

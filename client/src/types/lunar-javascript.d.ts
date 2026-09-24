@@ -9,6 +9,7 @@ declare module 'lunar-javascript' {
   }
   interface Lunar {
     toString(): string;
+    getSolar(): Solar;
     getEightChar(): EightChar;
     getYearShengXiao(): string;
     getNextJieQi(wholeDay?: boolean): JieQi;
@@ -43,5 +44,9 @@ declare module 'lunar-javascript' {
     fromYmd(year: number, month: number, day: number): Solar;
     fromJulianDay(julianDay: number): Solar;
     fromBaZi(year: string, month: string, day: string, hour: string, sect: number, baseYear: number): Solar[];
+  };
+  /** month 取 1–12；闰月传负值(如 -2 = 闰二月)。非法农历月/日由实现抛错。 */
+  export const Lunar: {
+    fromYmd(year: number, month: number, day: number): Lunar;
   };
 }
