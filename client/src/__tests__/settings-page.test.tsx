@@ -24,6 +24,11 @@ const happyPath = async (command: string) => command === 'get_ai_provider_status
 // 每个用例后恢复默认桩：否则某个用例改过的 invoke 实现会污染后续用例(曾导致覆盖测试误判)
 afterEach(() => { cleanup(); resetAiSettingsForTests(); resetLocalSystemForTests(); vi.mocked(invoke).mockImplementation(happyPath); vi.clearAllTimers?.(); });
 
+// Qwen 那一格现在是**一个输入框两件事**：sk- 开头当云端凭据，解锁码开通本地，都不符合报失败。
+// 分流靠内容而不是独立控件，所以这些用例一律往「Qwen3.8-Flash 访问凭据」里填。
+const qwenInput = () => screen.getByLabelText('Qwen3.8-Flash 访问凭据') as HTMLInputElement;
+const qwenSave = () => screen.getAllByRole('button', { name: '保存' })[2];
+
 describe('SettingsPage', () => {
   /** 走一遍暗门：在标题上连点 5 下，让本地系统那块现身。 */
   const openSecret = () => {
@@ -65,7 +70,8 @@ describe('SettingsPage', () => {
     const ds = screen.getByLabelText('DeepSeek 访问凭据') as HTMLInputElement;
     const qw = screen.getByLabelText('Qwen3.8-Flash 访问凭据') as HTMLInputElement;
     fireEvent.change(ds, { target: { value: 'ds-secret' } });
-    fireEvent.change(qw, { target: { value: 'qw-secret' } });
+    // Qwen 那格现在按内容分流，故用 sk- 开头的值才走凭据分支（见「填 sk- 开头」用例）
+    fireEvent.change(qw, { target: { value: 'sk-qw-secret' } });
     // 两个通道各自保存
     const saveButtons = screen.getAllByRole('button', { name: '保存' });
     fireEvent.click(saveButtons[0]);
@@ -75,7 +81,7 @@ describe('SettingsPage', () => {
     // 保存后清空输入，且页面不泄漏凭据内容
     expect(ds.value).toBe('');
     expect(document.body.textContent).not.toContain('ds-secret');
-    expect(document.body.textContent).not.toContain('qw-secret');
+    expect(document.body.textContent).not.toContain('sk-qw-secret');
   });
 
   it('shows saving feedback and keeps the credential available when saving fails', async () => {
@@ -131,22 +137,21 @@ describe('SettingsPage', () => {
     render(<SettingsPage />);
     const input = screen.getByLabelText('Qwen3.8-Flash 访问凭据') as HTMLInputElement;
     const qwenSave = () => screen.getAllByRole('button', { name: '保存' })[2];
-    fireEvent.change(input, { target: { value: 'first-key' } });
+    fireEvent.change(input, { target: { value: 'sk-first-key' } });
     fireEvent.click(qwenSave());
     await waitFor(() => expect(screen.getByText('已保存')).toBeTruthy(), { timeout: 3000 });
     // 再次输入新凭据 → 覆盖提示
     await waitFor(() => expect(input.value).toBe(''));
-    fireEvent.change(input, { target: { value: 'second-key' } });
+    fireEvent.change(input, { target: { value: 'sk-second-key' } });
     fireEvent.click(qwenSave());
     await waitFor(() => expect(screen.getByText('已用新凭据覆盖原有配置')).toBeTruthy(), { timeout: 3000 });
-    expect(document.body.textContent).not.toContain('first-key');
-    expect(document.body.textContent).not.toContain('second-key');
+    expect(document.body.textContent).not.toContain('sk-first-key');
+    expect(document.body.textContent).not.toContain('sk-second-key');
   });
 
   it('本地系统的入口默认完全不可见：没走暗门前，页面上没有「本地系统」字样', () => {
     render(<SettingsPage />);
-    // 这是「藏入口」的核心断言：不只是勾选框，连密钥输入框和整块说明都不该存在
-    expect(screen.queryByLabelText('本地系统密钥')).toBeNull();
+    // 这是「藏入口」的核心断言：整块说明与勾选框都不该存在
     expect(screen.queryByRole('checkbox', { name: /使用本地系统/ })).toBeNull();
     expect(document.body.textContent).not.toContain('本地系统');
   });
@@ -155,9 +160,8 @@ describe('SettingsPage', () => {
     render(<SettingsPage />);
     const heading = screen.getByRole('heading', { name: '设置' });
     for (let i = 0; i < 4; i += 1) fireEvent.click(heading);
-    expect(screen.queryByLabelText('本地系统密钥'), '才点 4 下不该现身').toBeNull();
+    expect(screen.queryByText('未开通'), '才点 4 下不该现身').toBeNull();
     fireEvent.click(heading);
-    expect(screen.getByLabelText('本地系统密钥')).toBeTruthy();
     expect(screen.getByText('未开通')).toBeTruthy();
     // 走完暗门也仍然锁着：没输密钥，就不该出现能直接接管 AI 分析的勾选框
     expect(screen.queryByRole('checkbox', { name: /使用本地系统/ })).toBeNull();
@@ -167,10 +171,10 @@ describe('SettingsPage', () => {
     const first = render(<SettingsPage />);
     const heading = screen.getByRole('heading', { name: '设置' });
     for (let i = 0; i < 5; i += 1) fireEvent.click(heading);
-    expect(screen.getByLabelText('本地系统密钥')).toBeTruthy();
+    expect(screen.getByText('未开通')).toBeTruthy();
     first.unmount();
     render(<SettingsPage />);
-    expect(screen.queryByLabelText('本地系统密钥')).toBeNull();
+    expect(screen.queryByText('未开通')).toBeNull();
   });
 
   it('已开通的设备直接显示解锁块：否则开着本地引擎的人既看不到状态也关不掉', async () => {
@@ -180,25 +184,27 @@ describe('SettingsPage', () => {
     expect(screen.getByRole('checkbox', { name: /使用本地系统/ })).toBeTruthy();
   });
 
-  it('密钥输错：如实报错、不开通、也不出现勾选框', async () => {
+  it('填 sk- 开头：按云端凭据保存，绝不当解锁码用', async () => {
     render(<SettingsPage />);
     openSecret();
-    const key = screen.getByLabelText('本地系统密钥') as HTMLInputElement;
-    fireEvent.change(key, { target: { value: 'not-the-key' } });
-    fireEvent.click(screen.getByRole('button', { name: '开通' }));
-    await waitFor(() => expect(screen.getByText(/密钥不正确/)).toBeTruthy());
-    expect(screen.getByText('未开通')).toBeTruthy();
-    expect(screen.queryByRole('checkbox', { name: /使用本地系统/ })).toBeNull();
+    fireEvent.change(qwenInput(), { target: { value: 'sk-qwen-secret' } });
+    fireEvent.click(qwenSave());
+    await waitFor(() => expect(screen.getByText('已保存')).toBeTruthy(), { timeout: 3000 });
+    // 走的是凭据分支：状态变已配置，但本地系统**不该**被顺手开通
     expect(isLocalSystemUnlocked()).toBe(false);
+    expect(screen.getByText('未开通')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('sk-qwen-secret');
   });
 
-  it('密钥正确才开通，开通后出现勾选框且默认不勾（不自动接管）', async () => {
+  it('填对解锁码：开通本地系统，且不写云端凭据', async () => {
     render(<SettingsPage />);
     openSecret();
-    const key = screen.getByLabelText('本地系统密钥') as HTMLInputElement;
-    fireEvent.change(key, { target: { value: LOCAL_SYSTEM_KEY } });
-    fireEvent.click(screen.getByRole('button', { name: '开通' }));
+    fireEvent.change(qwenInput(), { target: { value: LOCAL_SYSTEM_KEY } });
+    fireEvent.click(qwenSave());
     await waitFor(() => expect(screen.getByText('已开通')).toBeTruthy());
+    expect(screen.getByText(/识别为本地系统密钥/)).toBeTruthy();
+    // 关键反向断言：解锁码不是凭据，不该把 Qwen 标成已配置
+    expect((screen.getAllByText('未配置').length)).toBeGreaterThan(0);
     const box = screen.getByRole('checkbox', { name: /使用本地系统/ }) as HTMLInputElement;
     expect(box.checked, '刚开通时不该自动启用').toBe(false);
     expect(isLocalSystemEnabled()).toBe(false);
@@ -208,12 +214,25 @@ describe('SettingsPage', () => {
     expect(isOfflineMode()).toBe(true);
   });
 
-  it('撤销开通会连带把本地系统关掉，回去只剩密钥输入框', async () => {
+  it('两者都不是：报配置失败，凭据与本地开通都不写', async () => {
     render(<SettingsPage />);
     openSecret();
-    const key = screen.getByLabelText('本地系统密钥') as HTMLInputElement;
-    fireEvent.change(key, { target: { value: LOCAL_SYSTEM_KEY } });
-    fireEvent.click(screen.getByRole('button', { name: '开通' }));
+    fireEvent.change(qwenInput(), { target: { value: 'not-the-key' } });
+    fireEvent.click(qwenSave());
+    // 说明文案里也写着「配置失败」四个字，所以只认那条 role=status 的提示
+    await waitFor(() => expect(screen.getByText(/既不是以 sk- 开头的云端凭据/)).toBeTruthy());
+    expect(screen.getByText('未开通')).toBeTruthy();
+    expect(isLocalSystemUnlocked()).toBe(false);
+    expect(screen.queryByRole('checkbox', { name: /使用本地系统/ })).toBeNull();
+    // 失败要清空输入，别把一串无效内容留在框里
+    expect(qwenInput().value).toBe('');
+  });
+
+  it('撤销开通会连带把本地系统关掉，回去只剩未开通状态', async () => {
+    render(<SettingsPage />);
+    openSecret();
+    fireEvent.change(qwenInput(), { target: { value: LOCAL_SYSTEM_KEY } });
+    fireEvent.click(qwenSave());
     await waitFor(() => expect(screen.getByText('已开通')).toBeTruthy());
     fireEvent.click(screen.getByRole('checkbox', { name: /使用本地系统/ }));
     await waitFor(() => expect(isLocalSystemEnabled()).toBe(true));
@@ -229,8 +248,8 @@ describe('SettingsPage', () => {
   it('渲染时不泄漏密钥明文', async () => {
     render(<SettingsPage />);
     openSecret();
-    fireEvent.change(screen.getByLabelText('本地系统密钥'), { target: { value: LOCAL_SYSTEM_KEY } });
-    fireEvent.click(screen.getByRole('button', { name: '开通' }));
+    fireEvent.change(qwenInput(), { target: { value: LOCAL_SYSTEM_KEY } });
+    fireEvent.click(qwenSave());
     await waitFor(() => expect(screen.getByText('已开通')).toBeTruthy());
     expect(document.body.textContent).not.toContain(LOCAL_SYSTEM_KEY);
   });
