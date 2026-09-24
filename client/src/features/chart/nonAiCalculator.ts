@@ -239,6 +239,52 @@ export interface PatternInfo {
 }
 
 /** 取格(《子平真诠》通行法)：月令为主、透干优先、本气定名；建禄/阳刃别取。 */
+/* ---- 调候(《穷通宝鉴》日主×月令季节的寒暖燥湿) --------------------------------
+ * 目的：把提示词里空泛的一句「以调候为主」变成引擎按季节算定的确定事实，供模型作为
+ * 喜忌的「辅助判据」(不是硬结论)。口径刻意保守，分两层：
+ *   · 季节与「调候方向」是古今公认的部分(冬寒→需火暖、夏热→需水润、春秋→平和非急)，
+ *     作为可依赖的硬信号注入；
+ *   · 逐日的用神天干，两份公开表(逐月细表 / 按季归并表)在「逐月」粒度上互有出入
+ *     (如甲木申月：一说庚丁壬、一说主庚次丙)，故只取「按季归并」一份、原样转录，
+ *     并一律明标「参考·须与格局扶抑合参」，不得当作唯一结论。见 TIAOHOU_REF_BY_SEASON。
+ * 返回值整串为中文，键名 tiaohouFacts 只是 natal 的字段名(与 patternFacts 同类，非正文)。
+ * -------------------------------------------------------------------------- */
+/** 月支→季节(寅卯辰春 / 巳午未夏 / 申酉戌秋 / 亥子丑冬)。 */
+const SEASON_OF_BRANCH: Record<string, string> = {
+  寅: '春', 卯: '春', 辰: '春', 巳: '夏', 午: '夏', 未: '夏', 申: '秋', 酉: '秋', 戌: '秋', 亥: '冬', 子: '冬', 丑: '冬',
+};
+/** 季节气候与调候方向：冬火夏水为通义；春秋气候平和，调候非急。 */
+const SEASON_CLIMATE: Record<string, { climate: string; need: string }> = {
+  春: { climate: '温而余寒未尽', need: '调候非急(以扶抑格局为主)' },
+  夏: { climate: '炎热燥土', need: '调候以水为急' },
+  秋: { climate: '凉而偏燥', need: '调候非急(以扶抑格局为主)' },
+  冬: { climate: '严寒', need: '调候以火为急' },
+};
+/** 穷通宝鉴「按季归并」主用神(佐)——原样转录一份自洽来源，逐月细表与此有分歧处不取。 */
+const TIAOHOU_REF_BY_SEASON: Record<string, Record<string, string>> = {
+  甲: { 春: '丙(佐癸)', 夏: '癸(佐庚)', 秋: '庚(佐丙)', 冬: '丙(佐戊)' },
+  乙: { 春: '丙(佐癸)', 夏: '专癸', 秋: '丙(佐庚)', 冬: '丙丁(佐戊)' },
+  丙: { 春: '壬(佐庚)', 夏: '壬(佐庚)', 秋: '甲(佐壬)', 冬: '甲(佐戊)' },
+  丁: { 春: '甲(佐庚)', 夏: '壬(佐庚)', 秋: '甲(佐丙)', 冬: '甲' },
+  戊: { 春: '丙(佐甲)', 夏: '癸(佐丙)', 秋: '丙(佐癸)', 冬: '丙(佐甲)' },
+  己: { 春: '丙(佐癸)', 夏: '癸(佐丙)', 秋: '丙癸并重', 冬: '丙(佐戊)' },
+  庚: { 春: '丙(佐甲)', 夏: '壬', 秋: '丁丙', 冬: '丙丁' },
+  辛: { 春: '壬(佐丙)', 夏: '壬癸', 秋: '壬(佐丙)', 冬: '丙(佐壬)' },
+  壬: { 春: '戊(佐丙)', 夏: '庚(佐壬癸)', 秋: '戊(佐甲)', 冬: '戊(佐丙)' },
+  癸: { 春: '辛(佐丙)', 夏: '庚辛(佐壬癸)', 秋: '辛(佐丙)', 冬: '丙(佐戊)' },
+};
+/** 引擎按日主与月令季节算定的「调候」事实(中文字符串)。缺日主或月支时返回空串。 */
+export function deriveTiaohou(dayStem: string, monthBranch: string): string {
+  const season = SEASON_OF_BRANCH[monthBranch];
+  const refRow = TIAOHOU_REF_BY_SEASON[dayStem];
+  if (!season || !refRow) return '';
+  const cl = SEASON_CLIMATE[season];
+  const ref = refRow[season] ?? '';
+  return season + '·' + cl.climate + '·' + cl.need
+    + '·《穷通宝鉴》按季归并用神参考：' + ref
+    + '〔季节归并之论，两源或有出入，仅供参考，须与格局扶抑合参〕';
+}
+
 export function derivePattern(pillars: string[], dayStem: string): PatternInfo {
   const monthGz = pillars[1] ?? '';
   const monthBranch = monthGz[1] ?? '';
@@ -522,6 +568,47 @@ export function calculateChenggu(lunarYearGanZhi: string, lunarMonth: number, lu
   return { parts, totalLiang: total, totalText: liangText(total), ruleVersion: 'chenggu-v1' };
 }
 
+/** 由公历出生日期时刻正向排出四柱（首页「按生日自动排盘」）。
+ *  年/月/日三柱取该日正午(12:30)的干支，与 calculateNonAi 定位出生日期所用口径一致，
+ *  避开子夜换日歧义；时柱不用历法库 getTime()——实测它按「早子时换日」推次日子时，
+ *  而 calculateNonAi 的时柱校验按当日日干五鼠遁(晚子时不换日)，两者在 23 点后冲突会
+ *  让自动排出的命盘保存即报错。故时柱在此复用五鼠遁，保证产出必过本引擎校验。
+ *  入参应为「定好的朴素日期时刻」；若开真太阳时，先过 applyTrueSolar 修正再传进来。 */
+export function computePillarsFromDate(
+  input: { year: number; month: number; day: number; hour: number; minute?: number },
+): Pick<BaziRecord, 'yearPillar' | 'monthPillar' | 'dayPillar' | 'hourPillar'> {
+  const atNoon = Solar.fromYmdHms(input.year, input.month, input.day, 12, 30, 0).getLunar().getEightChar();
+  const yearPillar = atNoon.getYear();
+  const monthPillar = atNoon.getMonth();
+  const dayPillar = atNoon.getDay();
+  const hourBranch = BRANCHES[Math.floor(((input.hour + 1) % 24) / 2)];
+  const startStem = mod(indexOfStem(dayPillar[0]) % 5 * 2, 10);
+  const hourPillar = STEMS[mod(startStem + indexOfBranch(hourBranch), 10)] + hourBranch;
+  return { yearPillar, monthPillar, dayPillar, hourPillar };
+}
+
+/** 均时差(Equation of Time)：真太阳时 − 平太阳时，单位分钟。Reed/Spencer 一阶近似，
+ *  全年误差 < 约 0.5 分钟，只用于定十二时辰(每 2 小时一档)绰绰有余；N 为一年中的第几天。
+ *  这是公开天文近似式的确定性计算，不接任何历法库/网络。 */
+export function equationOfTimeMinutes(year: number, month: number, day: number): number {
+  const dayOfYear = Math.floor((Date.UTC(year, month - 1, day) - Date.UTC(year, 0, 0)) / 86400000);
+  const b = (2 * Math.PI * (dayOfYear - 81)) / 364;
+  return 9.87 * Math.sin(2 * b) - 7.53 * Math.cos(b) - 1.5 * Math.sin(b);
+}
+
+/** 真太阳时修正：把「北京时间」朴素钟点换算为出生地真太阳时。
+ *  修正量 = (经度 − 120°东)×4 分钟(每 1°=4 分，东经 >120 为正、地方更快) + 均时差。
+ *  结果按朴素日历回读(Date.UTC 进出，不掺系统时区)，可能跨时辰、甚至跨子夜改公历日；
+ *  调用方拿修正后的 {year,month,day,hour,minute} 再交给 computePillarsFromDate / 存 birthYear、birthMonth。 */
+export function applyTrueSolar(
+  naive: { year: number; month: number; day: number; hour: number; minute: number },
+  longitude: number,
+): { year: number; month: number; day: number; hour: number; minute: number } {
+  const offsetMin = (longitude - 120) * 4 + equationOfTimeMinutes(naive.year, naive.month, naive.day);
+  const shifted = new Date(Date.UTC(naive.year, naive.month - 1, naive.day, naive.hour, naive.minute) + Math.round(offsetMin * 60000));
+  return { year: shifted.getUTCFullYear(), month: shifted.getUTCMonth() + 1, day: shifted.getUTCDate(), hour: shifted.getUTCHours(), minute: shifted.getUTCMinutes() };
+}
+
 export function calculateNonAi(
   input: Pick<BaziRecord, 'birthYear' | 'birthMonth' | 'yearPillar' | 'monthPillar' | 'dayPillar' | 'hourPillar'>,
   gender: Gender,
@@ -668,6 +755,8 @@ export function calculateNonAi(
     // 旺衰与格局：引擎算定的确定结论，提示词要求 AI 沿用不重判
     strengthScore: strengthScore,
     patternFacts: Object.assign({}, derivePattern(pillars, day), { special: specialPatternHint(strengthScore, pillars, day) }),
+    // 调候：按日主与月令季节算定的「辅助判据」(非硬结论)，供模型判喜忌时参考寒暖燥湿。
+    tiaohouFacts: deriveTiaohou(day, pillars[1]?.[1] ?? ''),
     shenSha: buildShenShaResult(pillars),
     shenShaRuleVersion: SHEN_SHA_RULE_VERSION,
     chenggu,

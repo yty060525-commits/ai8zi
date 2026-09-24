@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { getServiceStatus, clearServiceCredential, saveServiceCredential, setSelectedService, serviceProvider, serviceOf, PROVIDER_LABEL, type ServiceId } from '../../data/aiSettings';
 import { compactRecords, getStorageStats, runAiSelfTest, type AiSelfTest } from '../../data/storageInfo';
-import { exportableRecords, reloadLocalForSession } from '../../data/clientRepository';
-import { exportRecordsSQLite, exportRecordsSQLText } from '../../data/sqliteExport';
+import { reloadLocalForSession } from '../../data/clientRepository';
 import { importRecords, parseBackupFile, type ImportMode } from '../../data/sqlImport';
 import { apiAuth, getServerSession, getServerUrl, setServerSession, setServerUrl, type ServerSession } from '../../data/serverClient';
 import { BUILD_ID, GIT_VERSION, buildLabel, cacheLabel } from '../../utils/buildInfo';
@@ -19,7 +18,7 @@ export function SettingsPage() {
   const [statuses, setStatuses] = useState<Record<ServiceId, DisplayStatus>>({ serviceOne: '未配置', serviceTwo: '未配置', serviceThree: '未配置' });
   const [secrets, setSecrets] = useState<Record<ServiceId, string>>({ serviceOne: '', serviceTwo: '', serviceThree: '' });
   const [busyService, setBusyService] = useState<ServiceId | null>(null);
-  const [currentProvider, setCurrentProvider] = useState<'deepseek' | 'kimi' | 'qwen'>('deepseek');
+  const [currentProvider, setCurrentProvider] = useState<'deepseek' | 'kimi' | 'qwen'>('qwen');
   const [switching, setSwitching] = useState(false);
   const [notice, setNotice] = useState<Partial<Record<ServiceId, string>>>({});
   const [status, setStatus] = useState<DisplayStatus>('未配置');
@@ -27,7 +26,7 @@ export function SettingsPage() {
   const [compacting, setCompacting] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<AiSelfTest | null>(null);
-  const [exportNote, setExportNote] = useState<string>();
+
   const [importMode, setImportMode] = useState<ImportMode>('overwrite');
   const [importNote, setImportNote] = useState<string>();
   const [importing, setImporting] = useState(false);
@@ -66,34 +65,6 @@ export function SettingsPage() {
     try { await compactRecords(); await refreshStorage(); } catch { /* 保留原值 */ }
     finally { setCompacting(false); }
   }
-  const downloadBlob = (blob: Blob, name: string) => {
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = name;
-    link.click();
-    URL.revokeObjectURL(url);
-  };
-  async function exportSQLite() {
-    try {
-      const records = await exportableRecords();
-      const bytes = await exportRecordsSQLite(records);
-      const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-      downloadBlob(new Blob([ab], { type: 'application/x-sqlite3' }), 'mingli-data-' + new Date().toISOString().slice(0, 10) + '.sqlite');
-      setExportNote('已导出真 SQLite(.sqlite)，共 ' + records.length + ' 条记录——可与桌面版 data\\bazi_records.sqlite3 同构打开。');
-    } catch (error) {
-      setExportNote('导出失败：' + (error instanceof Error ? error.message : String(error)));
-    }
-  }
-  async function exportJson() {
-    try {
-      const records = await exportableRecords();
-      downloadBlob(new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), records }, null, 2)], { type: 'application/json' }), 'mingli-data-' + new Date().toISOString().slice(0, 10) + '.json');
-      setExportNote('已导出 JSON 备份，共 ' + records.length + ' 条记录。');
-    } catch (error) {
-      setExportNote('导出失败：' + (error instanceof Error ? error.message : String(error)));
-    }
-  }
   async function onImportFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = '';
@@ -110,16 +81,6 @@ export function SettingsPage() {
       setImportNote('导入失败：' + (error instanceof Error ? error.message : String(error)) + '。请确认选的是 .sqlite / .sqlite3 / .sql / .json 备份。');
     } finally {
       setImporting(false);
-    }
-  }
-  async function exportSqlText() {
-    try {
-      const records = await exportableRecords();
-      const text = exportRecordsSQLText(records);
-      downloadBlob(new Blob([text], { type: 'text/plain;charset=utf-8' }), 'mingli-data-' + new Date().toISOString().slice(0, 10) + '.sql');
-      setExportNote('已导出 SQL 文本(.sql)，共 ' + records.length + ' 条记录——与 .sqlite 同一套表结构。');
-    } catch (error) {
-      setExportNote('导出失败：' + (error instanceof Error ? error.message : String(error)));
     }
   }
   async function selfTest() {
@@ -232,7 +193,9 @@ export function SettingsPage() {
     <header className="page-heading"><p className="eyebrow">LOCAL SETTINGS</p><h1>设置</h1><p className="page-description">管理内部服务的访问配置。</p></header>
     <section aria-label="AI 通道" aria-labelledby="channels-title"><h2 id="channels-title">AI 通道（三条可同时配置）</h2>
       <p className="page-description">三条通道各自独立保存，互不影响。当前生效的那条会标注「使用中」并优先调用，失败时自动依次回退到已配置的其它通道。</p>
-      <p className="current-channel" role="status">当前使用：<strong>{PROVIDER_LABEL[currentProvider]}</strong>{statuses[currentProvider === 'deepseek' ? 'serviceOne' : currentProvider === 'kimi' ? 'serviceTwo' : 'serviceThree'] === '已配置' ? '' : '（该通道尚未配置，会直接使用其它已配置通道）'}　·　已配置 {configuredCount} / {services.length} 条</p>
+      // 「使用中」曾被理解成「这条已经配好了、正在跑」：一条凭据都没填时，页面同时摆出
+      // 「使用中」和「已配置 0 / 3 条」两句互相矛盾的话。这里说清楚它是被选中的那条、但还没填。
+      <p className="current-channel" role="status">当前使用：<strong>{PROVIDER_LABEL[currentProvider]}</strong>{statuses[currentProvider === 'deepseek' ? 'serviceOne' : currentProvider === 'kimi' ? 'serviceTwo' : 'serviceThree'] === '已配置' ? '' : '（该通道尚未配置，会直接使用其它已配置通道）'}　·　已配置 {configuredCount} / {services.length} 条{configuredCount === 0 ? '：三条都还没填凭据，现在哪一条都调不动，先在下面任一条里粘贴凭据并保存' : ''}</p>
       {services.map((service) => {
         const st = statuses[service.id];
         const busy = busyService === service.id;
@@ -241,7 +204,7 @@ export function SettingsPage() {
           <div className="channel-head">
             <strong>{service.label}</strong>
             <span className={st === '已配置' ? 'channel-status ok' : st === '保存失败' ? 'channel-status bad' : 'channel-status'}>{st}</span>
-            {isCurrent ? <span className="channel-current">使用中</span> : <button className="text-button tiny channel-use" type="button" disabled={switching} onClick={() => void useChannel(service.id)}>设为使用</button>}
+            {isCurrent ? <span className="channel-current">{st === '已配置' ? '使用中' : '选中·未填凭据'}</span> : <button className="text-button tiny channel-use" type="button" disabled={switching} onClick={() => void useChannel(service.id)}>设为使用</button>}
             {notice[service.id] && <span className="channel-notice" role="status">{notice[service.id]}</span>}
           </div>
           <div className="channel-row">
@@ -254,13 +217,14 @@ export function SettingsPage() {
       })}
     </section>
     <p className="ai-status" role="status">数据库：{storage ? `${storage.records} 条记录 / 缓存 ${storage.cacheEntries === null ? '未知(网页版不统计服务器缓存)' : storage.cacheEntries + ' 条'}${storage.bytes ? ` / ${(storage.bytes / 1024).toFixed(0)} KB` : ''}` : '读取中…'}</p>
-    <div className="button-group"><button className="text-button" type="button" disabled={compacting || storage === null || storage.cacheEntries === null} onClick={() => void compress()}>{compacting ? '压缩中…' : '压缩旧记录（缩小数据库）'}</button><button className="text-button" type="button" disabled={testing} onClick={() => void selfTest()}>{testing ? '自检中…' : 'AI 连通自检（微小消耗）'}</button><button className="text-button" type="button" onClick={() => void exportSQLite()}>导出数据库(.sqlite)</button><button className="text-button" type="button" onClick={() => void exportJson()}>导出JSON备份</button><button className="text-button" type="button" onClick={() => void exportSqlText()}>导出SQL文本(.sql)</button></div>
-    {exportNote && <p role="status">{exportNote}</p>}
+    <div className="button-group"><button className="text-button" type="button" disabled={compacting || storage === null || storage.cacheEntries === null} onClick={() => void compress()}>{compacting ? '压缩中…' : '压缩旧记录（缩小数据库）'}</button><button className="text-button" type="button" disabled={testing} onClick={() => void selfTest()}>{testing ? '自检中…' : 'AI 连通自检（微小消耗）'}</button></div>
+    {/* 导出一律走「记录」页(按人勾选、三种格式都有)：这里曾另摆三个全量导出按钮，
+        两处口径不同还容易点错，删掉。导入仍留在这里 —— 恢复备份不需要先有勾选。 */}
     <section aria-label="数据导入"><h2>数据导入（.sqlite / .sqlite3 / .sql / .json 备份）</h2>
       <p className="page-description">导入后可继续离线查看；桌面版会写入本机数据库，联网账号会自动同步到服务器。遇到同名记录时按下方选择处理。</p>
       <div className="import-mode-row">
         <label className="checkbox-label"><input type="radio" name="importMode" checked={importMode === 'overwrite'} onChange={() => setImportMode('overwrite')} />追加并覆盖（同 id 覆盖、新记录追加）</label>
-        <label className="checkbox-label"><input type="radio" name="importMode" checked={importMode === 'dedupe'} onChange={() => setImportMode('dedupe')} />同盘去重（性别+四柱+出生年相同则跳过）</label>
+        <label className="checkbox-label"><input type="radio" name="importMode" checked={importMode === 'dedupe'} onChange={() => setImportMode('dedupe')} />同盘去重（性别+四柱+出生年月相同则跳过）</label>
       </div>
       <div className="button-group">
         <button className="text-button" type="button" disabled={importing} onClick={() => fileRef.current?.click()}>{importing ? '导入中…' : '导入备份文件…'}</button>

@@ -61,6 +61,8 @@ export interface NonAiChart {
   twelveLongevity: string[];
   /** 引擎按《子平真诠》取格法算定的格局：AI 必须沿用，不得另立格局名。 */
   patternFacts?: { name: string; tenGod: string; basis: string; special?: string };
+  /** 引擎按日主与月令季节算定的调候事实(中文字符串)。作喜忌的「辅助判据」，非硬结论。 */
+  tiaohouFacts?: string;
   /** 引擎算定的旺衰评分：AI 必须沿用此档位，不得自行重判身强身弱。 */
   strengthScore?: {
     support: number; drain: number; net: number; index: number;

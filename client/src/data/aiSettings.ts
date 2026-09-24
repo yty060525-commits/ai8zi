@@ -29,7 +29,7 @@ export async function clearAiCredential(provider: AiProvider): Promise<Credentia
 
 export async function getAiProviderStatus(): Promise<AiProviderStatus> {
   if (isProdBrowser()) {
-    return { selectedProvider: (localStorage.getItem('mingli.provider') as AiProvider) ?? 'deepseek', deepseek: getBrowserCredential('deepseek') ? 'configured' : 'not_configured', kimi: getBrowserCredential('kimi') ? 'configured' : 'not_configured', qwen: getBrowserCredential('qwen') ? 'configured' : 'not_configured' };
+    return { selectedProvider: (localStorage.getItem('mingli.provider') as AiProvider) ?? 'qwen', deepseek: getBrowserCredential('deepseek') ? 'configured' : 'not_configured', kimi: getBrowserCredential('kimi') ? 'configured' : 'not_configured', qwen: getBrowserCredential('qwen') ? 'configured' : 'not_configured' };
   }
   return invoke<AiProviderStatus>('get_ai_provider_status');
 }

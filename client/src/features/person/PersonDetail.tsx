@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { deleteBaziRecord, getBaziRecord, saveBaziRecord } from '../../data/clientRepository';
-import { ABORTED_MESSAGE, buildBaziTasks, isRetryableFailure, orchestrateBaziAnalysis, DEFAULT_TONE } from '../../data/baziOrchestrator';
+import { deleteBaziRecord, getBaziRecord, refreshRecord, saveBaziRecord } from '../../data/clientRepository';
+import { ABORTED_MESSAGE, analysisHorizon, buildBaziTasks, expectedTaskIds, isRetryableFailure, orchestrateBaziAnalysis, DEFAULT_TONE } from '../../data/baziOrchestrator';
 import { beginAiSession, cancelAiSession } from '../../data/deepseekAdapter';
 import { clearChartCache } from '../../data/storageInfo';
 import { sanitizeAnalysisText } from '../chart/elements';
@@ -27,11 +27,11 @@ const scopeLabel = (result: BaziTaskResult): string => {
     default: return task.type;
   }
 };
-/** 附加元信息：目标时段的干支与年龄 —— 正对应“每个任务只换日子干支和年龄”。 */
+/** 附加元信息：目标时段的干支与年龄 —— 正对应“每个任务只换日子干支和年龄”。
+ *  窗口起点与 AI 分析用同一口径(从今天算，未来建的盘才按建盘时间)，否则标题写「未来十年」、内容却是旧年份。 */
 const horizonOf = (record: BaziRecord) => {
-  const start = new Date(record.createdAt || Date.now());
-  const year = new Date(start.getTime() + 8 * 60 * 60 * 1000).getUTCFullYear();
-  return { from: year, to: year + 9 };
+  const h = analysisHorizon(record);
+  return { from: h.year, to: h.year + 9 };
 };
 
 /** 找到任务对应的大运段：优先用任务自带的内联行(最新且权威)，再按 startYear 精确匹配，最后按年份落区间兜底。
@@ -50,13 +50,15 @@ export const findDecade = (record: BaziRecord, task: { year?: number; decade?: {
   return list.reduce((best, item) => Math.abs(item.startYear - y) < Math.abs(best.startYear - y) ? item : best, list[0]);
 };
 
-/** 大运展示段：第一段“当年→本大运结束”，第二段“下一大运起→十年后”。 */
-const decadeSegment = (task: { year?: number; decade?: { ganZhi: string; startYear: number; endYear: number } }, record: BaziRecord): { start: number; end: number } => {
+/** 大运展示段：标题叫「大运段」，就该是这一运本来的十年。旧记录里同一运的 endYear 可能少一两年，
+ *  按起点补满十年；与「未来十年」窗口取交集会把还没轮到的运截成单一年份，渲染出
+ *  「丙戌 大运段(2035-2035)」这种假十年，所以不截。 */
+export const decadeSegment = (task: { year?: number; decade?: { ganZhi: string; startYear: number; endYear: number } }, record: BaziRecord): { start: number; end: number } => {
   const horizon = horizonOf(record);
   const decade = findDecade(record, task);
   const rawStart = decade?.startYear ?? task.year ?? horizon.from;
   const rawEnd = decade?.endYear ?? horizon.to;
-  return { start: Math.max(rawStart, horizon.from), end: Math.min(rawEnd, horizon.to) };
+  return { start: rawStart, end: Math.max(rawEnd, rawStart + 9) };
 };
 
 /** 大运标题：只保留干支+时段（如“庚子 大运段(2020-2029)”）。不显示年龄推算。 */
@@ -97,10 +99,20 @@ const groupTitle = (title: string) => '【' + title.replace(/^\d+\s*[①-⑨]?\s
 
 /* ---------------- 语气滑杆(犀利 ↔ 中立 ↔ 温柔夸夸，默认 80) ---------------- */
 const TONE_KEY = 'mingli.analysis.tone';
-export const readTone = (): number => {
-  try { const raw = localStorage.getItem(TONE_KEY); if (raw === null || raw.trim() === '') return DEFAULT_TONE; const v = Number(raw); return Number.isFinite(v) ? Math.max(0, Math.min(100, Math.round(v))) : DEFAULT_TONE; } catch { return DEFAULT_TONE; }
-};
-export const saveTone = (v: number) => { try { localStorage.setItem(TONE_KEY, String(v)); } catch { /* 忽略 */ } };
+const clampTone = (n: number) => Math.max(0, Math.min(100, Math.round(n)));
+const readLocalTone = (key: string): number | undefined => { try { const raw = localStorage.getItem(key); if (raw === null || raw.trim() === '') return undefined; const v = Number(raw); return Number.isFinite(v) ? clampTone(v) : undefined; } catch { return undefined; } };
+const writeLocalTone = (key: string, v: number) => { try { localStorage.setItem(key, String(clampTone(v))); } catch { /* 忽略 */ } };
+/* 语气是「本机 · 按盘」的偏好，绝不写进 record：record 会随同步上行服务器、再下发到别的设备，
+   一旦把语气塞进 record，这边给人甲调低语气，别人（或另一台设备）打开同一条盘也跟着变低。
+   两个本地键：pref.<id> = 用户为这条盘在滑杆上选定的值；ran.<id> = 这条盘上次真正生成时用的值(重跑判定用)。 */
+const prefKey = (rec: string) => TONE_KEY + '.' + rec;
+const ranKey = (rec: string) => TONE_KEY + '.' + rec + '.ran';
+export const readTone = (): number => readLocalTone(TONE_KEY) ?? DEFAULT_TONE;          // 全局默认：新盘 / 无作用域时的回退
+export const saveTone = (v: number) => writeLocalTone(TONE_KEY, v);
+export const recordTone = (rec: string | null | undefined): number => (rec ? readLocalTone(prefKey(rec)) ?? readLocalTone(ranKey(rec)) : undefined) ?? readTone();   // 这条盘的滑杆读数：本机选过 → 本机上次跑 → 全局默认，始终与 record.toneUsed 无关
+export const saveRecordTone = (rec: string | null | undefined, v: number) => { if (rec) writeLocalTone(prefKey(rec), v); };
+export const usedTone = (rec: string | null | undefined): number | undefined => (rec ? readLocalTone(ranKey(rec)) : undefined);
+export const markUsedTone = (rec: string | null | undefined, v: number) => { if (rec) writeLocalTone(ranKey(rec), v); };
 export const toneLabel = (v: number): string => {
   if (v <= 5) return '犀利直白：明显说出不好之处';
   if (v < 45) return '偏犀利：直接点出问题与风险';
@@ -289,10 +301,13 @@ function PointsView({ text }: { text?: string }) {
 
 /* 「没密钥」这句话该指向哪儿：连着服务器时分析默认由服务器完成，但本客户端的设置页只能填
    本机三条通道的凭据(服务器那侧的密钥要在服务器上配)。旧文案让人去填一个用不上的地方，
-   所以两条路都说清楚：要么在服务器上给 AI 配密钥，要么在本机填凭据改用本机通道。 */
+   所以两条路都说清楚：要么在服务器上给 AI 配密钥，要么在本机填凭据改用本机通道。
+   两处口径要对齐界面实物：「设置」按钮靠行尾对齐(.settings-entry margin-left:auto)、窄屏同样靠右，
+   所以方位写「右上角」；三条通道在设置页上就叫 DeepSeek / Kimi / Qwen3.8-Flash，
+   别再写成用户根本找不到的「通义」。 */
 const keyMissingHint = isServerMode()
-  ? 'AI 尚未可用：现在连着服务器，分析默认由服务器完成，而服务器那边还没配 AI 密钥(需要在服务器上配置，本客户端的设置页管不到它)。想马上能用：点页面左上角「设置」，在任一服务(DeepSeek / Kimi / 通义)里填写访问凭据并保存，分析就会改走本机通道。'
-  : 'AI 尚未可用：请先点页面左上角「设置」，在任一服务(DeepSeek / Kimi / 通义)里填写访问凭据并保存，再回来点 AI 分析。';
+  ? 'AI 尚未可用：现在连着服务器，分析默认由服务器完成，而服务器那边还没配 AI 密钥(需要在服务器上配置，本客户端的设置页管不到它)。想马上能用：点页面右上角「设置」，在任一服务(DeepSeek / Kimi / Qwen3.8-Flash)里填写访问凭据并保存，分析就会改走本机通道。'
+  : 'AI 尚未可用：请先点页面右上角「设置」，在任一服务(DeepSeek / Kimi / Qwen3.8-Flash)里填写访问凭据并保存，再回来点 AI 分析。';
 
 function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (next: BaziRecord) => void }) {
   const [progress, setProgress] = useState<{ done: number; total: number; label: string } | null>(null);
@@ -303,22 +318,35 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
   const [disabledDims, setDisabledDims] = useState<Set<DimKey>>(new Set());
   const controllerRef = useRef<AbortController | null>(null);
   const noteTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const [tone, setTone] = useState<number>(() => readTone());
+  // 语气条显示「本机 · 这条盘」的偏好(选过的 → 上次跑的 → 全局默认)，与 record.toneUsed 无关：
+  // record 会随同步上行服务器、下发别的设备，把语气写进去就会导致「这边调低、别人那也低」。
+  const [tone, setTone] = useState<number>(() => recordTone(record.id));
   const toneRef = useRef(tone); toneRef.current = tone;
   const [autoWaiting, setAutoWaiting] = useState(false);
+  // 本次会话的窗口起点固定一次：跨月长跑时「预期任务清单」与进度条不会中途换算法。
+  const horizonRef = useRef<Date>(new Date());
   const autoTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const autoRetryCountRef = useRef(0);
   const busyRef = useRef(false);
   const markBusy = (v: boolean) => { busyRef.current = v; setBusy(v); };
   const cancelAutoRetry = () => { if (autoTimerRef.current) { clearTimeout(autoTimerRef.current); autoTimerRef.current = undefined; } setAutoWaiting(false); };
+  // 与聊天面板同一个入口：不钻 prop，App 里监听窗口事件打开设置页。
+  const openSettings = () => window.dispatchEvent(new Event('mingli:open-settings'));
 
   const aiResults = Object.values(record.aiTasks ?? {});
+  // 列表里有一条「未配置」，整条记录却常是 completed(其余任务成功)：此时上面的 not_configured
+  // 引导不出现，用户只看到一句「状态：已完成」加一堆「未配置」的条目，不知道该去哪儿补。
+  const hasUnconfiguredTask = aiResults.some((item) => item.status === 'not_configured');
   const byGroup = (key: string) => aiResults.filter((item) => item.task.type === key).sort((a, b) => (a.task.year ?? 0) - (b.task.year ?? 0) || (a.task.month ?? 0) - (b.task.month ?? 0));
   /** 有正文/格局可用的已完成结果(按界面展示顺序)，可作复制范围。 */
   const completedResults = (key: string): BaziTaskResult[] => byGroup(key).filter((item) => item.status === 'completed' && !!item.analysis && (!!item.analysis.explanation || !!item.analysis.pattern));
   const allCompleted = scopeGroups.flatMap((group) => completedResults(group.key));
   const totalCompleted = allCompleted.length;
   const selectedCount = allCompleted.filter((item) => !disabledTasks.has(item.task.taskId)).length;
+
+  /** 第一次进度回调之前没有分母可显示，只拿它撑住进度条的形状(不写进「任务 x / y」，
+   *  因为 +2 那两条占位此刻还未必会发，写出来就是虚报总数)。 */
+  const queuedTotal = () => buildBaziTasks(record, horizonRef.current).length + 2;
 
   const showCopyNote = (text: string) => {
     setCopyNote(text);
@@ -413,18 +441,21 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
     let enteredBusy = false;
     try {
       const currentTone = toneRef.current;
-      const expectedIds = buildBaziTasks(base).map((task) => task.taskId);
+      const expectedIds = expectedTaskIds(base, horizonRef.current);
       const completeTasks = expectedIds.filter((id) => {
         const item = base.aiTasks?.[id];
         return item?.status === 'completed' && !!item.analysis && (!!item.analysis.explanation || !!item.analysis.pattern);
       });
       if (expectedIds.length > 0 && completeTasks.length === expectedIds.length) {
-        if (base.toneUsed === currentTone) {
+        const ran = usedTone(base.id);   // 本机这条盘上次生成用的语气；undefined = 本机还没跑过(可能是同步/换设备来的)
+        // 本机没跑过、或语气与上次一致 → 视为命中缓存，绝不当成「改语气」把整盘成果清掉重算。
+        if (ran === undefined || ran === currentTone) {
+          markUsedTone(base.id, currentTone);
           setProgress(null);
           setHint('已存在该语气下的完整分析结果（命中缓存/已保存）。要改语气后重出，请拖动下方语气条再点 AI 分析。');
           return;
         }
-        setHint('语气已从 ' + (base.toneUsed ?? 80) + ' 调到 ' + currentTone + '：先清旧结果，按新语气重新生成…');
+        setHint('语气已从 ' + ran + ' 调到 ' + currentTone + '：先清旧结果，按新语气重新生成…');
         const cleared = await saveBaziRecord({ ...base, aiTasks: undefined, aiAnalysis: undefined, aiOverview: undefined, aiError: undefined, aiStatus: 'not_started' });
         onUpdated(cleared);
         base = cleared;
@@ -434,8 +465,8 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
       beginAiSession();
       markBusy(true); enteredBusy = true;
       setHint(undefined); setCopyNote(undefined);
-      setProgress({ done: 0, total: expectedIds.length, label: '准备任务…' });
-      const pending = await saveBaziRecord({ ...base, aiStatus: 'pending', aiError: undefined, toneUsed: currentTone });
+      setProgress({ done: 0, total: expectedIds.length + 2, label: '准备任务…' });
+      const pending = await saveBaziRecord({ ...base, aiStatus: 'pending', aiError: undefined });   // 不再写 toneUsed：语气是本机的事，不进会同步的 record
       onUpdated(pending);
       let lastSnapshot: BaziRecord = pending;
       try {
@@ -446,12 +477,15 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
             lastSnapshot = persisted;
             onUpdated(persisted);
           } catch { /* 单次进度落库失败不中断整体，最终结果会整体保存 */ }
-        }, { signal: controller.signal, tone: currentTone });
-        const saved = await saveBaziRecord(finished);
+        }, { signal: controller.signal, tone: currentTone, now: horizonRef.current });
+        const saved = await saveBaziRecord({ ...finished });   // 同上：不把语气写进同步记录
+        markUsedTone(record.id, currentTone);   // 本机记住：这条盘这次是用 currentTone 生成的
         lastSnapshot = saved;
         setProgress(null);
         markBusy(false); enteredBusy = false;
-        onUpdated(saved);
+        // 同 recalculateNonAi：交回视图前走一遍读取路径，视图里的排盘数组与过期任务清洗
+        // 必须和下次点「AI 分析」时算出的预期清单同源，否则「结果完整」永远判不出来。
+        onUpdated(await refreshRecord(saved));
         if (saved.aiStatus === 'failed') scheduleAutoRetry(saved);
       } catch (error) {
         setProgress(null);
@@ -505,7 +539,7 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
     <div className="section-heading"><div><p className="eyebrow">03 / AI ANALYSIS</p><h2 id="ai-title">AI 分析</h2></div><div className="button-group"><button className="primary-button" type="button" onClick={() => void requestAnalysis()} disabled={record.aiStatus === 'pending' || busy}>{busy ? '分析中…' : 'AI 分析'}</button>{(record.aiStatus === 'pending' || busy) && <button className="danger-button stop-button" type="button" onClick={stopAnalysis}>立即停止</button>}<button className="text-button" type="button" onClick={() => void clearResultsOnly()} disabled={record.aiStatus === 'pending' || busy}>清除AI结果与缓存（只清除，不重算）</button></div></div>
     <div className="tone-block" aria-label="分析语气">
       <span className="tone-label">措辞语气</span>
-      <input id="tone-slider" type="range" min={0} max={100} step={5} value={tone} aria-valuetext={toneLabel(tone)} onChange={(event) => { const v = Number(event.target.value); setTone(v); saveTone(v); }} />
+      <input id="tone-slider" type="range" min={0} max={100} step={5} value={tone} aria-valuetext={toneLabel(tone)} onChange={(event) => { const v = Number(event.target.value); setTone(v); saveRecordTone(record.id, v); }} />
       <span className="tone-value">{toneLabel(tone)}{tone === 80 ? '（默认：八成好话 + 两成委婉点不足）' : ''}</span>
       <span className="tone-scale"><em>犀利</em><em>中立</em><em>温柔夸夸</em></span>
     </div>
@@ -513,17 +547,17 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
     {hint && <p role="status">{hint}</p>}
     {autoWaiting && <div className="button-group"><button className="text-button" type="button" onClick={cancelAutoRetryFromHint}>取消自动重试</button></div>}
     {(progress || busy || (record.aiStatus === 'pending' && !progress)) && <div className="progress-block" aria-label="AI 分析进度">
-      <p className="progress-text">任务 {progress?.done ?? 0} / {progress?.total ?? buildBaziTasks(record).length}：{progress?.label ?? '排队中…'}…</p>
-      <div className="progress-track" role="progressbar" aria-valuenow={progress?.done ?? 0} aria-valuemin={0} aria-valuemax={progress?.total ?? buildBaziTasks(record).length}><div className="progress-fill" style={{ width: `${Math.round(((progress?.done ?? 0) / (progress?.total ?? buildBaziTasks(record).length)) * 100)}%` }} /></div>
+      <p className="progress-text">任务 {progress ? progress.done + ' / ' + progress.total : '0'}：{progress?.label ?? '准备中…'}</p>
+      <div className="progress-track" role="progressbar" aria-valuenow={progress?.done ?? 0} aria-valuemin={0} aria-valuemax={progress?.total || queuedTotal() || 1}><div className="progress-fill" style={{ width: `${Math.round(((progress?.done ?? 0) / (progress?.total || queuedTotal() || 1)) * 100)}%` }} /></div>
     </div>}
-    {record.aiStatus === 'pending' && <p role="status">按任务逐个调用 AI（本命 → 每年 → 每月 → 大运 → 后天调整），每个任务数秒到数十秒；失败会自动重试一次，进度即时保存，中断后可随时继续。</p>}
-    {record.aiStatus === 'not_configured' && <p role="status">{keyMissingHint}</p>}
+    {record.aiStatus === 'pending' && <p role="status">按任务逐个调用 AI（本命 → 每年流年 → 每月流月 → 大运 → 后天调整 → 全盘总结），每个任务数秒到数十秒；失败会自动重试一次，进度即时保存，中断后可随时继续。</p>}
+    {(record.aiStatus === 'not_configured' || hasUnconfiguredTask) && <p role="status">{keyMissingHint}<button type="button" className="text-button chat-settings-link" onClick={openSettings}>去设置 ›</button></p>}
     {record.aiStatus === 'failed' && <p role="status">{/未配置|没有可用的通道凭据/.test(record.aiError ?? '')
       // 一个凭据都没填时曾按 failed 上报(现已归为 not_configured)，此处兜住历史数据，
       // 别把「余额不足/限流」那串无关原因摆在一个根本没配密钥的用户面前。
       ? keyMissingHint
       : '个别任务自动重试多轮后仍未成功。常见原因：余额不足或额度已用完 / 密钥无效 / 请求过于频繁（限流）/ 网络超时或不可达 / 所选服务不可用。请按下方原因处理后，再点 AI 分析（只补失败项，不重复花钱）。'}</p>}
-    {record.aiError && <p role="alert">原因：{safeAiError(record.aiError)}</p>}
+    {record.aiError && !/未配置|没有可用的通道凭据/.test(record.aiError) && <p role="alert">原因：{safeAiError(record.aiError)}</p>}
     {record.aiAnalysis && <div className="long-text"><strong>格局与强弱</strong><p>{sanitizeAnalysisText(record.aiAnalysis.pattern || '') || '—'} · {sanitizeAnalysisText(record.aiAnalysis.strength || '') || '—'}</p><p>喜：{(record.aiAnalysis.usefulElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}　忌：{(record.aiAnalysis.avoidElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}</p><PointsView text={record.aiAnalysis.explanation} /></div>}
     {/* 全盘总结正文(含古风标题)在下方「② 全盘总结」分组里完整展示；这里只留一处入口提示，避免同一段内容渲染两遍 */}
     {record.aiOverview && <p className="long-text" aria-label="全盘总结提要"><strong>全盘总结已完成：</strong>值得关注的年份与机会/风险窗口见下方「② 全盘总结」段落。</p>}
@@ -559,7 +593,7 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
             const lead = analysis && (analysis.pattern || analysis.strength) ? <p className="scope-lead">格局：{sanitizeAnalysisText(analysis.pattern || '') || '—'} · 强弱：{sanitizeAnalysisText(analysis.strength || '') || '—'}　喜：{(analysis.usefulElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}　忌：{(analysis.avoidElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}</p> : null;
             return <details key={group.key + '-' + idx} className="scope-item" open={group.key === 'baseline' && item.status === 'completed'}>
               <summary>{describeScope(item, record)}<span className="scope-status">　{statusText[item.status === 'completed' ? 'completed' : item.status === 'failed' ? 'failed' : 'not_configured']}</span></summary>
-              {item.status === 'completed' && analysis ? <div className="scope-body">{analysis.title ? <p className="scope-title"><strong>{sanitizeAnalysisText(analysis.title)}</strong></p> : null}{lead}<PointsView text={analysis.explanation} /></div> : item.status === 'failed' ? (busy ? <p className="retry-hint">该任务失败，正在自动重新调用 AI…</p> : <p className="form-error">自动重试多轮后仍失败：{safeAiError(item.error ?? '未知错误')}</p>) : item.status === 'not_configured' ? <p>未配置密钥，本项未生成。</p> : null}
+              {item.status === 'completed' && analysis ? <div className="scope-body">{analysis.title ? <p className="scope-title"><strong>{sanitizeAnalysisText(analysis.title)}</strong></p> : null}{lead}<PointsView text={analysis.explanation} /></div> : item.status === 'failed' ? (busy ? <p className="retry-hint">该任务失败，正在自动重新调用 AI…</p> : <p className="form-error">自动重试多轮后仍失败：{safeAiError(item.error ?? '未知错误')}</p>) : item.status === 'not_configured' ? <p>未配置密钥，本项未生成。<button type="button" className="text-button chat-settings-link" onClick={openSettings}>去设置 ›</button></p> : null}
             </details>;
           })}
         </section>;
@@ -578,7 +612,9 @@ export function PersonDetail({ personId, onBack, refreshKey = 0 }: PersonDetailP
     void getBaziRecord(personId).then((next) => { if (active) setRecord(next); });
     return () => { active = false; };
   }, [personId, refreshKey]);
-  if (!record) return <main className="person-detail placeholder-page"><header className="page-heading"><h1>人物详情</h1></header><p role="status">未找到人物记录，请返回记录列表。</p><button className="text-button" type="button" onClick={onBack}>返回记录</button></main>;
+  // 排盘数据是读取时重算的(存储里已瘦身)，所以首帧先给加载态：直接拿旧数据显示会闪出
+  // 「④ 未来大运」下早已走完的大运段，正是这次要修的那个假标题。
+  if (!record) return <main className="person-detail placeholder-page"><header className="page-heading"><h1>人物详情</h1></header><p role="status">正在读取命盘…</p><button className="text-button" type="button" onClick={onBack}>返回记录</button></main>;
   const loadedRecord = record;
   const recordId = loadedRecord.id;
   async function remove() { await deleteBaziRecord(recordId); setConfirmDelete(false); onBack(); }
@@ -588,7 +624,10 @@ export function PersonDetail({ personId, onBack, refreshKey = 0 }: PersonDetailP
       const { calculateNonAi } = await import('../chart/nonAiCalculator');
       const nonAiResult = calculateNonAi({ birthYear: loadedRecord.birthYear, birthMonth: loadedRecord.birthMonth, yearPillar: loadedRecord.yearPillar, monthPillar: loadedRecord.monthPillar, dayPillar: loadedRecord.dayPillar, hourPillar: loadedRecord.hourPillar }, loadedRecord.gender, loadedRecord.createdAt);
       const updated = await saveBaziRecord({ ...loadedRecord, nonAiResult });
-      setRecord(updated);
+      // 存回去的是瘦身版(pruneRecord)，返回那份的数组是这次现算的、按点击时刻排的。
+      // 直接用它会绕过读取侧的过期任务清洗，「AI 分析」的预期清单就会和界面上的
+      // 「④未来大运」不同源 —— 已走完的那一运被当成必填槽位，每次点都整轮重算。
+      setRecord(await refreshRecord(updated));
       // 这句承诺的是「重算了排盘数据」，顺手把 AI 结果一起清了反而与提示不符(而且用户没要求)。
       setNotice('非 AI 已重新计算');
     } catch (error) {

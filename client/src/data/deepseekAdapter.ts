@@ -120,16 +120,52 @@ const CHANNELS: ChannelSpec[] = [
 ];
 /** 当前优先通道 + 其余已配置通道（依次回退），与设置页的“使用中/已配置”一致。 */
 function channelOrder(forced?: string): ChannelSpec[] {
-  const selected = forced ?? (() => { try { return localStorage.getItem('mingli.provider') ?? 'deepseek'; } catch { return 'deepseek'; } })();
+  const selected = forced ?? (() => { try { return localStorage.getItem('mingli.provider') ?? 'qwen'; } catch { return 'qwen'; } })();
   const head = CHANNELS.filter((c) => c.id === selected);
   return [...head, ...CHANNELS.filter((c) => c.id !== selected)];
 }
 
+/** 阿里云百炼「上下文缓存」的最小可缓存前缀(约 1024 token)。中文近似一字一 token，
+ *  低于它这次请求不可能建起缓存，打标只是白付 1.25 倍的建缓存费。 */
+const QWEN_CACHE_MIN_CHARS = 1000;
+
+/** Qwen 通道的显式缓存标记：content 从字符串换成数组段，并在段上打 cache_control。
+ *  其它通道原样返回字符串 —— DeepSeek/Kimi 不认这个字段，改了反而可能被拒。
+ *  注意这是**请求体包装**，不改动提示词正文本身，所以三通道提示词逐字节一致的约束不受影响。 */
+function qwenCacheableContent(channel: ChannelSpec, content: string): unknown {
+  if (channel.id !== 'qwen' || content.length < QWEN_CACHE_MIN_CHARS) return content;
+  return [{ type: 'text', text: content, cache_control: { type: 'ephemeral' } }];
+}
+
 /** 系统提示词：全通道共用同一条，逐字节一致(前缀缓存的第一层)。 */
 const SYSTEM_SCOPE = '请把思考压缩到最短，直接输出符合要求的简体中文 JSON 正文；全篇不得出现繁体字。';
-/** 输出硬性要求：与任务类型无关的公共约束，紧跟 natal 之后。 */
-const OUTPUT_RULES_TEXT = '\n\n# 输出硬性要求(违反即整篇作废重写)\n'
-  + '1. 全篇一律使用简体中文(UTF-8)，禁止任何繁体字、异体字混入。\n'
+
+/* ── 提示词分段顺序：显式缓存命中率的唯一来源，改动前先读这段 ──────────────────────
+ * 百炼的上下文缓存按「从 messages 开头到 cache_control 标记为止」整段做 key，所以命中率
+ * 完全取决于各段**从哪一行开始分叉**。实测数字见 __tests__/qwen-prefix-measure.test.ts。
+ * 排列原则：**跨任务恒定的内容一律排在会变化的内容之前**，且恒定段彼此相邻、不被可变段隔开。
+ *   · 全任务共用(实测 1714 字，占最短全文 49%)：natalBlock(# 本命事实数据 + natal) → 任务指令。
+ *     natalBlock 用同一个标题拼在指令之前，本命/流年/流月/大运四类任务因此共享这一整段；
+ *     旧写法把各自不同的任务指令放在 natal 前面，公共前缀只剩 9 个字，等于每条任务各建一块缓存。
+ *   · 从任务指令这一行开始分叉：BASELINE/SCOPE/OVERVIEW/ADJUST 四种指令文本互不相同。
+ *     SYSTEM_SCOPE、输出硬性要求与语气要求都在分叉点之后，只有同一种指令的任务能共享，
+ *     所以不能把它们前移到 natal 之前 —— 那里必须只放跨类型恒定的内容。
+ *   · 分叉之后再排可变性递增的内容：本命结论摘要(同时段全部相同) → 年度段(同年相同)
+ *     → 月度段(仅流月) → 目标行(每条都不同)。
+ *   · SYSTEM_SCOPE 是独立的一条 system 消息，排在 user 正文之前且全通道逐字节相同，因此它也在
+ *     这段公共前缀里(实测的 1714 字只算了 user 正文)。
+ * 「延续之前的变动放最后」这条原则仍然成立，只是范围缩小到分叉点以后：那里已没有可再前移的
+ * 恒定内容。若把任何可变段挪回前面，或让 natalBlock/toneText 的标题与拼装顺序在各分支间不
+ * 一致，公共前缀立刻塌回几十个字 —— 测试会失败并指出是哪一对请求断的。*/
+
+/** 指令段与输出要求之间的固定分隔标题：本身不随任务变化，用来把两端切开并保住前面的公共前缀。 */
+export const INSTRUCTION_TAIL_MARK = '\n\n# 输出硬性要求(违反即整篇作废重写)\n';
+/** natal 块的固定标题：内容随命盘不同，但同一命盘在四类任务里逐字节相同，所以公共前缀从它开始。 */
+export const NATAL_BLOCK_HEAD = '\n\n# 本命事实数据(JSON，只依据此数据)\n';
+/** 语气段标题：两端各写一份措辞文本，但标题必须一致，测试用它切开「恒定尾巴」。 */
+export const TONE_HEAD = '\n\n# 语气要求(必须按此措辞把握全篇)\n';
+/** 输出硬性要求：与任务类型无关的公共约束，紧跟上面的标题、排在语气要求之前。 */
+export const OUTPUT_RULES_TEXT = '1. 全篇一律使用简体中文(UTF-8)，禁止任何繁体字、异体字混入。\n'
   + '2. explanation 的【】小节必须按本任务规定逐段出现、各只出现一次，顺序一致，不得合并、省略或改名。\n'
   + '3. 每个小节至少 1 条编号要点；每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。\n'
   + '4. 禁止输出注释、代码块或任何围栏标记，只给最终正文。\n'
@@ -139,7 +175,7 @@ const OUTPUT_RULES_TEXT = '\n\n# 输出硬性要求(违反即整篇作废重写)
   + '得令与否写成「月支是/不是日主禄刃之地，得令/不得令」；月支藏干有无印比写成「月支藏干中见/未见印比，有/无通根之助」；'
   + '不能用英文词加上括号注音，也不能在中文后面缀上英文取值。';
 
-const SCOPE_PREFIX = '你是资深子平命理师，仅分析时段运势。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行或关系。'
+export const SCOPE_PREFIX = '你是资深子平命理师，仅分析时段运势。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行或关系。'
   + '禁止输出注释或代码块/围栏标记，只给最终正文。本命格局与旺衰已由引擎算定并写在【事实数据】的「格局事实」「旺衰评分」里，你不得重判、不得改口径；本期吉凶只在既定喜忌下衡量该期干支的作用。'
   + '用 JSON(仅 JSON)返回，schema：{"title":"古风四字或对仗标题(可选)","explanation":长文}。'
   + 'title 只能用干支+四字直书(如：卯戌六合·和合之象)或古典口诀风格，不得编造伪古文引文。'
@@ -152,7 +188,7 @@ const SCOPE_PREFIX = '你是资深子平命理师，仅分析时段运势。严�
   // 大运的年份区间来自引擎的起运推算；不写这条，模型会按「十年一运」想当然地报岁数。
   + '5. 提到大运时段与年龄时，必须照【本命事实数据】里「起运」一项与各柱起始/结束年份的原值说(如「X 年起入某运」)，不得自行换算起运年龄、不得改动区间。';
 
-const BASELINE_PREFIX = '你是资深子平命理师。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行、藏干或关系。'
+export const BASELINE_PREFIX = '你是资深子平命理师。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行、藏干或关系。'
   + '当前分析目标：本命。用 JSON(仅 JSON)返回，schema：{"pattern":格局,"strength":身强/身弱/中和偏旺/中和偏弱,"usefulElements":[喜用],"avoidElements":[忌用],"explanation":长文}。'
   // —— 关键口径：格局与旺衰已由引擎按确定算法算出，写在 natal.patternFacts / natal.strengthScore 里，
   //    模型只负责「解读」与「定喜用」，不负责「重判」。这是消除同盘不同答案(命中率)的根本手段。
@@ -161,23 +197,113 @@ const BASELINE_PREFIX = '你是资深子平命理师。严格依据下方【事�
   + '2. 旺衰：直接采用【事实数据】里「旺衰评分」给出的档位，不得改判。其算法：助身方(比劫加印)与克泄耗方(食伤加财加官杀)分别累加——天干每透一位 6 分(月干 9 分)；地支藏干按本气 10 / 中气 5 / 余气 3；月支只对日主自己的通根再乘 2(提纲秉令只增益日主之气，不给财官加倍)；最后按日主在该支的十二长生调整通根之力(帝旺乘 1.4、死绝则不为根)。净分等于(助身方减克泄耗方)除以(助身方加克泄耗方)再乘一百，不低于 25 为身强、不高于负 25 为身弱，其间为中和偏旺或中和偏弱。是否得令＝月支是日主的禄或刃之地(甲乙禄寅、丙戊禄巳、庚辛禄申、壬癸禄亥；甲卯丙戊午庚酉壬子为阳刃)，被邻支冲则破令不算得令。月支藏干有无印比，只表示月支藏干里出现过印比(含中余气)，不等于得令，勿混用。(以上所述算法仅为帮助你理解口径，正文里一律用中文讲结论，任何拉丁字母都不许出现。)\n'
   + '3. explanation 必须以【身强身弱与喜忌】开头，随后按顺序各出现一次【健康】【事业】【财运】【爱情】(不得合并、省略或改名)，末尾可加【总评/行为建议】。\n'
   + '4. 【身强身弱与喜忌】一段必须引用旺衰的数字与明细来写，至少包含：是否得令、助身方得分、克泄耗方得分、净分与档位；再点出命局最关键的病处(如某十神太旺/太弱、何物伤格)。禁止只写「日主偏弱」这类无数据结论。\n'
-  + '5. 喜忌推导规则(通则，须写明所依通则)：身弱→喜印比、忌克泄耗；身强→喜克泄耗、忌印比；中和偏旺/偏弱→以调候与通关需要为主，兼顾抑扬。若格局本身另有要求(如阳刃喜官杀制、建禄喜财官、从格须顺势、专旺须顺生)，以格局要求优先并在文中说明为何与扶抑通则一致或冲突。\n'
+  + '5. 喜忌推导规则(通则，须写明所依通则)：先以扶抑定纲(身弱→喜印比、忌克泄耗；身强→喜克泄耗、忌印比)；再看【事实数据】中那条以季节(春/夏/秋/冬)起首、注明「调候」与「穷通宝鉴…参考」的字段：命局气候偏枯(生于严冬而局中火弱、或生于盛夏而局中水亏)时，调候优先于扶抑，据此微调喜忌并写明「从调候」；该项标注「非急」(多应在春秋)时，调候只作辅助印证，喜忌仍以扶抑与格局为准。凡该字段标注「参考」者，系《穷通宝鉴》按季节归并之论，两源或有出入，不得当作唯一结论。格局本身另有要求者(阳刃喜官杀制、建禄喜财官、从格须顺势、专旺须顺生)，以格局优先并说明与上述通则是否一致。\n'
   + '6. usefulElements / avoidElements 只能填 木/火/土/金/水 五项中的若干项，且必须与第 5 条推出的喜忌一致，不得凭印象填写。\n'
   + '7. 每个主题内部必须分点：每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。禁止在 JSON 顶层重复输出 overall/health/career/wealth/love/notice 等字段，也不要先给短句摘要再写长文。';
 
-const OVERVIEW_PREFIX = '你是资深子平命理师，现在做「全盘总结」。下面给出的是【已经算好的结论】：本命喜忌、以及未来十年的大运/流年/流月逐段批断要点。你的任务不是重新推算，也不是复述每一段，而是横向比较这些结论，挑出真正值得当事人注意的时间节点并说明理由。严格依据给定材料作答，禁止自行补充材料里没有的干支或事件；禁止输出注释或代码块/围栏标记，只给最终正文。用 JSON(仅 JSON)返回，schema：{"title":"古风四字或对仗标题(可选)","explanation":长文}。explanation 必须依次各出现一次【核心结论】【值得关注的时间节点】【行动建议】，顺序一致，不得合并、省略或改名。其中【值得关注的时间节点】是本文重点，要求：1. 按重要程度排序，每条单独一行、行首用 1. 2. 3. 编号；2. 每条写成「年份(或大运段) + 干支 + 为什么值得关注(引材料中的刑冲克害/喜忌依据) + 一句话怎么办」；3. 至少区分「机会窗口」与「风险窗口」两类，各自点明；4. 材料里若某年标注了六冲/三刑/六害等重大作用，必须纳入；5. 只写材料支持得起的结论，宁少勿滥，不要逐年流水账。【核心结论】用 2-4 条概括命局主线与该十年大势；【行动建议】用 2-4 条给出跨年份可执行的通用做法(贴合喜用五行，不重复时间节点里的原话)。全篇简体中文，每个主题内部一条一句，禁止整段连排。';
+export const OVERVIEW_PREFIX = '你是资深子平命理师，现在做「全盘总结」。下面给出的是【已经算好的结论】：本命喜忌、以及未来十年的大运/流年/流月逐段批断要点。你的任务不是重新推算，也不是复述每一段，而是横向比较这些结论，挑出真正值得当事人注意的时间节点并说明理由。严格依据给定材料作答，禁止自行补充材料里没有的干支或事件；禁止输出注释或代码块/围栏标记，只给最终正文。用 JSON(仅 JSON)返回，schema：{"title":"古风四字或对仗标题(可选)","explanation":长文}。explanation 必须依次各出现一次【核心结论】【值得关注的时间节点】【行动建议】，顺序一致，不得合并、省略或改名。其中【值得关注的时间节点】是本文重点，要求：1. 按重要程度排序，每条单独一行、行首用 1. 2. 3. 编号；2. 每条写成「年份(或大运段) + 干支 + 为什么值得关注(引材料中的刑冲克害/喜忌依据) + 一句话怎么办」；3. 至少区分「机会窗口」与「风险窗口」两类，各自点明；4. 材料里若某年标注了六冲/三刑/六害等重大作用，必须纳入；5. 只写材料支持得起的结论，宁少勿滥，不要逐年流水账。【核心结论】用 2-4 条概括命局主线与该十年大势；【行动建议】用 2-4 条给出跨年份可执行的通用做法(贴合喜用五行，不重复时间节点里的原话)。全篇简体中文，每个主题内部一条一句，禁止整段连排。';
 
-const ADJUST_PREFIX = '你是资深子平命理师。根据【本命结论】的喜用五行与下方【资料库】中对应五行的后天调整/职业知识，输出该命局的【后天调整】与【事业职业适配】建议(长文，贴合资料，不要另造体系)。'
+export const ADJUST_PREFIX = '你是资深子平命理师。根据【本命结论】的喜用五行与下方【资料库】中对应五行的后天调整/职业知识，输出该命局的【后天调整】与【事业职业适配】建议(长文，贴合资料，不要另造体系)。'
   + '禁止输出注释或代码块，只给最终正文。JSON schema：{"explanation":长文}，explanation 必须依次各出现一次【后天调整】【事业适配】【健康注意】(不得合并、省略或改名)。'
   + '\n\n# 判定标准(硬性)\n'
   + '1. 一切建议必须由【事实数据】里「旺衰评分」与「格局事实」给出的喜用五行推导出来，不得另立体系、不得假设未给出的事实。\n'
   + '2. 【后天调整】按方位、颜色、行业属性、日常作息分条；【事业适配】给出适配岗位类型与不宜方向各至少一条，并说明与喜用的对应关系；【健康注意】只谈体质倾向与调养方向，不下诊断、不给具体病名断言。\n'
   + '3. 每个主题内部必须分点：每条单独一行、行首 1. 2. 3. 编号，一句话一条，禁止整段连排。';
 
+export type PromptTaskKind = 'baseline' | 'annual' | 'monthly' | 'decade' | 'overview' | 'adjustment';
+
+/** 只拼装、不发请求：给定任务类型返回这条任务真实会发出的 user 正文(与 browserDirect 同一个函数)。
+ *  专供跨通道一致性测试使用 —— 服务器侧 buildTaskPayload 的正文必须与之同源。
+ *  anchor 是本命结论摘要：真实流程里由 task-01 的结果注入，测试按同一形状传入。 */
+export function buildTaskPromptText(record: BaziRecord, kind: PromptTaskKind, year: number, month?: number, tone?: number, anchor?: string): string {
+  const task: BaziAnalysisTask = {
+    taskId: 'probe', type: kind, year,
+    ...(month !== undefined ? { month } : {}),
+    ...(anchor !== undefined ? { baseline: { summary: anchor } as never } : {}),
+  };
+  return assembleUserContent(record, task, tone).content;
+}
+
+/** natal 里跨通道必须同序的键：服务器多带了 gender/birthYear/lunarDate/elementRatio/naYin/
+ *  twelveLongevity，两端只比「共有键的相对顺序」；这份清单与 promptSeams.mts 取样器同源。 */
+export const NATAL_SHARED_KEYS = ['pillars', 'dayMaster', 'zodiac', 'solarDate', 'elements', 'tenGods', 'hiddenStems', 'patternFacts', 'strengthScore', 'tiaohouFacts', 'luckStart', 'shenSha', 'relationships'];
+
+/** 拆成「跨通道应逐字节相同」的几段：natal 标题/共有键顺序 + 任务指令 + 输出硬性要求 + 语气标题。
+ *  供 prompt-parity 测试比对两端**真实拼出的正文**，而不是只比常量定义(常量抄对了、但拼装顺序
+ *  各写一份也能被拦下)。natal 的 JSON 取值本身不比：服务器多带了几项，两端只比「标题 + 共有键顺序」。 */
+export function buildPromptSharedSeams(record: BaziRecord, kind: PromptTaskKind, year: number, month?: number) {
+  const task: BaziAnalysisTask = { taskId: 'probe', type: kind, year, ...(month !== undefined ? { month } : {}) };
+  const content = assembleUserContent(record, task).content;
+  const start = content.indexOf(NATAL_BLOCK_HEAD);
+  const toneAt = content.indexOf(TONE_HEAD);
+  if (start < 0 || toneAt < 0) throw new Error('拼装结果缺少 natal 或语气标题，分段顺序被改坏了');
+  const instruction = kind === 'baseline' ? BASELINE_PREFIX : kind === 'adjustment' ? ADJUST_PREFIX : kind === 'overview' ? OVERVIEW_PREFIX : SCOPE_PREFIX;
+  const instrStart = content.indexOf(instruction.slice(0, 24), start);
+  const rulesAt = content.indexOf(INSTRUCTION_TAIL_MARK, instrStart);
+  if (instrStart < 0 || rulesAt < 0) throw new Error('拼装结果里找不到本任务的指令起点');
+  const jsonText = content.slice(start + NATAL_BLOCK_HEAD.length, instrStart);
+  const keys = Object.keys(JSON.parse(jsonText));
+  return {
+    natalHead: content.slice(start, start + NATAL_BLOCK_HEAD.length),
+    // 过滤即断言：客户端natal若多出清单外的键，公共前缀会在服务器对不上的位置分叉
+    natalKeys: keys.filter((k) => NATAL_SHARED_KEYS.includes(k)),
+    instruction: content.slice(instrStart, rulesAt),
+    rules: content.slice(rulesAt, toneAt),
+    toneText: content.slice(toneAt),
+  };
+}
+
 export async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask, opts: AnalyzeOptions & { secret?: string } = {}): Promise<DeepSeekResult> {
-  const nonAi = record.nonAiResult;
   // 是否有任何一个通道填了凭据：决定「全部跳过」算未配置还是真失败(见函数末尾)。
   const anyCredential = opts.secret !== undefined || channelOrder().some((c) => !!getBrowserCredential(c.id));
+  // 按“当前使用通道 → 其余已配置通道”依次尝试；每个通道用各自的端点/模型/参数
+  // 按“当前使用通道 → 其余已配置通道”依次尝试；每个通道用各自的端点/模型/参数
+  const { content, isBaselineTask, isAdjustment, isOverview } = assembleUserContent(record, task, opts.tone);
+  const errors: string[] = [];
+  for (const channel of channelOrder()) {
+    const secret = opts.secret ?? getBrowserCredential(channel.id);
+    if (!secret) { errors.push(channel.label + '：未配置凭据'); continue; }
+    const payload: Record<string, unknown> = { model: channel.model, max_tokens: 32768, messages: [
+      { role: 'system', content: SYSTEM_SCOPE },
+      // Qwen 显式缓存：从 messages 开头到此标记为止的前缀会被做成缓存块，命中部分按输入价一折
+      // 计费(新建那次 1.25 倍)。命中的前提是这段前缀**逐字节相同** —— 实测(qwen-prefix-measure.test.ts)
+      // 一轮任务彼此共享 ≈1714 字全局公共前缀(natal + 各自指令之前的那一段)，同年流月与流年几乎整篇相同，
+      // 所以除第一条建缓存外全部命中。不打标记时走隐式缓存(命中率由平台决定)；打了就强制显式轨，短内容宁可不打。
+      { role: 'user', content: qwenCacheableContent(channel, content) },
+    ] };
+    if (channel.id === 'deepseek') payload.reasoning_effort = (isBaselineTask || isAdjustment || isOverview) ? 'high' : 'low';
+    if (channel.disableThinking) payload.enable_thinking = false;
+    if (channel.temperature !== undefined) payload.temperature = channel.temperature;
+    try {
+      const res = await fetch(channel.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + secret }, body: JSON.stringify(payload), signal: opts.signal });
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        errors.push(channel.label + '：' + classifyFailure(res.status, errText) + '（HTTP ' + res.status + '）');
+        continue;
+      }
+      const body = await res.json();
+      const raw = String(body?.choices?.[0]?.message?.content ?? '').trim();
+      if (!raw) { errors.push(channel.label + '：上游返回空正文（可能被内容过滤或达到输出上限）'); continue; }
+      const cleaned = raw.replace(/^```json?\\s*/i, '').replace(/```\\s*$/, '');
+      try { return { status: 'completed', analysis: JSON.parse(cleaned) as BaziAIAnalysis }; }
+      catch { errors.push(channel.label + '：输出不是合法 JSON'); continue; }
+    } catch (error) {
+      if (opts.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) return abortResult();
+      const msg = error instanceof Error ? error.message : '请求失败';
+      errors.push(channel.label + '：' + (/abort|timeout|timed out/i.test(msg) ? '网络超时或不可达' : msg));
+    }
+  }
+  // 三个通道一个都没填凭据：这是「未配置」，不是「分析失败」。旧实现在这里也返回
+  // failed，于是详情页挂着「余额不足/限流/网络超时」那一大段误导文案，还白跑两轮自动
+  // 重试(重试判定只看错误文本)，用户对着一个根本没配密钥的界面找密钥之外的原因。
+  if (!anyCredential) return { status: 'not_configured', error: errors.join('；') || '没有可用的通道凭据，请先在设置里配置' };
+  return { status: 'failed', error: errors.join('；') || '没有可用的通道凭据，请先在设置里配置' };
+}
+
+/** 按「提示词分段顺序」拼出某条任务的 user 正文。单独成函数是为了让测试能只拼装、不发请求，
+ *  直接拿它与服务器侧 buildTaskPayload 的正文比对 —— 两条路径不同源时，同一命盘会给出不同口径。 */
+function assembleUserContent(record: BaziRecord, task?: BaziAnalysisTask, tone?: number) {
+  const nonAi = record.nonAiResult;
   // 神煞压缩为「名称@柱位」：与服务器/桌面端同一口径(实测省约 89% 体积)
   const compactShenSha = (shenSha: NonAiChart['shenSha'] | undefined) => {
     if (!shenSha) return undefined;
@@ -213,6 +339,9 @@ export async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask,
     tenGods: nonAi?.tenGods, hiddenStems: nonAi?.hiddenStems,
     // 引擎算定的格局与旺衰：模型只解读不重判(与服务器/桌面端同口径)
     patternFacts: nonAi?.patternFacts, strengthScore: nonAi?.strengthScore,
+    // 调候：引擎按日主与月令季节算定的中文字符串(辅助判据)。与服务器 natal 同序：
+    //      紧随 strengthScore、先于 luckStart，否则跨通道公共前缀分叉(见 prompt-parity)。
+    tiaohouFacts: nonAi?.tiaohouFacts,
     luckStart: nonAi?.luckStart,
     shenSha: compactShenSha(nonAi?.shenSha), relationships: nonAi?.relationships,
   };
@@ -242,22 +371,23 @@ export async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask,
     : task?.type === 'monthly' ? String(task.year) + '年' + String(task.month) + '月'
     : task?.type === 'decade' ? '所处大运(含 ' + String(task.year) + ' 年)'
     : '本命';
-  // 公共前缀一律取模块级常量(逐字节一致)，可变内容按「变化频率从低到高」追加在后面。
+  // 缓存前缀只取决于「从哪一行开始分叉」，所以下面每个分支都必须以
+  // natalBlock + instruction + toneText 开头(顺序与标题不许各分支各写一份)，
+  // 之后才按「变化频率从低到高」追加可变内容。
   const instruction = isBaselineTask ? BASELINE_PREFIX : isAdjustment ? ADJUST_PREFIX : isOverview ? OVERVIEW_PREFIX : SCOPE_PREFIX;
-  const toneText = OUTPUT_RULES_TEXT + '\n\n# 语气要求(必须按此措辞把握全篇)\n' + toneInstructionText(opts.tone);
-  const natalBlock = '\n\n# 本命事实数据(JSON，只依据此数据)\n' + JSON.stringify(natal);
+  const toneText = INSTRUCTION_TAIL_MARK + OUTPUT_RULES_TEXT + TONE_HEAD + toneInstructionText(tone);
+  const natalBlock = NATAL_BLOCK_HEAD + JSON.stringify(natal);
   const summaryOf = () => String((task?.baseline as { summary?: string } | undefined)?.summary ?? '');
   let content: string;
   if (isBaselineTask) {
-    content = instruction + natalBlock + toneText;
+    content = natalBlock + instruction + toneText;
   } else if (isAdjustment) {
-    content = instruction
+    content = natalBlock + instruction + toneText
       + '\n\n# 本命结论(引擎已定，必须沿用，不得重算)\n' + summaryOf()
-      + natalBlock + toneText
       + '\n\n# 资料库(喜用五行)\n' + JSON.stringify(task?.guide ?? {})
       + '\n\n# 当前分析目标\n' + when;
   } else if (isOverview) {
-    content = instruction + natalBlock + toneText
+    content = natalBlock + instruction + toneText
       + '\n\n# 本命结论(引擎已定，必须沿用，不得重算)\n' + summaryOf()
       + '\n\n# 各时段分析要点(JSON)\n' + JSON.stringify(task?.findings ?? {})
       + '\n\n# 当前分析目标\n' + when;
@@ -273,50 +403,15 @@ export async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask,
       if (scope.age !== undefined) monthPart.age = scope.age;
     }
     const note = summaryOf();
-    content = instruction + natalBlock + toneText
+    content = natalBlock + instruction + toneText
       + (note ? '\n\n# 本命结论(引擎已定，必须沿用，不得重算或推翻)\n' + note : '')
       + '\n\n# 本年度运势数据(JSON)\n' + JSON.stringify(yearPart)
       + (task?.month !== undefined ? '\n\n# 本月运势数据(JSON)\n' + JSON.stringify(monthPart) : '')
       + '\n\n# 当前分析目标\n' + when;
   } else {
-    content = instruction + natalBlock + toneText;
+    content = natalBlock + instruction + toneText;
   }
-  // 按“当前使用通道 → 其余已配置通道”依次尝试；每个通道用各自的端点/模型/参数
-  const errors: string[] = [];
-  for (const channel of channelOrder()) {
-    const secret = opts.secret ?? getBrowserCredential(channel.id);
-    if (!secret) { errors.push(channel.label + '：未配置凭据'); continue; }
-    const payload: Record<string, unknown> = { model: channel.model, max_tokens: 32768, messages: [
-      { role: 'system', content: SYSTEM_SCOPE },
-      { role: 'user', content },
-    ] };
-    if (channel.id === 'deepseek') payload.reasoning_effort = (isBaselineTask || isAdjustment || isOverview) ? 'high' : 'low';
-    if (channel.disableThinking) payload.enable_thinking = false;
-    if (channel.temperature !== undefined) payload.temperature = channel.temperature;
-    try {
-      const res = await fetch(channel.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + secret }, body: JSON.stringify(payload), signal: opts.signal });
-      if (!res.ok) {
-        const errText = await res.text().catch(() => '');
-        errors.push(channel.label + '：' + classifyFailure(res.status, errText) + '（HTTP ' + res.status + '）');
-        continue;
-      }
-      const body = await res.json();
-      const raw = String(body?.choices?.[0]?.message?.content ?? '').trim();
-      if (!raw) { errors.push(channel.label + '：上游返回空正文（可能被内容过滤或达到输出上限）'); continue; }
-      const cleaned = raw.replace(/^```json?\\s*/i, '').replace(/```\\s*$/, '');
-      try { return { status: 'completed', analysis: JSON.parse(cleaned) as BaziAIAnalysis }; }
-      catch { errors.push(channel.label + '：输出不是合法 JSON'); continue; }
-    } catch (error) {
-      if (opts.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) return abortResult();
-      const msg = error instanceof Error ? error.message : '请求失败';
-      errors.push(channel.label + '：' + (/abort|timeout|timed out/i.test(msg) ? '网络超时或不可达' : msg));
-    }
-  }
-  // 三个通道一个都没填凭据：这是「未配置」，不是「分析失败」。旧实现在这里也返回
-  // failed，于是详情页挂着「余额不足/限流/网络超时」那一大段误导文案，还白跑两轮自动
-  // 重试(重试判定只看错误文本)，用户对着一个根本没配密钥的界面找密钥之外的原因。
-  if (!anyCredential) return { status: 'not_configured', error: errors.join('；') || '没有可用的通道凭据，请先在设置里配置' };
-  return { status: 'failed', error: errors.join('；') || '没有可用的通道凭据，请先在设置里配置' };
+  return { content, isBaselineTask, isAdjustment, isOverview };
 }
 
 /* ---------- 聊天直连(排盘页「问问 AI」备用通道)：纯文本输出，不要求 JSON ---------- */
@@ -330,7 +425,9 @@ export async function chatDirect(messages: Array<{ role: string; content: string
     const secret = getBrowserCredential(channel.id);
     if (!secret) { errors.push(channel.label + '：未配置凭据'); continue; }
     hasCredential = true;
-    const payload: Record<string, unknown> = { model: channel.model, max_tokens: 8192, messages };
+    const payload: Record<string, unknown> = { model: channel.model, max_tokens: 8192, messages: messages.map((m) => (
+      m.role === 'user' ? { ...m, content: qwenCacheableContent(channel, String(m.content ?? '')) } : m
+    )) };
     if (channel.id === 'deepseek') payload.reasoning_effort = 'high'; // 聊天走思考模式，答复更有依据
     if (channel.disableThinking) payload.enable_thinking = false;
     if (channel.temperature !== undefined) payload.temperature = channel.temperature;

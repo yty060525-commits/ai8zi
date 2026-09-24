@@ -76,11 +76,12 @@ export const apiAuth = {
 export const apiRecords = {
   list: async () => (await serverFetch<{ records: BaziRecord[] }>('/records')).data.records,
   get: async (id: string) => (await serverFetch<{ record: BaziRecord }>('/records/' + encodeURIComponent(id))).data.record,
-  /** 整条覆盖(记录必须已在服务器上存在；新建请用 create)。 */
-  upsert: async (record: BaziRecord) => (await serverFetch<{ record: BaziRecord }>('/records/' + encodeURIComponent(record.id), { method: 'PUT', body: record })).data.record,
+  /** 整条覆盖(记录必须已在服务器上存在；新建请用 create)。不回读服务器那份落库行：
+   *  它是瘦身 + 白名单列的产物，调用方拿它当「最新数据」会把本机的 toneUsed/AI 结果比没了。 */
+  upsert: async (record: BaziRecord) => { await serverFetch('/records/' + encodeURIComponent(record.id), { method: 'PUT', body: record }); },
   /** 新建一盘。服务器的 PUT 对不存在的 id 直接回 404「记录不存在」，只有 POST 会建行，
    *  所以离线建的盘第一次上传必须走这里 —— 旧实现全用 PUT，结果每条都 404、永远标着未同步。 */
-  create: async (record: BaziRecord) => (await serverFetch<{ record: BaziRecord }>('/records', { method: 'POST', body: record })).data.record,
+  create: async (record: BaziRecord) => { await serverFetch('/records', { method: 'POST', body: record }); },
   remove: async (id: string) => { await serverFetch('/records/' + encodeURIComponent(id), { method: 'DELETE' }); },
   /** 清掉服务器为该命盘(性别+四柱)缓存的 AI 结果。只需 id，签名由服务器按库内记录算。 */
   clearChartCache: async (record: Pick<BaziRecord, 'id'>) => {

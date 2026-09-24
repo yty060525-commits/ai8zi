@@ -26,7 +26,7 @@ const okAnalysis = { pattern: 'x', strength: '强', usefulElements: [], avoidEle
 
 describe('task layout: 本命 + 未来十年 + 滚动12个月(+大运) + 末条全盘总结', () => {
   it('builds 23 tasks without great fortunes', () => {
-    const tasks = buildBaziTasks({ ...record, createdAt: '2025-06-30T23:00:00.000Z', nonAiResult: undefined });
+    const tasks = buildBaziTasks({ ...record, createdAt: '2025-06-30T23:00:00.000Z', nonAiResult: undefined }, new Date('2025-06-15T00:00:00.000Z'));
     expect(tasks).toHaveLength(23);
     expect(tasks[0]).toEqual(expect.objectContaining({ taskId: 'task-01', type: 'baseline' }));
     expect(tasks.slice(1, 11).map((t) => [t.taskId, t.type, t.year])).toEqual(Array.from({ length: 10 }, (_, i) => [`task-${String(i + 2).padStart(2, '0')}`, 'annual', 2025 + i]));
@@ -34,31 +34,44 @@ describe('task layout: 本命 + 未来十年 + 滚动12个月(+大运) + 末条�
     expect(tasks.some((t) => t.type === 'synthesis')).toBe(false);
   });
 
-  it('monthly tasks are the next 12 calendar months starting at the record month', () => {
-    const tasks = buildBaziTasks({ ...record, createdAt: '2025-01-01T00:00:00.000Z' });
+  it('monthly tasks are the next 12 calendar months starting today', () => {
+    const tasks = buildBaziTasks({ ...record, createdAt: '2025-01-01T00:00:00.000Z' }, new Date('2025-01-01T00:00:00.000Z'));
     const months = tasks.filter((t) => t.type === 'monthly');
     expect(months).toHaveLength(12);
     expect(months.map((t) => [t.year, t.month])).toEqual(Array.from({ length: 12 }, (_, i) => [2025, i + 1]));
     // 起点跨年示例：2025-06 起 → 2025-06..2026-05
-    const tasks2 = buildBaziTasks({ ...record, createdAt: '2025-06-15T00:00:00.000Z', nonAiResult: undefined });
+    const tasks2 = buildBaziTasks({ ...record, createdAt: '2025-06-15T00:00:00.000Z', nonAiResult: undefined }, new Date('2025-06-15T00:00:00.000Z'));
     const months2 = tasks2.filter((t) => t.type === 'monthly');
     expect(months2[0]).toMatchObject({ year: 2025, month: 6 });
     expect(months2[11]).toMatchObject({ year: 2026, month: 5 });
   });
 
-  it('adds one decade task per great-fortune covering the next ten years', () => {
+  it('窗口跟着「今天」走：去年建的盘不再摆出去年的月份，未来建的盘才按建盘时间', () => {
+    const old = { ...record, createdAt: '2025-03-10T04:00:00.000Z', nonAiResult: undefined };
+    const today = new Date('2026-09-23T04:00:00.000Z');
+    const months = buildBaziTasks(old, today).filter((t) => t.type === 'monthly');
+    expect(months[0]).toMatchObject({ year: 2026, month: 9 });
+    expect(months[11]).toMatchObject({ year: 2027, month: 8 });
+    expect(buildBaziTasks(old, today).filter((t) => t.type === 'annual')[0]).toMatchObject({ year: 2026 });
+    // 时钟还没走到建盘时间(测试/预建盘)：仍按 createdAt 排，行为可复现
+    const future = buildBaziTasks({ ...old, createdAt: '2027-02-05T04:00:00.000Z' }, today).filter((t) => t.type === 'monthly');
+    expect(future[0]).toMatchObject({ year: 2027, month: 2 });
+  });
+
+  it('大运任务只排还没走到的运：正在走的那一运不占槽位', () => {
     const withDecades: BaziRecord = { ...record, nonAiResult: { forecastRange: Array.from({ length: 10 }, (_, i) => 2025 + i), greatFortunes: [{ ganZhi: '辛未', startYear: 2017, endYear: 2026 }, { ganZhi: '壬申', startYear: 2027, endYear: 2036 }], annualFortunes: [], monthlyFortunes: [] } as unknown as BaziRecord['nonAiResult'] };
-    const tasks = buildBaziTasks(withDecades);
-    expect(tasks).toHaveLength(25);
+    // 固定时刻：2026 年正走「辛未(2017-2026)」，它属于过去/现在，不进任务；下一运才进。
+    const tasks = buildBaziTasks(withDecades, new Date('2026-06-15T00:00:00.000Z'));
+    expect(tasks).toHaveLength(24);
     const decades = tasks.filter((t) => t.type === 'decade');
-    expect(decades.map((t) => [t.taskId, t.year])).toEqual([['task-24', 2017], ['task-25', 2027]]);
+    expect(decades.map((t) => [t.taskId, t.year])).toEqual([['task-24', 2027]]);
   });
 
   it('runs baseline → years/months → decades and persists everything', async () => {
     const calls: string[] = [];
-    const withDecades: BaziRecord = { ...record, nonAiResult: { forecastRange: Array.from({ length: 10 }, (_, i) => 2025 + i), greatFortunes: [{ ganZhi: '辛未', startYear: 2017, endYear: 2026 }], annualFortunes: [], monthlyFortunes: [] } as unknown as BaziRecord['nonAiResult'] };
+    const withDecades: BaziRecord = { ...record, nonAiResult: { forecastRange: Array.from({ length: 10 }, (_, i) => 2025 + i), greatFortunes: [{ ganZhi: '壬申', startYear: 2027, endYear: 2036 }], annualFortunes: [], monthlyFortunes: [] } as unknown as BaziRecord['nonAiResult'] };
     const result = await orchestrateBaziAnalysis(withDecades, async (task) => { calls.push(task.taskId); return { task, status: 'completed', analysis: { ...okAnalysis, explanation: task.type === 'overview' ? OVERVIEW_TEXT_FULL : okText } }; });
-    // 23 基础任务 + 1 大运 + 1 全盘总结 = 25
+    // 23 基础任务 + 1 大运(起点晚于窗口起点的下一运) + 1 全盘总结 = 25
     expect(calls.length).toBe(25);
     expect(calls[0]).toBe('task-01');
     expect(calls).toContain('task-24'); // 大运任务已跑
@@ -211,7 +224,9 @@ describe('auto retry on failed tasks', () => {
 });
 
 describe('全盘总结任务(task-31)', () => {
-  const richRecord: BaziRecord = { ...record, nonAiResult: { forecastRange: Array.from({ length: 10 }, (_, i) => 2025 + i), greatFortunes: [{ ganZhi: '辛未', startYear: 2025, endYear: 2034 }], annualFortunes: [], monthlyFortunes: [] } as unknown as BaziRecord['nonAiResult'] };
+  // 窗口现在按「今天」排；这几条总结用例固定在同一时刻，避免随真实日期漂移
+  const HORIZON = new Date('2025-01-01T00:00:00.000Z');
+  const richRecord: BaziRecord = { ...record, nonAiResult: { forecastRange: Array.from({ length: 10 }, (_, i) => 2025 + i), greatFortunes: [{ ganZhi: '辛未', startYear: 2027, endYear: 2036 }], annualFortunes: [], monthlyFortunes: [] } as unknown as BaziRecord['nonAiResult'] };
 
   const OVERVIEW_TEXT = '【核心结论】1. 命局主线清晰。\n【值得关注的时间节点】1. 2027年(丙午)：官星得力，是机会窗口。\n【行动建议】1. 抓住上半年。';
 
@@ -220,7 +235,7 @@ describe('全盘总结任务(task-31)', () => {
     const result = await orchestrateBaziAnalysis(richRecord, async (task) => {
       calls.push(task.taskId);
       return { task, status: 'completed', analysis: { ...okAnalysis, explanation: task.type === 'overview' ? OVERVIEW_TEXT : '【健康】1. 注意作息。' } };
-    });
+    }, undefined, { now: HORIZON });
     expect(calls[calls.length - 1]).toBe('task-31');
     expect(calls.filter((id) => id === 'task-31')).toHaveLength(1);
     expect(result.aiOverview?.explanation).toContain('值得关注的时间节点');
@@ -233,7 +248,7 @@ describe('全盘总结任务(task-31)', () => {
       const bad = task.type === 'overview' && overviewAttempts === 1;
       // 第一次只给出两段(缺【行动建议】) —— 带小节但缺段才会触发结构重写
       return { task, status: 'completed', analysis: { ...okAnalysis, explanation: bad ? '【核心结论】1. 主线。\n【值得关注的时间节点】1. 2027年(丙午)机会窗口。' : task.type === 'overview' ? OVERVIEW_TEXT : '【健康】1. 注意作息。' } };
-    });
+    }, undefined, { now: HORIZON });
     expect(overviewAttempts).toBe(2);            // 缺段 → 自动再来一次
     expect(result.aiOverview?.explanation).toContain('【行动建议】'); // 落库的是补全后的版本
   });
@@ -243,7 +258,7 @@ describe('全盘总结任务(task-31)', () => {
     await orchestrateBaziAnalysis(richRecord, async (task) => {
       if (task.type === 'overview') captured = task;
       return { task, status: 'completed', analysis: { ...okAnalysis, explanation: task.type === 'overview' ? '【核心结论】1. 主线。\n【值得关注的时间节点】1. 2027年(丙午)机会窗口。\n【行动建议】1. 抓上半年。' : '【事业】1. 有升迁机会。' } };
-    });
+    }, undefined, { now: HORIZON });
     expect(captured).toBeTruthy();
     expect(String((captured!.baseline as { summary?: string }).summary)).toContain('格局：x');
     expect(captured!.findings?.annuals.length).toBeGreaterThan(0);

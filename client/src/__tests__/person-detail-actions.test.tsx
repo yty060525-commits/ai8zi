@@ -71,14 +71,15 @@ describe('PersonDetail AI 复制筛选/清除交互', () => {
 
 describe('大运标题去掉“起”前缀', () => {
   it('renders decade item as 干支 大运段(区间) without “X 起” prefix', async () => {
-    const withDecade: BaziRecord = { ...mockPersonDetails[0].record, nonAiResult: { ...mockPersonDetails[0].record.nonAiResult!, greatFortunes: [{ ganZhi: '庚子', startYear: 2020, endYear: 2029, relationships: { sanHe: [], liuHe: [], chong: [], xing: [], hai: [], po: [], ke: [] } }] }, aiTasks: { 'task-01': { task: { taskId: 'task-01', type: 'decade', year: 2020 }, status: 'completed', analysis: { pattern: '', strength: '', usefulElements: [], avoidElements: [], explanation: '【事业】顺遂。' } } } };
+    const withDecade: BaziRecord = { ...mockPersonDetails[0].record, createdAt: new Date(Date.UTC(2025, 0, 1)).toISOString(), nonAiResult: { ...mockPersonDetails[0].record.nonAiResult!, greatFortunes: [{ ganZhi: '庚子', startYear: 2020, endYear: 2029, relationships: { sanHe: [], liuHe: [], chong: [], xing: [], hai: [], po: [], ke: [] } }] }, aiTasks: { 'task-01': { task: { taskId: 'task-01', type: 'decade', year: 2020 }, status: 'completed', analysis: { pattern: '', strength: '', usefulElements: [], avoidElements: [], explanation: '【事业】顺遂。' } } } };
     initializeMockSession(
       [{ id: 'copy-person', name: '复制测试', nameInitial: 'C', gender: 'male', birthSummary: 'x' }],
       [{ person: { id: 'copy-person', name: '复制测试', nameInitial: 'C', gender: 'male', birthSummary: 'x' }, record: withDecade, aiAnalysis: { status: 'completed' } }],
     );
     render(<PersonDetail personId="copy-person" onBack={vi.fn()} />);
     await screen.findByRole('heading', { name: '人物详情' });
-    await waitFor(() => expect(document.body.textContent).toContain('庚子 大运段(2025-2029)'));
+    await waitFor(() => expect(document.body.textContent).toContain('庚子 大运段(2020-2029)'));
+    // 区间不再被窗口截剩尾巴，标题就是这一运本来的十年
     expect(document.body.textContent).not.toMatch(/大运：2020|2020 起|2020年起|起（约十年）/);
   });
 });

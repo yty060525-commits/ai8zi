@@ -1,5 +1,6 @@
-import { describe, expect, it, afterEach } from 'vitest';
+import { describe, expect, it, afterEach, vi } from 'vitest';
 import { configureBaziRepository, memoryBaziRepository, saveBaziRecord, getBaziRecord, listBaziRecords, pruneRecord, hydrateRecord } from '../data/clientRepository';
+import { buildBaziTasks } from '../data/baziOrchestrator';
 import { calculateNonAi } from '../features/chart/nonAiCalculator';
 import type { BaziRecord } from '../types/domain';
 
@@ -38,9 +39,11 @@ describe('storage slimming (prune/hydrate)', () => {
     expect(restored.nonAiResult!.greatFortunes).toHaveLength(9);
     expect(restored.nonAiResult!.annualFortunes).toHaveLength(10);
     expect(restored.nonAiResult!.monthlyFortunes).toHaveLength(120);
-    expect(restored.nonAiResult!.annualFortunes[0].ganZhi).toBe(original.nonAiResult!.annualFortunes[0].ganZhi);
+    // 流年窗口锚在「重算这一刻的今年」而不是建盘那一年：跨年存量必须整组平移到今年，
+    // 否则任务列表最后一年的干支查不到(界面上「2035 年流年」空一截)。
+    expect(restored.nonAiResult!.annualFortunes[0].year).toBe(new Date().getFullYear());
     expect(restored.nonAiResult!.greatFortunes[0].ganZhi).toBe('丁卯');
-    expect(restored.nonAiResult!.forecastRange).toEqual(original.nonAiResult!.forecastRange);
+    expect(restored.nonAiResult!.forecastRange).toHaveLength(10);
     expect(restored.nonAiResult!.elements).toEqual(original.nonAiResult!.elements);
   });
 
@@ -60,6 +63,28 @@ describe('storage slimming (prune/hydrate)', () => {
     const malformed = { ...fullRecord(), yearPillar: '', monthPillar: '', dayPillar: '', hourPillar: '', nonAiResult: { ...pruneRecord(fullRecord()).nonAiResult! } };
     const out = await hydrateRecord(malformed);
     expect(out.nonAiResult!.annualFortunes).toHaveLength(0); // 不重算也不崩
+  });
+
+  it('跨年存量重算后，流年窗口仍与任务列表对齐(不出现无干支的最后一年)', async () => {
+    // 回归：存储里那份数组是「建盘那一年起十年」，而任务列表按今天排十年。两个锚点各自为政时，
+    // 2025 年建的盘到 2026 年只剩 2026-2034 有干支，界面上「2035 年流年 · 年龄约 45 岁」整行空掉。
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-23T12:00:00.000Z'));
+    try {
+      const restored = await hydrateRecord(pruneRecord(fullRecord())); // createdAt 是 2025-03-08
+      const years = restored.nonAiResult!.annualFortunes.map((item) => item.year);
+      expect(years[0]).toBe(2026);
+      // 任务列表要的每一年都必须查得到干支 —— 这正是空那一行的判据
+      for (const task of buildBaziTasks(restored)) {
+        if (task.type !== 'annual' || task.year === undefined) continue;
+        const hit = restored.nonAiResult!.annualFortunes.find((item) => item.year === task.year);
+        expect(hit?.ganZhi, `缺少 ${task.year} 年流年干支`).toBeTruthy();
+      }
+      // 流月同批平移，否则「未来十二个月」整组查不到
+      expect(restored.nonAiResult!.monthlyFortunes.some((m) => m.year === 2026 && m.month === 9)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('老库里的错误五行计数在读列表时被校正并回写(子属水不作木)', async () => {

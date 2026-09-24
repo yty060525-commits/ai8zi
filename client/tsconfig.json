@@ -19,5 +19,7 @@
     "jsx": "react-jsx"
   },
   "include": ["src"],
+  // helpers/ 是给 node --test 用的取样器(靠 Node 类型剥离运行，参数保持隐式 any)，不参与 tsc 构建
+  "exclude": ["src/__tests__/helpers"],
   "references": []
 }

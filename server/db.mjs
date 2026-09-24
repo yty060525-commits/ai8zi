@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS records (
   day_pillar TEXT NOT NULL, hour_pillar TEXT NOT NULL,
   non_ai_result TEXT, ai_status TEXT NOT NULL DEFAULT 'not_started',
   ai_analysis TEXT, ai_overview TEXT, ai_error TEXT, ai_tasks TEXT,
+  tone_used INTEGER,
   updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -47,10 +48,17 @@ CREATE INDEX IF NOT EXISTS idx_cache_chart_sig ON ai_cache(chart_sig);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 `);
   migrateChartSig(db);
+  migrateToneUsed(db);
   return db;
 }
 
 /** 老库升级：ai_cache 缺 chart_sig 列时补列，并从存量 cache_key 回填派生值。 */
+/** 老库升级：records 缺 tone_used 时补列。生成 AI 结果用的语气档必须存得下来 —— 之前它不属于任何一列，
+ *  换一台设备回读后语气滑杆会谎报成默认值，还会把本机已有的完整结果当成「改了语气」清掉重算。 */
+function migrateToneUsed(db) {
+  const cols = db.prepare("SELECT name FROM pragma_table_info('records')").all().map((r) => r.name);
+  if (!cols.includes('tone_used')) db.exec('ALTER TABLE records ADD COLUMN tone_used INTEGER');
+}
 function migrateChartSig(db) {
   const cols = db.prepare('SELECT name FROM pragma_table_info(\'ai_cache\')').all().map((r) => r.name);
   if (!cols.includes('chart_sig')) db.exec('ALTER TABLE ai_cache ADD COLUMN chart_sig TEXT');
@@ -121,7 +129,7 @@ export const setSetting = (db, key, value) => {
 export const deleteSetting = (db, key) => { db.prepare('DELETE FROM settings WHERE key=?').run(key); };
 
 /* ---------- records ---------- */
-const RECORD_COLS = ['id','user_id','name','gender','birth_year','birth_month','created_at','year_pillar','month_pillar','day_pillar','hour_pillar','non_ai_result','ai_status','ai_analysis','ai_overview','ai_error','ai_tasks','updated_at'];
+const RECORD_COLS = ['id','user_id','name','gender','birth_year','birth_month','created_at','year_pillar','month_pillar','day_pillar','hour_pillar','non_ai_result','ai_status','ai_analysis','ai_overview','ai_error','ai_tasks','tone_used','updated_at'];
 const parseJsonCol = (v) => (v == null ? undefined : JSON.parse(v));
 /** DB 行 -> 客户端 BaziRecord(驼峰, JSON 对象还原) */
 export function rowToRecord(row) {
@@ -135,6 +143,7 @@ export function rowToRecord(row) {
     aiStatus: row.ai_status, aiAnalysis: parseJsonCol(row.ai_analysis),
     aiOverview: parseJsonCol(row.ai_overview), aiError: row.ai_error,
     aiTasks: parseJsonCol(row.ai_tasks),
+    toneUsed: row.tone_used == null ? undefined : Number(row.tone_used),
     updatedAt: row.updated_at,
   };
 }
@@ -152,6 +161,7 @@ export function recordToRow(record) {
     record.aiOverview ? JSON.stringify(record.aiOverview) : null,
     record.aiError ?? null,
     record.aiTasks ? JSON.stringify(record.aiTasks) : null,
+    record.toneUsed ?? null,
     now,
   ];
 }

@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { openDatabase, insertRecord, getRecordById, writeCache, readCache, clearChartCache } from '../db.mjs';
-import { analyzeQuestion, extractWhen, sliceSections, collectEvidence, buildChatMessages, chatCacheKey, applyFollowUp, runChat, sanitizeChatText, FIELD_NAME_ZH, SCAN_YEARS } from '../chat.mjs';
+import { analyzeQuestion, extractWhen, sliceSections, cutAtBoundary, collectEvidence, buildChatMessages, chatCacheKey, applyFollowUp, runChat, sanitizeChatText, FIELD_NAME_ZH, SCAN_YEARS } from '../chat.mjs';
 import { saveProviderKey, cacheKey } from '../ai.mjs';
 import { createApp } from '../app.mjs';
 
@@ -53,6 +53,83 @@ describe('提问理解(检索计划)', () => {
     assert.equal(plan.scan, false);
     assert.equal(plan.year, undefined);
   });
+  /* 用户实测报的现象：「我告诉他这个月失业，他回答我没有24年信息」。
+     根因不在模型而在检索层 —— 旧正则只吃 20\d{2}，「24年」解不出 → applyFollowUp 把上一轮年份
+     继承过来 → 递给模型的证据全是另一年的批断，它说「没有那一年的信息」其实是老实话。 */
+  test('两位年份缩写按当代区间回推：24年→2024、84年→1984(不再退化成"没有信息")', () => {
+    assert.equal(analyzeQuestion('24年我失业了', [], now).year, 2024);
+    assert.equal(analyzeQuestion('那84年呢', [], now).year, 1984);
+    assert.equal(analyzeQuestion('27年适合跳槽吗', [], now).year, 2027);
+    assert.equal(analyzeQuestion('2024年我换工作', [], now).year, 2024);
+    // 四位数照原样取，二次加工会把 1998 变成 2998
+    assert.equal(analyzeQuestion('1998年出生的今年运势', [], now).year, 2026);
+  });
+  test('汉字月份与「年+月」复合问法都要落地(旧写法整段丢掉月份)', () => {
+    assert.deepEqual(extractWhen('明年三月运势如何', now), { year: 2027, month: 3 });
+    assert.deepEqual(extractWhen('三月份要注意什么', now), { year: 2026, month: 3 });
+    assert.deepEqual(extractWhen('十一月适合跳槽吗', now), { year: 2026, month: 11 });
+    assert.deepEqual(extractWhen('去年11月被裁的', now), { year: 2025, month: 11 });
+    assert.equal(extractWhen('十一月财运', now).month, 11, '「十一月」不得被 `一月` 抢先切成 十+残留');
+  });
+  test('时间锚点在从句里也取得到；年月解析先于 scan 判定(顺序即正确性)', () => {
+    const plan = analyzeQuestion('我本月失业了，接下来财运怎么样', [], now);
+    assert.deepEqual({ year: plan.year, month: plan.month }, { year: 2026, month: 9 });
+    // 句中已有年份/月份锚点时绝不转扫年，否则精确取证会被整段跳过
+    const both = analyzeQuestion('明年三月什么时候发工资', [], now);
+    assert.deepEqual({ year: both.year, month: both.month, scan: both.scan }, { year: 2027, month: 3, scan: false });
+    /* 真正的判别式：没有相对年份、却同时出现「开放式问时机」和明确月份。
+       「明年三月…」那例靠 RELATIVE_YEAR 先把 year 填上，旧顺序的早退分支根本进不去，
+       所以它测不出顺序；只有 year 仍为空时，month 有没有先解析才决定走精确还是扫年。 */
+    const m = analyzeQuestion('什么时候三月能见分晓', [], now);
+    assert.deepEqual({ year: m.year, month: m.month, scan: m.scan }, { year: 2026, month: 3, scan: false });
+    const n = analyzeQuestion('我下个月什么时候能脱单', [], now);
+    assert.deepEqual({ year: n.year, month: n.month, scan: n.scan }, { year: 2026, month: 10, scan: false });
+    // 反例：确实只有开放式时机词 → 仍须转扫年，别把这条修成永不扫年
+    const s = analyzeQuestion('什么时候能升职', [], now);
+    assert.equal(s.scan, true);
+    assert.equal(s.scanFrom, 2026);
+  });
+  test('泛问识别：没主题词但在问整体 → general=true；点了具体主题则不算泛问', () => {
+    assert.equal(analyzeQuestion('我这个人整体怎么样', [], now).general, true);
+    assert.equal(analyzeQuestion('接下来运势如何', [], now).general, true);
+    const mingge = analyzeQuestion('我的命格如何', [], now);
+    assert.deepEqual(mingge.topics, ['格局']);
+    assert.equal(mingge.general, false);
+    assert.equal(analyzeQuestion('那具体呢', [], now).general, false);
+  });
+});
+
+/* ---------- 泛问取证铺开 ---------- */
+describe('泛问取证(答不到点子上的主因)', () => {
+  const richRecord = {
+    id: 'rg', userId: 'ug', name: '甲木', gender: 'male', birthYear: 1984, birthMonth: 2, createdAt: '2025-01-01',
+    yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午',
+    nonAiResult: { greatFortunes: [], annualFortunes: [], monthlyFortunes: [] }, aiStatus: 'completed',
+    aiTasks: {
+      t1: { task: { type: 'baseline' }, status: 'completed', analysis: { explanation: '【身强身弱与喜忌】1. 金弱。\n【核心结论】2. 一生宜稳。' } },
+      t2: { task: { type: 'overview' }, status: 'completed', analysis: { explanation: '【核心结论】甲.\n【值得关注的时间节点】乙.\n【行动建议】丙.' } },
+      t3: { task: { type: 'adjustment' }, status: 'completed', analysis: { explanation: '【后天调整】丁.\n【事业适配】戊.\n【健康注意】己.' } },
+    },
+  };
+  test('topics 空 + general → 三份证据都给，并附本盘已有小节清单', () => {
+    const d = openDatabase(':memory:');
+    insertRecord(d, richRecord);
+    const ev = collectEvidence(d, getRecordById(d, 'rg'), { topics: [], general: true }, { providers: [] });
+    assert.deepEqual(ev.analyses.map((a) => a.heading), ['本命批断', '后天调整与职业', '全盘总结']);
+    assert.ok(ev.sectionIndex?.includes('事业适配'), '小节清单应含【事业适配】');
+    assert.ok(ev.sectionIndex?.includes('核心结论'));
+    const last = buildChatMessages({ question: '我这个人整体怎么样', history: [], evidence: ev, tone: 80 }).slice(-1)[0].content;
+    assert.ok(last.includes('# 本盘已算出的批断小节'));
+    assert.ok(last.indexOf('本盘已算出的批断小节') < last.indexOf('# 语气要求'), '清单在语气之前、证据之后');
+    d.close();
+  });
+  test('非泛问的空主题不给小节清单(不把三份长证据无差别铺开)', () => {
+    const d = openDatabase(':memory:');
+    insertRecord(d, richRecord);
+    const ev = collectEvidence(d, getRecordById(d, 'rg'), { topics: [], general: false }, { providers: [] });
+    assert.equal(ev.sectionIndex, undefined);
+    d.close();
+  });
 });
 
 /* ---------- 追问继承上文 ---------- */
@@ -82,6 +159,35 @@ describe('追问继承上文(防复读)', () => {
     const base = analyzeQuestion('2026年爱情如何', [{ id: 'a', name: '张三' }], now);
     assert.deepEqual(applyFollowUp(base, []), base);
   });
+  /* 人名继承：不传 summaries 时整段对话会锁死在第一个命主上 —— 「那她呢」答的还是上一个人。 */
+  const people = [{ id: 'a', name: '张三' }, { id: 'b', name: '张三丰' }];
+  const personHist = [{ role: 'user', content: '张三丰2026年爱情如何' }, { role: 'assistant', content: '【爱情】平顺。' }];
+  test('短追问没点人名 → 沿用上一轮命主(往前找最近一条点过名字的消息)', () => {
+    const plan = applyFollowUp(analyzeQuestion('那她呢', people, now), personHist, people);
+    assert.deepEqual({ recordId: plan.recordId, personName: plan.personName }, { recordId: 'b', personName: '张三丰' });
+    assert.deepEqual(plan.topics, ['爱情']);
+    assert.equal(plan.year, 2026);
+  });
+  test('本轮自己点了别人的名字 → 换人，不被上文锁住', () => {
+    const plan = applyFollowUp(analyzeQuestion('换成张三的事业呢', people, now), personHist, people);
+    assert.deepEqual({ recordId: plan.recordId, personName: plan.personName }, { recordId: 'a', personName: '张三' });
+    assert.deepEqual(plan.topics, ['事业']);
+  });
+  test('继承了具体主题后不再按泛问铺开(否则一句「那她呢」塞三份长证据)', () => {
+    const generalPlan = analyzeQuestion('她整体怎么样', people, now);
+    assert.equal(generalPlan.general, true);
+    // 上一轮必须是**带主题词**的提问，继承才会生效；用无主题的泛问上文测不出这条互斥
+    const careerHist = [{ role: 'user', content: '张三丰2026年爱情如何' }, { role: 'assistant', content: '【爱情】平顺。' }];
+    const plan = applyFollowUp(generalPlan, careerHist, people);
+    assert.deepEqual(plan.topics, ['爱情'], '应继承上一轮的具体主题');
+    assert.equal(plan.general, false, '有具体主题时不得再按泛问铺开');
+    // 反例：上文本身也是泛问 → 没有主题可继承，才保持泛问。
+    // 追问句自己也要含泛问线索(「那她整体呢」)：只说「那她呢」时本轮没有任何泛问信号，
+    // 按设计不铺开三份长证据 —— 那是「指代不清」该走澄清，不是该把全盘端出来。
+    const generalHist = [{ role: 'user', content: '他这个人整体如何' }, { role: 'assistant', content: '【核心结论】稳。' }];
+    assert.equal(applyFollowUp(analyzeQuestion('那她整体呢', people, now), generalHist, people).general, true);
+    assert.equal(applyFollowUp(analyzeQuestion('那她呢', people, now), generalHist, people).general, false);
+  });
 });
 
 /* ---------- 证据摘录 ---------- */
@@ -102,6 +208,21 @@ describe('查库取证', () => {
     assert.ok(out.includes('【健康】'));
     assert.equal(out.includes('【事业】'), false);
   });
+  test('cutAtBoundary：超长正文退到句末/换行收口，不腰斩半句(旧 .slice 会把结论切一半)', () => {
+    const s = '1. 今年是机会窗口，宜主动争取。\n2. 明年有变动之象需要谨慎应对以防破财失';
+    const out = cutAtBoundary(s, 20);
+    assert.ok(out.length <= 20, '不得超过上限');
+    assert.ok(out.includes('机会窗口'), out);
+    assert.ok(!out.includes('明年'), '超出上限的下一条不得被腰斩带入：' + out);
+    assert.ok(out.endsWith('。'), '应在句末标点收口而非停在半句：' + out);
+  });
+  test('cutAtBoundary：整段无句读时才切满；小节体也走同一收口', () => {
+    assert.equal(cutAtBoundary('甲'.repeat(30), 10), '甲'.repeat(10), '无句读可读时退回切满上限');
+    const sec = '【身强身弱与喜忌】1. 得令，助身方六十分。\n2. 此条一直写到远超上限仍不见标点啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊';
+    const out = sliceSections(sec, ['身强身弱与喜忌'], 24);
+    assert.ok(out.includes('1. 得令'), out);
+    assert.ok(!out.includes('啊啊'), '超长小节体应在句读处收口，不带入被砍断的半条：' + out);
+  });
   test('问年份：取该年流年批断；库中没有的年份写进数据缺口提示', () => {
     const db = openDatabase(':memory:');
     insertRecord(db, baseRecord);
@@ -111,6 +232,28 @@ describe('查库取证', () => {
     assert.ok(ev26.analyses.find((a) => a.heading.includes('流年')).text.includes('有升迁'));
     const ev27 = collectEvidence(db, rec, { year: 2027, topics: [] }, { providers: [] });
     assert.ok(ev27.missing.some((m) => m.includes('2027')));
+    db.close();
+  });
+  test('大运按「覆盖年」取证：问起运年以外的中段/止运年，也要端出所处大运批断', () => {
+    const db = openDatabase(':memory:');
+    // 大运任务按「起运年 2025」存，但 丙寅 运覆盖 2025-2034；旧代码只在问 2025 时命中，其余九年静默丢失。
+    insertRecord(db, { ...baseRecord,
+      nonAiResult: { ...baseRecord.nonAiResult, greatFortunes: [
+        { ganZhi: '乙丑', startYear: 2015, endYear: 2024 },
+        { ganZhi: '丙寅', startYear: 2025, endYear: 2034 },
+      ] },
+      aiTasks: { ...baseRecord.aiTasks,
+        'task-24': { task: { taskId: 'task-24', type: 'decade', year: 2025 }, status: 'completed', analysis: { explanation: '【事业】丙寅运十年上升期。' } },
+        'task-08': { task: { taskId: 'task-08', type: 'annual', year: 2029 }, status: 'completed', analysis: { title: '己酉', explanation: '【事业】2029 有调动。' } },
+      },
+    });
+    const rec = getRecordById(db, 'r1');
+    for (const y of [2025, 2029, 2034]) {
+      const ev = collectEvidence(db, rec, { year: y, topics: ['事业'] }, { providers: [] });
+      const dec = ev.analyses.find((a) => a.heading.includes('大运'));
+      assert.ok(dec, y + ' 年应取到所处大运批断(覆盖该年的 2025-2034 运)');
+      assert.ok(dec.text.includes('丙寅运'), y + ' 年拿到的应是覆盖它的那步运(丙寅)');
+    }
     db.close();
   });
   test('aiTasks 未同步时从 ai_cache 主键精确补读', () => {

@@ -15,6 +15,9 @@ pub struct BaziRecord {
     pub created_at: String,
     pub year_pillar: String, pub month_pillar: String, pub day_pillar: String, pub hour_pillar: String,
     pub non_ai_result: Option<String>, pub ai_status: String, pub ai_analysis: Option<String>, pub ai_overview: Option<String>, pub ai_error: Option<String>, pub ai_tasks: Option<String>,
+    /// 生成这盘 AI 结果所用的语气档(0 犀利..100 温柔)。必须存得下来：读不回来时滑杆会谎报成
+    /// 默认档，下一次「AI 分析」还会把本机已有的完整结果当成「改了语气」整轮清掉重算。
+    pub tone_used: Option<i32>,
 }
 
 fn initialize(connection: &Connection) -> Result<(), String> {
@@ -49,6 +52,9 @@ fn initialize(connection: &Connection) -> Result<(), String> {
     if !has_ai_tasks { connection.execute("ALTER TABLE bazi_records ADD COLUMN ai_tasks TEXT", []).map_err(|e| e.to_string())?; }
     let has_ai_overview = connection.prepare("SELECT 1 FROM pragma_table_info('bazi_records') WHERE name = ?1").and_then(|mut statement| statement.exists(["ai_overview"])).map_err(|e| e.to_string())?;
     if !has_ai_overview { connection.execute("ALTER TABLE bazi_records ADD COLUMN ai_overview TEXT", []).map_err(|e| e.to_string())?; }
+    // 老库升级：与服务器 migrateToneUsed 同口径，缺列才补(重复 ALTER 会报错)。
+    let has_tone_used = connection.prepare("SELECT 1 FROM pragma_table_info('bazi_records') WHERE name = ?1").and_then(|mut statement| statement.exists(["tone_used"])).map_err(|e| e.to_string())?;
+    if !has_tone_used { connection.execute("ALTER TABLE bazi_records ADD COLUMN tone_used INTEGER", []).map_err(|e| e.to_string())?; }
     Ok(())
 }
 
@@ -61,7 +67,7 @@ pub(crate) fn chart_sig_from_key(key: &str) -> Option<String> {
 }
 
 fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<BaziRecord> {
-    Ok(BaziRecord { id: Some(row.get(0)?), name: row.get(1)?, gender: row.get(2)?, birth_year: row.get(3)?, birth_month: row.get(4)?, created_at: row.get(5)?, year_pillar: row.get(6)?, month_pillar: row.get(7)?, day_pillar: row.get(8)?, hour_pillar: row.get(9)?, non_ai_result: row.get(10)?, ai_status: row.get(11)?, ai_analysis: row.get(12)?, ai_overview: row.get(13)?, ai_error: row.get(14)?, ai_tasks: row.get(15)? })
+    Ok(BaziRecord { id: Some(row.get(0)?), name: row.get(1)?, gender: row.get(2)?, birth_year: row.get(3)?, birth_month: row.get(4)?, created_at: row.get(5)?, year_pillar: row.get(6)?, month_pillar: row.get(7)?, day_pillar: row.get(8)?, hour_pillar: row.get(9)?, non_ai_result: row.get(10)?, ai_status: row.get(11)?, ai_analysis: row.get(12)?, ai_overview: row.get(13)?, ai_error: row.get(14)?, ai_tasks: row.get(15)?, tone_used: row.get(16)? })
 }
 
 mod commands {
@@ -90,7 +96,7 @@ fn selected_provider() -> AiProvider {
     keyring::Entry::new(KEYRING_SERVICE, SELECTED_PROVIDER_USER).ok()
         .and_then(|entry| entry.get_password().ok())
         .and_then(|value| match value.as_str() { "kimi" => Some(AiProvider::Kimi), "deepseek" => Some(AiProvider::Deepseek), "qwen" => Some(AiProvider::Qwen), _ => None })
-        .unwrap_or(AiProvider::Deepseek)
+        .unwrap_or(AiProvider::Qwen)
 }
 
 #[tauri::command]
@@ -126,21 +132,21 @@ pub fn save_bazi_record(state: State<'_, Database>, mut record: BaziRecord) -> R
     let id = record.id.take().unwrap_or_else(|| format!("record-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
     let connection = state.0.lock().map_err(|e| e.to_string())?;
     initialize(&connection)?;
-    connection.execute("INSERT OR REPLACE INTO bazi_records (id,name,gender,birth_year,birth_month,created_at,year_pillar,month_pillar,day_pillar,hour_pillar,non_ai_result,ai_status,ai_analysis,ai_overview,ai_error,ai_tasks) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)", params![id, record.name, record.gender, record.birth_year, record.birth_month, record.created_at, record.year_pillar, record.month_pillar, record.day_pillar, record.hour_pillar, record.non_ai_result, record.ai_status, record.ai_analysis, record.ai_overview, record.ai_error, record.ai_tasks]).map_err(|e| e.to_string())?;
+    connection.execute("INSERT OR REPLACE INTO bazi_records (id,name,gender,birth_year,birth_month,created_at,year_pillar,month_pillar,day_pillar,hour_pillar,non_ai_result,ai_status,ai_analysis,ai_overview,ai_error,ai_tasks,tone_used) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)", params![id, record.name, record.gender, record.birth_year, record.birth_month, record.created_at, record.year_pillar, record.month_pillar, record.day_pillar, record.hour_pillar, record.non_ai_result, record.ai_status, record.ai_analysis, record.ai_overview, record.ai_error, record.ai_tasks, record.tone_used]).map_err(|e| e.to_string())?;
     record.id = Some(id); Ok(record)
 }
 
 #[tauri::command]
 pub fn list_bazi_records(state: State<'_, Database>) -> Result<Vec<BaziRecord>, String> {
     let connection = state.0.lock().map_err(|e| e.to_string())?;
-    let mut statement = connection.prepare("SELECT id,name,gender,birth_year,birth_month,created_at,year_pillar,month_pillar,day_pillar,hour_pillar,non_ai_result,ai_status,ai_analysis,ai_overview,ai_error,ai_tasks FROM bazi_records ORDER BY rowid DESC").map_err(|e| e.to_string())?;
+    let mut statement = connection.prepare("SELECT id,name,gender,birth_year,birth_month,created_at,year_pillar,month_pillar,day_pillar,hour_pillar,non_ai_result,ai_status,ai_analysis,ai_overview,ai_error,ai_tasks,tone_used FROM bazi_records ORDER BY rowid DESC").map_err(|e| e.to_string())?;
     let result = statement.query_map([], row_to_record).map_err(|e| e.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string()); result
 }
 
 #[tauri::command]
 pub fn get_bazi_record(state: State<'_, Database>, id: String) -> Result<Option<BaziRecord>, String> {
     let connection = state.0.lock().map_err(|e| e.to_string())?;
-    connection.query_row("SELECT id,name,gender,birth_year,birth_month,created_at,year_pillar,month_pillar,day_pillar,hour_pillar,non_ai_result,ai_status,ai_analysis,ai_overview,ai_error,ai_tasks FROM bazi_records WHERE id = ?1", [id], row_to_record).optional().map_err(|e| e.to_string())
+    connection.query_row("SELECT id,name,gender,birth_year,birth_month,created_at,year_pillar,month_pillar,day_pillar,hour_pillar,non_ai_result,ai_status,ai_analysis,ai_overview,ai_error,ai_tasks,tone_used FROM bazi_records WHERE id = ?1", [id], row_to_record).optional().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -305,7 +311,8 @@ fn now_text() -> String {
 pub(crate) fn cache_key(record: &BaziRecord, task: &AiTaskInput, model: &str) -> String {
     // v6: 本命事实新增引擎算定的 patternFacts/strengthScore，提示词改为「沿用不重判」；
     //      旧缓存是模型自行判断的产物，口径不同，必须整体作废重算一次。
-    format!("v7|{model}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", record.gender,
+    // v8: 本命事实再增「调候参考」(tiaohouFacts)，通则第 5 条改为按此判喜忌；旧缓存里的结论未含调候口径，作废重算。
+    format!("v8|{model}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", record.gender,
         record.year_pillar, record.month_pillar, record.day_pillar, record.hour_pillar,
         task.task_type, task.year.unwrap_or(0), task.month.unwrap_or(0), record.birth_year, tone_bucket(task.tone))
 }
@@ -364,7 +371,7 @@ const BASELINE_PREFIX: &str = concat!(
     "2. 旺衰：直接采用【事实数据】里「旺衰评分」给出的档位，不得改判。其算法：助身方(比劫加印)与克泄耗方(食伤加财加官杀)分别累加——天干每透一位 6 分(月干 9 分)；地支藏干按本气 10 / 中气 5 / 余气 3；月支只对日主自己的通根再乘 2(提纲秉令只增益日主之气，不给财官加倍)；最后按日主在该支的十二长生调整通根之力(帝旺乘 1.4、死绝则不为根)。净分等于(助身方减克泄耗方)除以(助身方加克泄耗方)再乘一百，不低于 25 为身强、不高于负 25 为身弱，其间为中和偏旺或中和偏弱。是否得令＝月支是日主的禄或刃之地(甲乙禄寅、丙戊禄巳、庚辛禄申、壬癸禄亥；甲卯丙戊午庚酉壬子为阳刃)，被邻支冲则破令不算得令。月支藏干有无印比，只表示月支藏干里出现过印比(含中余气)，不等于得令，勿混用。(以上所述算法仅为帮助你理解口径，正文里一律用中文讲结论，任何拉丁字母都不许出现。)\n",
     "3. explanation 必须以【身强身弱与喜忌】开头，随后按顺序各出现一次【健康】【事业】【财运】【爱情】(不得合并、省略或改名)，末尾可加【总评/行为建议】。\n",
     "4. 【身强身弱与喜忌】一段必须引用旺衰的数字与明细来写，至少包含：是否得令、助身方得分、克泄耗方得分、净分与档位；再点出命局最关键的病处(如某十神太旺/太弱、何物伤格)。禁止只写「日主偏弱」这类无数据结论。\n",
-    "5. 喜忌推导规则(通则，须写明所依通则)：身弱→喜印比、忌克泄耗；身强→喜克泄耗、忌印比；中和偏旺/偏弱→以调候与通关需要为主，兼顾抑扬。若格局本身另有要求(如阳刃喜官杀制、建禄喜财官、从格须顺势、专旺须顺生)，以格局要求优先并在文中说明为何与扶抑通则一致或冲突。\n",
+    "5. 喜忌推导规则(通则，须写明所依通则)：先以扶抑定纲(身弱→喜印比、忌克泄耗；身强→喜克泄耗、忌印比)；再看【事实数据】中那条以季节(春/夏/秋/冬)起首、注明「调候」与「穷通宝鉴…参考」的字段：命局气候偏枯(生于严冬而局中火弱、或生于盛夏而局中水亏)时，调候优先于扶抑，据此微调喜忌并写明「从调候」；该项标注「非急」(多应在春秋)时，调候只作辅助印证，喜忌仍以扶抑与格局为准。凡该字段标注「参考」者，系《穷通宝鉴》按季节归并之论，两源或有出入，不得当作唯一结论。格局本身另有要求者(阳刃喜官杀制、建禄喜财官、从格须顺势、专旺须顺生)，以格局优先并说明与上述通则是否一致。\n",
     "6. usefulElements / avoidElements 只能填 木/火/土/金/水 五项中的若干项，且必须与第 5 条推出的喜忌一致，不得凭印象填写。\n",
     "7. 每个主题内部必须分点：每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。禁止在 JSON 顶层重复输出 overall/health/career/wealth/love/notice 等字段，也不要先给短句摘要再写长文。"
 );
@@ -466,6 +473,8 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
         "naYin": val("naYin"), "twelveLongevity": val("twelveLongevity"),
         // 引擎算定的格局与旺衰：模型只解读不重判(与服务器/浏览器直连同口径)
         "patternFacts": val("patternFacts"), "strengthScore": val("strengthScore"),
+        // 调候参考：引擎按日主与月令季节算定的中文字符串(辅助判据)。与另两端 natal 同序：紧随 strengthScore、先于 luckStart。
+        "tiaohouFacts": val("tiaohouFacts"),
         "luckStart": val("luckStart"),
         "shenSha": compact_shen_sha(&val("shenSha")), "relationships": val("relationships"),
     });
@@ -573,8 +582,8 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
             .unwrap_or_else(|| "（暂无本命结论）".into());
         let findings_text = task.findings.as_ref().map(|v| serde_json::to_string(v).unwrap_or_default()).unwrap_or_else(|| "{}".into());
         let output_rules_ov = "\n\n# 输出硬性要求(违反即整篇作废重写)\n1. 全篇一律使用简体中文(UTF-8)，禁止任何繁体字、异体字混入。\n2. explanation 的【】小节必须按本任务规定逐段出现、各只出现一次，顺序一致，不得合并、省略或改名。\n3. 每个小节至少 1 条编号要点；每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。\n4. 禁止输出注释、代码块或任何围栏标记，只给最终正文。\n5. 正文只写中文，不得出现任何英文单词、英文字母缩写、拼音或英文字段代号；拉丁字母一个都不许有，数字也一律用中文数字表述。事实数据里凡是形如拉丁字母连写的键名，都只是数据结构的内部代号，你要做的是把它对应的「数值与含义」用中文讲出来，绝不可把这个代号本身抄进正文。凡是描述「是否得令」「月支藏干有无印比」「助身方得分」「克泄耗方得分」「净分」「档位」这类结论，一律用中文词组直接表述：得令与否写成「月支是/不是日主禄刃之地，得令/不得令」；月支藏干有无印比写成「月支藏干中见/未见印比，有/无通根之助」；不能用英文词加上括号注音，也不能在中文后面缀上英文取值。";
-        let content = format!("{}\n# 本命结论(已定，必须沿用，不得重算)\n{}\n\n# 本命事实数据(JSON，只依据此数据)\n{}{}\n\n# 语气要求\n{}\n\n# 各时段分析要点(JSON)\n{}\n\n# 当前分析目标\n全盘总结：未来十年中值得关注的节点",
-            OVERVIEW_PROMPT, baseline_text, natal_text, output_rules_ov, tone_instruction(clamp_tone(task.tone)), findings_text);
+        let content = format!("# 本命事实数据(JSON，只依据此数据)\n{}\n{}{}\n\n# 语气要求\n{}\n\n# 各时段分析要点(JSON)\n{}\n\n# 当前分析目标\n全盘总结：未来十年中值得关注的节点",
+            natal_text, OVERVIEW_PROMPT, output_rules_ov, tone_instruction(clamp_tone(task.tone)), findings_text);
         return Ok(serde_json::json!({
             "model": "deepseek-flash", "promptVersion": "ctx-v8", "thinking": true, "effort": "high",
             "taskId": task.task_id, "type": task.task_type, "year": task.year, "month": task.month,
@@ -588,9 +597,10 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
     // 关键：把“事实数据 JSON”直接嵌入消息正文 —— 模型只能看到 messages，
     // 顶层字段(如 nonAiResult)对模型不可见(此前因此返回“未提供结构化输入”)。
     let context = serde_json::json!({ "natal": natal, "scope": scope });
-    // ── 命中率优先的分段：把「随任务变化的文字」尽量后移并按变化频率分层。
-    //    年度段(该年流年+所处大运) → 同年所有流月与流年共享到此处；月度段单独再往后。
-    //    实测与服务器端一致：全局公共前缀 ≈ 91%，同年内再多共享 ~263 字符。
+    // ── 命中率优先的分段(与 server/ai.mjs、deepseekAdapter.ts 同一原则)：
+    //    「本命事实数据」用固定标题排在指令**之前**，四类任务因此共享同一段长前缀；
+    //    只有中段指令随任务类型分叉，其后才是可变性递增的摘要/年度段/月度段/目标行。
+    //    实测数字见 client/src/__tests__/qwen-prefix-measure.test.ts。
     let mut year_part = serde_json::Map::new();
     let mut month_part = serde_json::Map::new();
     for key in ["annual", "decade", "annualHits", "decadeHits"] {
@@ -610,14 +620,15 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
             .map(|s| format!("\n\n# 本命结论(引擎已定，必须沿用，不得推翻或重算)\n{s}\n")).unwrap_or_default()
     } else { String::new() };
     let output_rules = "\n\n# 输出硬性要求(违反即整篇作废重写)\n1. 全篇一律使用简体中文(UTF-8)，禁止任何繁体字、异体字混入。\n2. explanation 的【】小节必须按本任务规定逐段出现、各只出现一次，顺序一致，不得合并、省略或改名。\n3. 每个小节至少 1 条编号要点；每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。\n4. 正文只写中文，不得出现任何英文单词、英文字母缩写、拼音或英文字段代号；拉丁字母一个都不许有，数字也一律用中文数字表述。事实数据里凡是形如拉丁字母连写的键名，都只是数据结构的内部代号，你要做的是把它对应的「数值与含义」用中文讲出来，绝不可把这个代号本身抄进正文。凡是描述「是否得令」「月支藏干有无印比」「助身方得分」「克泄耗方得分」「净分」「档位」这类结论，一律用中文词组直接表述：得令与否写成「月支是/不是日主禄刃之地，得令/不得令」；月支藏干有无印比写成「月支藏干中见/未见印比，有/无通根之助」；不能用英文词加上括号注音，也不能在中文后面缀上英文取值。\n\n# 语气要求\n";
+    let natal_block = format!("\n\n# 本命事实数据(JSON，只依据此数据)\n{natal_text}");
     let content = if is_scope {
         {
             // 只有流月任务才追加「本月」段；流年/大运到此为止，前缀更短也更能与同年任务对齐。
             let month_block = if task.month.is_some() { format!("\n\n# 本月运势数据(JSON)\n{month_text}") } else { String::new() };
-            format!("{prompt}\n\n# 本命事实数据(JSON，只依据此数据)\n{natal_text}{output_rules}{tone}{natal_note}\n\n# 本年度运势数据(JSON)\n{year_text}{month_block}\n\n# 当前分析目标\n{when}{age_seg}", tone = tone_instruction(clamp_tone(task.tone)))
+            format!("{natal_block}{prompt}{output_rules}{tone}{natal_note}\n\n# 本年度运势数据(JSON)\n{year_text}{month_block}\n\n# 当前分析目标\n{when}{age_seg}", tone = tone_instruction(clamp_tone(task.tone)))
         }
     } else {
-        let base = format!("{prompt}{natal_note}\n\n# 事实数据(JSON，务必只依据此数据，禁止自行推算干支/十神/五行/藏干或关系)\n{natal_text}");
+        let base = format!("{natal_block}{prompt}{natal_note}");
         format!("{base}{output_rules}{tone}", tone = tone_instruction(clamp_tone(task.tone)))
     };
 
@@ -890,16 +901,18 @@ mod tests {
             "twelveLongevity": ["沐浴", "绝", "死", "长生"],
             "shenSha": { "auspicious": ["天德"], "inauspicious": ["岁破"] }
         }).to_string();
-        connection.execute("INSERT INTO bazi_records VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)", params!["id", "名", "female", 2000, 2, "2025-01-01T00:00:00.000Z", "甲子", "乙丑", "丙寅", "丁卯", non_ai, "not_started", Option::<String>::None, Option::<String>::None, Option::<String>::None, Option::<String>::None]).unwrap();
-        let record = connection.query_row("SELECT id,name,gender,birth_year,birth_month,created_at,year_pillar,month_pillar,day_pillar,hour_pillar,non_ai_result,ai_status,ai_analysis,ai_overview,ai_error,ai_tasks FROM bazi_records", [], row_to_record).unwrap();
+        connection.execute("INSERT INTO bazi_records (id,name,gender,birth_year,birth_month,created_at,year_pillar,month_pillar,day_pillar,hour_pillar,non_ai_result,ai_status,ai_analysis,ai_overview,ai_error,ai_tasks,tone_used) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)", params!["id", "名", "female", 2000, 2, "2025-01-01T00:00:00.000Z", "甲子", "乙丑", "丙寅", "丁卯", non_ai, "not_started", Option::<String>::None, Option::<String>::None, Option::<String>::None, Option::<String>::None, 55_i32]).unwrap();
+        let record = connection.query_row("SELECT id,name,gender,birth_year,birth_month,created_at,year_pillar,month_pillar,day_pillar,hour_pillar,non_ai_result,ai_status,ai_analysis,ai_overview,ai_error,ai_tasks,tone_used FROM bazi_records", [], row_to_record).unwrap();
         assert_eq!(record.name, "名"); assert_eq!(record.hour_pillar, "丁卯"); assert_eq!(record.birth_month, 2);
         assert_eq!(record.non_ai_result.as_deref(), Some(non_ai.as_str()));
         assert_eq!(record.created_at, "2025-01-01T00:00:00.000Z");
+        // 语气档必须真的存得下来：读不回来时滑杆谎报默认档，还会把已有结果当成「改了语气」清掉重算。
+        assert_eq!(record.tone_used, Some(55));
     }
 
     #[test]
     fn ai_payload_keeps_structured_facts_and_stable_task_fields() {
-        let record = BaziRecord { id: Some("r1".into()), name: "名".into(), gender: "male".into(), birth_year: 1984, birth_month: 2, created_at: "2025-01-01".into(), year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "庚午".into(), hour_pillar: "壬午".into(), non_ai_result: Some(r#"{"zodiac":"鼠"}"#.into()), ai_status: "pending".into(), ai_analysis: None, ai_overview: None, ai_error: None, ai_tasks: None };
+        let record = BaziRecord { id: Some("r1".into()), name: "名".into(), gender: "male".into(), birth_year: 1984, birth_month: 2, created_at: "2025-01-01".into(), year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "庚午".into(), hour_pillar: "壬午".into(), non_ai_result: Some(r#"{"zodiac":"鼠"}"#.into()), ai_status: "pending".into(), ai_analysis: None, ai_overview: None, ai_error: None, ai_tasks: None, tone_used: None };
         let task = commands::AiTaskInput { task_id: "task-03".into(), task_type: "annual".into(), year: Some(2025), month: None, annual: None, monthly: None, decade: None, baseline: None, guide: None, findings: None, tone: None };
         let payload = commands::build_ai_request_payload(&record, &task).unwrap();
         assert_eq!(payload["taskId"], "task-03");
@@ -959,7 +972,7 @@ mod tests {
                 { "ganZhi": "辛未", "startYear": 2017, "endYear": 2026 }
             ]
         });
-        let record = BaziRecord { id: Some("r1".into()), name: "名".into(), gender: "male".into(), birth_year: 1984, birth_month: 2, created_at: "2025-01-01".into(), year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "庚午".into(), hour_pillar: "壬午".into(), non_ai_result: Some(big.to_string()), ai_status: "pending".into(), ai_analysis: None, ai_overview: None, ai_error: None, ai_tasks: None };
+        let record = BaziRecord { id: Some("r1".into()), name: "名".into(), gender: "male".into(), birth_year: 1984, birth_month: 2, created_at: "2025-01-01".into(), year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "庚午".into(), hour_pillar: "壬午".into(), non_ai_result: Some(big.to_string()), ai_status: "pending".into(), ai_analysis: None, ai_overview: None, ai_error: None, ai_tasks: None, tone_used: None };
         let task = commands::AiTaskInput { task_id: "task-03".into(), task_type: "annual".into(), year: Some(2025), month: None, annual: None, monthly: None, decade: None, baseline: None, guide: None, findings: None, tone: None };
         let payload = commands::build_ai_request_payload(&record, &task).unwrap();
         assert_eq!(payload["nonAiResult"]["natal"]["zodiac"], "鼠");
@@ -980,7 +993,7 @@ mod tests {
             "annualFortunes": [{ "year": 2025, "ganZhi": "乙巳" }],
             "greatFortunes": [{ "ganZhi": "辛未", "startYear": 2017, "endYear": 2026 }]
         });
-        let record = BaziRecord { id: Some("r1".into()), name: "名".into(), gender: "male".into(), birth_year: 1984, birth_month: 2, created_at: "2025-01-01".into(), year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "庚午".into(), hour_pillar: "壬午".into(), non_ai_result: Some(big.to_string()), ai_status: "pending".into(), ai_analysis: None, ai_overview: None, ai_error: None, ai_tasks: None };
+        let record = BaziRecord { id: Some("r1".into()), name: "名".into(), gender: "male".into(), birth_year: 1984, birth_month: 2, created_at: "2025-01-01".into(), year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "庚午".into(), hour_pillar: "壬午".into(), non_ai_result: Some(big.to_string()), ai_status: "pending".into(), ai_analysis: None, ai_overview: None, ai_error: None, ai_tasks: None, tone_used: None };
         let task = commands::AiTaskInput { task_id: "task-26".into(), task_type: "decade".into(), year: Some(2017), month: None, annual: None, monthly: None, decade: None, baseline: None, guide: None, findings: None, tone: None };
         let payload = commands::build_ai_request_payload(&record, &task).unwrap();
         let scope = &payload["nonAiResult"]["scope"];
@@ -1003,7 +1016,7 @@ mod tests {
     #[test]
     fn overview_payload_carries_findings_and_three_sections() {
         let big = serde_json::json!({ "greatFortunes": [{ "ganZhi": "辛未", "startYear": 2017, "endYear": 2026 }] });
-        let record = BaziRecord { id: Some("r1".into()), name: "名".into(), gender: "male".into(), birth_year: 1984, birth_month: 2, created_at: "2025-01-01".into(), year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "庚午".into(), hour_pillar: "壬午".into(), non_ai_result: Some(big.to_string()), ai_status: "pending".into(), ai_analysis: None, ai_overview: None, ai_error: None, ai_tasks: None };
+        let record = BaziRecord { id: Some("r1".into()), name: "名".into(), gender: "male".into(), birth_year: 1984, birth_month: 2, created_at: "2025-01-01".into(), year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "庚午".into(), hour_pillar: "壬午".into(), non_ai_result: Some(big.to_string()), ai_status: "pending".into(), ai_analysis: None, ai_overview: None, ai_error: None, ai_tasks: None, tone_used: None };
         let findings = serde_json::json!({ "horizon": { "from": 2025, "to": 2034 }, "annuals": [{ "key": "task-03", "heading": "2027年(丙午)", "text": "【事业】1. 有升迁机会。" }], "monthlies": [], "decades": [] });
         let task = commands::AiTaskInput { task_id: "task-31".into(), task_type: "overview".into(), year: None, month: None, annual: None, monthly: None, decade: None, baseline: Some(serde_json::json!({ "summary": "格局：正印格 · 强弱：身强　喜：火、土　忌：水、木" })), guide: None, findings: Some(findings), tone: Some(80) };
         let payload = commands::build_ai_request_payload(&record, &task).unwrap();
@@ -1019,7 +1032,7 @@ mod tests {
     fn adjustment_summary_extracts_one_line_from_full_task_result() {
         // 客户端把整条 baseline 结果放进 task.baseline；桌面端必须提炼成一行摘要，
         // 不能把 taskId/status/长正文原样当「本命结论」发给模型。
-        let record = BaziRecord { id: Some("r1".into()), name: "名".into(), gender: "male".into(), birth_year: 1984, birth_month: 2, created_at: "2025-01-01".into(), year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "庚午".into(), hour_pillar: "壬午".into(), non_ai_result: None, ai_status: "pending".into(), ai_analysis: None, ai_overview: None, ai_error: None, ai_tasks: None };
+        let record = BaziRecord { id: Some("r1".into()), name: "名".into(), gender: "male".into(), birth_year: 1984, birth_month: 2, created_at: "2025-01-01".into(), year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "庚午".into(), hour_pillar: "壬午".into(), non_ai_result: None, ai_status: "pending".into(), ai_analysis: None, ai_overview: None, ai_error: None, ai_tasks: None, tone_used: None };
         let full_result = serde_json::json!({ "task": { "taskId": "task-01", "type": "baseline" }, "status": "completed", "analysis": { "pattern": "正印格", "strength": "身强", "usefulElements": ["火", "土"], "avoidElements": ["水"], "explanation": "一".repeat(300) } });
         let task = commands::AiTaskInput { task_id: "task-30".into(), task_type: "adjustment".into(), year: None, month: None, annual: None, monthly: None, decade: None, baseline: Some(full_result), guide: Some(serde_json::json!({ "element": "火", "lifestyle": "多接触温暖环境" })), findings: None, tone: Some(80) };
         let payload = commands::build_ai_request_payload(&record, &task).unwrap();
@@ -1083,7 +1096,7 @@ mod tests {
 
     #[test]
     fn ai_cache_key_is_deterministic_and_scope_sensitive() {
-        let record = BaziRecord { id: Some("r1".into()), name: "名".into(), gender: "male".into(), birth_year: 1984, birth_month: 2, created_at: "2025-01-01".into(), year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "庚午".into(), hour_pillar: "壬午".into(), non_ai_result: None, ai_status: "pending".into(), ai_analysis: None, ai_overview: None, ai_error: None, ai_tasks: None };
+        let record = BaziRecord { id: Some("r1".into()), name: "名".into(), gender: "male".into(), birth_year: 1984, birth_month: 2, created_at: "2025-01-01".into(), year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "庚午".into(), hour_pillar: "壬午".into(), non_ai_result: None, ai_status: "pending".into(), ai_analysis: None, ai_overview: None, ai_error: None, ai_tasks: None, tone_used: None };
         let mk = |y: Option<i32>, m: Option<i32>| commands::AiTaskInput { task_id: "t".into(), task_type: "monthly".into(), year: y, month: m, annual: None, monthly: None, decade: None, baseline: None, guide: None, findings: None, tone: None };
         let k1 = commands::cache_key(&record, &mk(Some(2027), Some(5)), "deepseek-reasoner");
         let k2 = commands::cache_key(&record, &mk(Some(2027), Some(5)), "deepseek-reasoner");
@@ -1157,8 +1170,8 @@ mod tests {
             "monthlyFortunes": [{ "year": 2025, "month": 5, "ganZhi": "壬午" }]
         }).to_string();
         let slim = serde_json::json!({ "zodiac": "牛", "dayMaster": "辛", "greatFortunes": [], "annualFortunes": [], "monthlyFortunes": [] }).to_string();
-        connection.execute("INSERT INTO bazi_records VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)", params!["a", "甲", "male", 1984, 2, "2025-01-01T00:00:00.000Z", "甲子", "丙寅", "庚午", "壬午", full, "completed", Option::<String>::None, Option::<String>::None, Option::<String>::None, Option::<String>::None]).unwrap();
-        connection.execute("INSERT INTO bazi_records VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)", params!["b", "乙", "female", 2000, 2, "2025-01-01T00:00:00.000Z", "甲子", "乙丑", "丙寅", "丁卯", slim, "completed", Option::<String>::None, Option::<String>::None, Option::<String>::None, Option::<String>::None]).unwrap();
+        connection.execute("INSERT INTO bazi_records (id,name,gender,birth_year,birth_month,created_at,year_pillar,month_pillar,day_pillar,hour_pillar,non_ai_result,ai_status,ai_analysis,ai_overview,ai_error,ai_tasks,tone_used) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)", params!["a", "甲", "male", 1984, 2, "2025-01-01T00:00:00.000Z", "甲子", "丙寅", "庚午", "壬午", full, "completed", Option::<String>::None, Option::<String>::None, Option::<String>::None, Option::<String>::None, 55_i32]).unwrap();
+        connection.execute("INSERT INTO bazi_records (id,name,gender,birth_year,birth_month,created_at,year_pillar,month_pillar,day_pillar,hour_pillar,non_ai_result,ai_status,ai_analysis,ai_overview,ai_error,ai_tasks,tone_used) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)", params!["b", "乙", "female", 2000, 2, "2025-01-01T00:00:00.000Z", "甲子", "乙丑", "丙寅", "丁卯", slim, "completed", Option::<String>::None, Option::<String>::None, Option::<String>::None, Option::<String>::None, 55_i32]).unwrap();
         let (changed, kept) = commands::compact_records_in(&connection).unwrap();
         assert_eq!(changed, 1);
         assert_eq!(kept, 1);

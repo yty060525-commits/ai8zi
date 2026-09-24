@@ -1,6 +1,6 @@
 import type { AiFindings, BaziAIAnalysis, BaziAnalysisTask, BaziRecord, BaziTaskResult, BaziTaskType } from '../types/domain';
 import * as adapter from './deepseekAdapter';
-import { chinaYear, chinaYearMonth } from '../utils/date';
+import { chinaYearMonth } from '../utils/date';
 import { ELEMENT_GUIDES, primaryElement, type ElementGuide } from './elementKnowledge';
 import { sanitizeAnalysisText } from '../features/chart/elements';
 export type TaskRunner = (task: BaziAnalysisTask, payload: { nonAiResult: BaziRecord['nonAiResult']; task: BaziAnalysisTask }) => Promise<BaziTaskResult>;
@@ -17,6 +17,8 @@ export interface OrchestrateOptions {
   retryDelayMs?: number;
   /** 语气档(0 犀利 .. 50 中立 .. 100 温柔夸夸)，默认 80 */
   tone?: number;
+  /** 窗口起点时刻(默认今天)；只有测试与预建盘需要固定它。 */
+  now?: Date;
 }
 
 const isTest = typeof import.meta !== 'undefined' && import.meta.env?.MODE === 'test';
@@ -139,10 +141,20 @@ export function sanitizeAnalysis(raw: BaziAIAnalysis | undefined): BaziAIAnalysi
     ...optional('overall'), ...optional('health'), ...optional('career'), ...optional('wealth'), ...optional('love'), ...optional('notice'), ...optional('title'),
   };
 }
-export function buildBaziTasks(record: BaziRecord): BaziAnalysisTask[] {
+/** 分析窗口的起点：分组标题写的是「未来十年」「从今天起」，窗口就必须从今天算。
+ *  曾经按 record.createdAt 排月，一条几个月前建的盘会把「从今天起的十二个月」摆成去年的月份。
+ *  createdAt 只在未来才作起点(测试与预建盘要能复现固定窗口)。 */
+export function analysisHorizon(record: BaziRecord, now: Date = new Date()): { year: number; month: number } {
+  const current = chinaYearMonth(now);
+  const created = chinaYearMonth(record.createdAt);
+  return created.year > current.year || (created.year === current.year && created.month > current.month) ? created : current;
+}
+
+export function buildBaziTasks(record: BaziRecord, now?: Date): BaziAnalysisTask[] {
   const annual = record.nonAiResult?.annualFortunes ?? [];
-  const year = chinaYear(record.createdAt);
-  const { year: startYear, month: startMonth } = chinaYearMonth(record.createdAt);
+  const start = analysisHorizon(record, now);
+  const year = start.year;
+  const { year: startYear, month: startMonth } = start;
   const years = Array.from({ length: 10 }, (_, i) => year + i);
   const core: BaziAnalysisTask[] = [
     { taskId: 'task-01', type: 'baseline' },
@@ -155,17 +167,33 @@ export function buildBaziTasks(record: BaziRecord): BaziAnalysisTask[] {
       return { taskId: `task-${String(i + 12).padStart(2, '0')}`, type: 'monthly' as const, year: y, month: m } as BaziAnalysisTask;
     }),
   ];
-  // 大运分析：只排未来十年(含当前)所落入的大运段
+  // 大运任务只排**起运落在十年窗口内**的那几运(起点晚于今年、又不越过窗口末尾)。
+  // 把「今年正在走的那一运」排进来会出两件事：
+  // ① 界面分组④按 pruneStaleTasks 的口径不摆它，于是这一格在界面上永远看不到、也永远填不满，
+  //    「本机结果是否完整」因此恒为假 —— 23/23 都已生成的盘每次点 AI 分析都整轮重算(真金白银)；
+  // ② 正文里全是已经发生过的事，与「未来大运」的标题相反。
+  // 上界 startYear <= year+9 与改动前的窗口末尾同一条：更远的运还没到讨论的时候，也不该占槽位。
   const greatFortunes = record.nonAiResult?.greatFortunes ?? [];
   const decadeTasks: BaziAnalysisTask[] = greatFortunes
-    .filter((g) => g.startYear <= year + 9 && g.endYear >= year)
-    .map((g, i) => ({ taskId: `task-${String(i + 24).padStart(2, '0')}`, type: 'decade' as const, year: g.startYear, decade: g }));
+    .filter((g) => g.startYear > year && g.startYear <= year + 9)
+    .map((g, i) => ({ taskId: `task-${String(i + FIRST_DECADE_TASK_INDEX).padStart(2, '0')}`, type: 'decade' as const, year: g.startYear, decade: g }));
   return [...core, ...decadeTasks];
 }
 
+/** 大运任务的固定编号起点：本命/流年/流月占 task-01..task-23，往后依次排大运段。 */
+export const FIRST_DECADE_TASK_INDEX = 24;
 /** 「全盘总结」任务的固定 id(排在所有时段任务之后)。 */
 export const OVERVIEW_TASK_ID = 'task-31';
-/** 单条要点截断长度：总结只需要结论，不需要把每篇长文原样再发一遍。 */
+/** 本轮窗口该排哪些任务：buildBaziTasks 的清单 +「全盘总结」。后者要等时段任务跑完、
+ *  且要点齐了才发，所以不在 buildBaziTasks 里 —— 但判定「这台设备/这一轮是否已经跑完」时
+ *  必须一起算进来，否则界面明明有「② 全盘总结」正文，每次点 AI 分析却还要白等一次总结请求。
+ *  与 PersonDetail 的完整性判定共用，两处口径不许各写一份。 */
+export function expectedTaskIds(record: BaziRecord, now?: Date): string[] {
+  const ids = buildBaziTasks(record, now).map((task) => task.taskId);
+  const overview = record.aiOverview;
+  if (overview?.explanation || overview?.pattern) ids.push(OVERVIEW_TASK_ID);
+  return ids;
+}/** 单条要点截断长度：总结只需要结论，不需要把每篇长文原样再发一遍。 */
 export const FINDING_SNIPPET = 260;
 
 /** 从正文里提炼「值得注意」的句子：优先带年份/干支与风险词的编号行。 */
@@ -185,8 +213,9 @@ const pickPoints = (text: string, limit: number): string => {
 };
 
 /** 汇总各时段已完成结果，作为「全盘总结」的输入(不含未完成任务，避免让模型猜)。 */
-export function collectFindings(record: BaziRecord, aiTasks: Record<string, BaziTaskResult>, tasks: BaziAnalysisTask[]): AiFindings {
-  const horizon = { from: chinaYear(record.createdAt), to: chinaYear(record.createdAt) + 9 };
+export function collectFindings(record: BaziRecord, aiTasks: Record<string, BaziTaskResult>, tasks: BaziAnalysisTask[], now?: Date): AiFindings {
+  const from = analysisHorizon(record, now).year;
+  const horizon = { from, to: from + 9 };
   const headingOf = (task: BaziAnalysisTask): string => {
     if (task.type === 'decade') {
       const gf = task.decade ?? (record.nonAiResult?.greatFortunes ?? []).find((row) => task.year !== undefined && task.year >= row.startYear && task.year <= row.endYear);
@@ -197,6 +226,8 @@ export function collectFindings(record: BaziRecord, aiTasks: Record<string, Bazi
   };
   const bucket = (type: BaziTaskType) => tasks
     .filter((task) => task.type === type)
+  // 存量记录重跑时，同一 taskId 可能既在 aiTasks 里(旧窗口的大运段)又被本次排入；
+  // 只取本轮任务集这一条，否则会把已不在窗口内的旧大运段也当成要点。
     .map((task) => ({ task, result: aiTasks[task.taskId] }))
     .filter((row) => row.result?.status === 'completed' && !!row.result.analysis?.explanation)
     .map((row) => ({ key: row.task.taskId, heading: headingOf(row.task), text: pickPoints(row.result.analysis!.explanation!, FINDING_SNIPPET) }))
@@ -209,16 +240,28 @@ const makeDefaultRunner = (record: BaziRecord, signal?: AbortSignal, tone?: numb
   return { task, status: result.status, analysis: 'analysis' in result ? result.analysis : undefined, error: 'error' in result ? result.error : undefined };
 };
 
+/** 历史脏结果(completed 但无正文)不能算「已有结果」：既不该复用，也不该让总结误以为跑过。 */
+const reusableResult = (item: BaziTaskResult | undefined): boolean =>
+  item?.status === 'completed' && !!item.analysis && (!!item.analysis.explanation || !!item.analysis.pattern);
+
 export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskRunner, onProgress?: ProgressFn, options: OrchestrateOptions = {}): Promise<BaziRecord> {
   const { signal, retries = 1 } = options;
   const retryDelayMs = options.retryDelayMs ?? (isTest ? 0 : DEFAULT_RETRY_DELAY_MS);
   const actualRunner: TaskRunner = runner ?? makeDefaultRunner(record, signal, options?.tone);
-  const tasks = buildBaziTasks(record);
+  // 窗口起点在一次分析内固定：跨月长跑时「第 9 项/共 24 项」不会中途变样
+  const now = options.now ?? new Date();
+  const tasks = buildBaziTasks(record, now);
   // 滚动十二个月的 干支月/关系 需要历法引擎：在需要时才加载(不占首屏)
   const { singleCalendarMonth } = await import('../features/chart/nonAiCalculator');
   const total = tasks.length;
   const aiTasks = { ...(record.aiTasks ?? {}) };
   let done = 0;
+  /** 本命喜用是否可用：决定「后天调整」那一项会不会真的发出去。 */
+  let adjustmentWillRun = false;
+  /** 「全盘总结」的占位：时段任务开跑后置真，收尾确认无要点可总结时撤回(不虚报)。 */
+  let summarySlot = false;
+  /** 后天调整是否真的跑过：跑过后它已在 tasks 里，不再重复计数。 */
+  let adjustmentRan = false;
   const ensureLive = () => { if (signal?.aborted) { const error = new Error(ABORTED_MESSAGE); (error as Error & { aborted?: boolean }).aborted = true; throw error; } };
   const snapshot = () => ({ ...record, aiTasks, aiStatus: 'pending' as const });
 
@@ -253,6 +296,15 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
     progressTail = run.then(() => undefined, () => undefined);
     return run;
   };
+  /** 界面显示的总项数：tasks.length 是「当前这一拍」的队列长度，而「后天调整」「全盘总结」要等本命/时段任务跑完才入列。
+   *  不补齐就会出现「第 25 项 / 共 23 项」。占位只在对应步骤真的可能发时才算：
+   *    · 后天调整：本命一确定就已知(它排在所有时段任务之后)
+   *    · 全盘总结：时段任务开跑后才可能出现(没有任何已完成结果时不会发) */
+  const totalShown = (): number => {
+    const hasTask = (id: string) => tasks.some((task) => task.taskId === id);
+    const extras = (adjustmentWillRun && !adjustmentRan ? 1 : 0) + (summarySlot && !hasTask(OVERVIEW_TASK_ID) ? 1 : 0);
+    return Math.max(tasks.length + extras, done);
+  };
   const sanitizeCompleted = (result: BaziTaskResult): BaziTaskResult => result.status === 'completed' && result.analysis
     ? { ...result, analysis: sanitizeAnalysis(result.analysis) } : result;
   const missingOf = (taskType: string, result: BaziTaskResult): string[] => {
@@ -268,10 +320,10 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
     ensureLive();
     const prev = aiTasks[task.taskId];
     // 历史脏结果(completed 但无正文)必须重跑
-    const reusable = prev?.status === 'completed' && !!prev.analysis && (!!prev.analysis.explanation || !!prev.analysis.pattern);
+    const reusable = reusableResult(prev);
     if (reusable) {
       done += 1;
-      const progress: AiProgress = { done, total: tasks.length, label: taskLabel(task), record: snapshot() };
+      const progress: AiProgress = { done, total: totalShown(), label: taskLabel(task), record: snapshot() };
       await emitProgress(progress);
       return prev;
     }
@@ -290,7 +342,7 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
     ensureLive(); // 若停止发生在最后一次请求收尾阶段，丢弃该结果(不落库)
     aiTasks[task.taskId] = result;
     done += 1;
-    const progress: AiProgress = { done, total: tasks.length, label: taskLabel(task), record: snapshot() };
+    const progress: AiProgress = { done, total: totalShown(), label: taskLabel(task), record: snapshot() };
     await emitProgress(progress);
     return result;
   };
@@ -299,6 +351,7 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
   const baselineResult = await step(pick('baseline')[0]);
   // 本命喜用确定后：追加一次“后天调整与职业适配”(按喜用五行取资料库) —— 只算一次
   const favorite = baselineResult.status === 'completed' ? primaryElement(baselineResult.analysis?.usefulElements) : undefined;
+  adjustmentWillRun = !!favorite;
   // 本命结论摘要注入每个时段任务作锚点，防止模型自推/乱说
   const analysis = baselineResult.analysis;
   let baselineSummaryText = '';
@@ -310,9 +363,10 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
     }
   }
   // ── 命中率优先的调度(实测驱动，不爬坡)──────────────────────────────────────────
-  // 提示词已按「变化频率从低到高」重排，实测共享前缀(见 server/ai.mjs 的同款分段)：
-  //   · 全局公共前缀 = SCOPE_PREFIX + natal + 输出硬性要求 + 语气 ≈ 1274 字符 / 最短全文 1396 ≈ 91%
-  //   · 同一公历年的「流年 ↔ 该年各流月」在年度段上再多共享 ~263 字符
+  // 提示词按「恒定在前、可变在后」排列(deepseekAdapter.ts 顶部有分段顺序说明)，
+  // 共享前缀由 qwen-prefix-measure.test.ts 逐对实测：
+  //   · 一轮任务彼此的全局公共前缀 = 实测 1714 字(占最短全文 49%) —— natal 段 + 到指令分叉点为止
+  //   · 同一公历年的「流年 ↔ 该年各流月」再多共享一整个年度段：前缀相同比例 ≥95%
   // 所以调度原则：先用一条请求把公共前缀烘进上游缓存，再让同年任务一起并发吃这段长前缀。
   // 组内不再串行——流年与该年流月只差尾巴，彼此都能命中已烘焙的前缀；唯一的串行点
   // 是第一条预热请求，用来保证「后面的请求进来时前缀已经在缓存里」。
@@ -331,6 +385,7 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
     .sort((a, b) => a[0] - b[0])
     .map(([, list]) => list.sort((x, y) => (x.type === 'annual' ? -1 : 0) - (y.type === 'annual' ? -1 : 0)));
   const flat = groups.flat();
+  if (flat.length > 0) summarySlot = true;                  // 时段任务要跑了：给「全盘总结」留一格
   if (flat.length > 0) await step(flat[0]);                 // 预热：建立全局公共前缀
   // 组间并发、组内也并发：整批交给固定池一次性发满，只有「限流/超时」才冷却重发。
   if (flat.length > 1) await fixedMapLimit(flat.slice(1), FIXED_CONCURRENCY.scope, step);
@@ -344,16 +399,20 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
       guide: { element: guide.element, lifestyle: guide.lifestyle, career: guide.career, health: guide.health },
     };
     tasks.push(adjustmentTask);
+    adjustmentRan = true;
     // 注意：这里必须跑「刚创建的那一条」，不能用 tasks.filter(type) —— 恢复旧记录时同一类型可能已有一条历史任务，filter 会把同一条塞进队列两次。
     await fixedMapLimit([adjustmentTask], 1, step);
   }
   // 全盘总结：把已算出的大运/流年/流月要点交给模型，判断「哪些时间节点真正值得关注」。
   // 必须排在时段任务之后 —— 它依赖前序结论；单独一条请求，不参与并发。
-  const findings = collectFindings(record, aiTasks, tasks);
-  if (findings.annuals.length + findings.monthlies.length + findings.decades.length > 0) {
+  const findings = collectFindings(record, aiTasks, tasks, now);
+  // 一条要点都没有就不会发总结，进度总数也不留这一格。
+  const hasFindings = findings.annuals.length + findings.monthlies.length + findings.decades.length > 0;
+  summarySlot = hasFindings;   // 一条要点都没有就不会发总结，进度总数也不留这一格
+  if (hasFindings) {
     const overviewTask: BaziAnalysisTask = { taskId: OVERVIEW_TASK_ID, type: 'overview', baseline: { summary: baselineSummaryText, analysis: baselineResult.analysis } as never, findings };
     tasks.push(overviewTask);
-    await fixedMapLimit([overviewTask], 1, step);
+    await fixedMapLimit([overviewTask], 1, step);   // 上一轮已跑出正文时 step() 原样复用，不再发请求
   }
   ensureLive();
   // 整批跑完后自动“补跑一轮”：把仍然失败(且属于可重试因素)的任务再调一次 AI，

@@ -51,7 +51,7 @@ export function countElements(pillars: string[]): { elements: Record<string, num
  * 原则：只动「夹在中文语境里的英文词」，中文与标点一律不动；
  * 整段纯英文(模型跑偏/报错)宁可清空后由上层提示缺数据，也不把英文丢给用户看。 */
 export const FIELD_NAME_ZH: Record<string, string> = {
-  patternFacts: '格局事实', strengthScore: '旺衰评分', dayMaster: '日主', elementRatio: '五行比例',
+  patternFacts: '格局事实', strengthScore: '旺衰评分', tiaohouFacts: '调候参考', dayMaster: '日主', elementRatio: '五行比例',
   elements: '五行', hiddenStems: '藏干', tenGods: '十神', naYin: '纳音', twelveLongevity: '十二长生',
   shenSha: '神煞', relationships: '刑冲合害', solarDate: '公历日期', lunarDate: '农历日期',
   zodiac: '生肖', gender: '性别', birthYear: '出生年', pillars: '四柱', natal: '命盘事实',

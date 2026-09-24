@@ -3,16 +3,9 @@ import { askChat, type ChatMessage, type ChatReply } from '../../data/chatEngine
 import { listBaziRecords } from '../../data/clientRepository';
 import { cancelAiSession } from '../../data/deepseekAdapter';
 import { isServerMode } from '../../data/serverClient';
+import { recordTone } from '../person/PersonDetail';
 
-/** 读取与「AI 分析」同一把语气滑杆(0 犀利 .. 100 温柔)，默认 80。 */
-function readTone(): number {
-  try {
-    const raw = localStorage.getItem('mingli.analysis.tone');
-    if (raw === null || raw.trim() === '') return 80;
-    const v = Number(raw);
-    return Number.isFinite(v) ? Math.max(0, Math.min(100, Math.round(v))) : 80;
-  } catch { return 80; }
-}
+/** 聊天语气与「AI 分析」滑杆同一把尺：按当前这条盘取本机偏好(选过→上次跑→全局默认)。 */
 
 interface PendingPick { question: string; options: Array<{ id: string; name: string }> }
 
@@ -111,7 +104,8 @@ export function ChartChat() {
     sharedAbort = controller;
     publish({ thread: [...shared.thread, { role: 'user', content: trimmed }] });
     setInput('');
-    const reply = await askChat({ question: trimmed, history, tone: readTone(), recordId: recordId ?? shared.selected?.id ?? null, signal: controller.signal }).catch(() => null);
+    const recId = recordId ?? shared.selected?.id ?? null;
+    const reply = await askChat({ question: trimmed, history, tone: recordTone(recId), recordId: recId, signal: controller.signal }).catch(() => null);
     sharedAbort = null;
     // 通道被整体取消(停止/清空对话)时也会走到这里：那时会话已经复位，不该再把「已取消」
     // 当成一条错误摆在用户眼前。
@@ -134,7 +128,7 @@ export function ChartChat() {
       busy: false,
       needKey: keyMissing,
       error: keyMissing
-        ? (serverSide ? '服务器那边还没配 AI 密钥(需要在服务器上配置，本客户端的设置页管不到它)；想马上能问：点左上角「设置」给任一通道填凭据，就走本机通道回答。' : '尚未配置 AI 密钥：配置后即可向我提问(服务器通道或本机通道均可)。')
+        ? (serverSide ? '服务器那边还没配 AI 密钥(需要在服务器上配置，本客户端的设置页管不到它)；想马上能问：点页面右上角「设置」给任一通道填凭据，就走本机通道回答。' : '尚未配置 AI 密钥：配置后即可向我提问(服务器通道或本机通道均可)。')
         : (reply.error || '回答失败，请稍后重试'),
     });
   }
@@ -172,7 +166,7 @@ export function ChartChat() {
       {people.map((person) => <button type="button" key={person.id} className={'choice-button' + (person.id === selected?.id ? ' selected' : '')} title="指定该命主后提问" onClick={() => { publish({ selected: person }); setPickOpen(false); }}>{person.name}</button>)}
       {selected ? <button type="button" className="text-button chat-clear-person" onClick={() => { publish({ selected: null }); setPickOpen(false); }}>取消指定</button> : null}
     </div> : null}
-    {error ? <p className="form-error" role="alert">{error}{needKey && !isServerMode() ? <button type="button" className="text-button chat-settings-link" onClick={openSettings}>去设置 ›</button> : null}</p> : null}
+    {error ? <p className="form-error" role="alert">{error}{needKey ? <button type="button" className="text-button chat-settings-link" onClick={openSettings}>去设置 ›</button> : null}</p> : null}
     <div className="chat-input-row">
       <input value={input} maxLength={500} disabled={busy} placeholder="输入命理问题(500 字以内)" aria-label="命理问题"
         onChange={(event) => { if (shared.error) publish({ error: '', needKey: false }); setInput(event.target.value); }}

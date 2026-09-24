@@ -173,7 +173,7 @@ export function RecordsPage({ onOpenPerson, refreshKey = 0 }: RecordsPageProps) 
         <div className="modal-backdrop" onClick={() => { if (!exporting) setPanelOpen(false); }}>
           <div className="modal" role="dialog" aria-label="导出勾选的人物" onClick={(event) => event.stopPropagation()}>
             <div className="modal-header"><h2>导出勾选的人物</h2><button className="text-button" type="button" onClick={() => setPanelOpen(false)}>关闭</button></div>
-            <p className="copy-help">每个人导出为一条完整记录（基础信息＋排盘数据＋全部 AI 结果），可导出 .sqlite / .sql 文本 / .json 三种，导入回来可完整还原。取消某人的勾选则不带入文件。</p>
+            <p className="copy-help">每个人导出为一条完整记录（基础信息＋排盘数据＋全部 AI 结果＋当时的语气档），可导出 .sqlite / .sql 文本 / .json 三种，导入回来可完整还原。取消某人的勾选则不带入文件。</p>
             {selectedRecords.length === 0 && <p role="status">还没有勾选人物，请回到列表勾选后再来。</p>}
             <ul className="export-person-list">
               {selectedRecords.map((record) => {

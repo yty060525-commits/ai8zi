@@ -14,14 +14,14 @@
  * ========================================================================== */
 import { invoke } from '@tauri-apps/api/core';
 import type { BaziRecord } from '../types/domain';
-import { listBaziRecords, unsyncedRecordIds } from './clientRepository';
+import { hydrateRecord, listBaziRecords, unsyncedRecordIds } from './clientRepository';
 import { isServerMode, serverFetch, ServerError } from './serverClient';
 import { chatDirect, toneInstructionText } from './deepseekAdapter';
 import { getBrowserCredential } from './aiSettings';
 import { countElements, sanitizeChatText } from '../features/chart/elements';
 
 export interface ChatMessage { role: 'user' | 'assistant'; content: string }
-export interface ChatPlan { recordId: string | null; personName: string | null; matchedCount: number; year?: number; month?: number; topics: string[]; question?: string; scan?: boolean; scanFrom?: number }
+export interface ChatPlan { recordId: string | null; personName: string | null; matchedCount: number; year?: number; month?: number; topics: string[]; question?: string; scan?: boolean; scanFrom?: number; general?: boolean }
 export interface ChatEvidence {
   person: { id: string; name: string; gender: string; birthYear: number };
   plan: { year?: number; month?: number; topics: string[] };
@@ -29,6 +29,8 @@ export interface ChatEvidence {
   analyses: Array<{ heading: string; text: string }>;
   missing: string[];
   periodFacts?: Record<string, unknown>;
+  /** 泛问时列给模型的「本盘已有小节」清单：只能从中选取，不得自行补写没有的小节。 */
+  sectionIndex?: string[];
 }
 export interface ChatReply {
   status: 'completed' | 'failed' | 'not_configured' | 'need_record';
@@ -53,34 +55,72 @@ export const TOPIC_RULES: Array<{ topic: string; re: RegExp }> = [
 ];
 const RELATIVE_YEAR: Record<string, number> = { 今年: 0, 明年: 1, 后年: 2, 去年: -1, 前年: -2 };
 
+/** 汉字月名 → 月份数字。口语里「明年三月」比「明年3月」更常见，只认阿拉伯数字的话整段月份会凭空消失。 */
+export const CN_MONTHS: Record<string, number> = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10, 十一: 11, 十二: 12 };
+/** 长名必须排在前面：`十一月` 若让 `一月` 先匹配，会被切成「十」+ 残留的「一月」。 */
+const CN_MONTH_ALT = '十一|十二|[一二三四五六七八九十]';
+
 /** 开放式时间问法：问「什么时候/大约在何时」，不指定具体年份，需要扫未来若干年。 */
 export const OPEN_TIMING_RE = /什么(时候|时间|年份|时期|阶段|时候能)|哪一?年|何时|多久|几年(内|后|能)|大约在|大致在|何时能/;
 /** 扫年窗口：从「起算年」往后取多少年。太短会漏掉晚来的应期，太长则证据与成本失控。 */
 export const SCAN_YEARS = 8;
 
+/** 把「本月/下个月/三月/3月」统一解析成 1..12；解不出返回 undefined。单独成函数是为了让分句也能喂进来。 */
+function monthFromText(text: string, now: Date): number | undefined {
+  const q = String(text || '');
+  const hit = q.match(/(\d{1,2})\s*月/) || q.match(new RegExp('(' + CN_MONTH_ALT + ')\\s*月'));
+  if (hit) {
+    const m = /^\d/.test(hit[1]) ? Number(hit[1]) : CN_MONTHS[hit[1]];
+    if (m !== undefined && m >= 1 && m <= 12) return m;
+  }
+  if (/本月|这个月|当月|这月/.test(q)) return now.getMonth() + 1;
+  if (/下个月|下月|来月/.test(q)) return now.getMonth() + 2 > 12 ? 1 : now.getMonth() + 2;
+  if (/上个月|上月/.test(q)) return now.getMonth() === 0 ? 12 : now.getMonth();
+  return undefined;
+}
+
+/** ⚠ 顺序即正确性：先把年月全解析完，最后才决定 scan。旧写法把 scan 分支夹在月份解析之前直接
+ *  return，于是「明年三月什么时候发工资」里的月份被整段跳过。两位年份缩写(24年→2024)按当代
+ *  出生区间回推 —— 这正是「答我没有24年信息」的根因：旧正则只吃 20\d{2}，解不出就继承了上一轮年份。 */
 export function extractWhen(question: string, now = new Date()): { year?: number; month?: number; scan?: boolean; from?: number } {
   const q = String(question || '');
   let year: number | undefined; let month: number | undefined;
-  const abs = q.match(/(20\d{2})\s*年/);
-  if (abs) year = Number(abs[1]);
+  const abs = q.match(/(20\d{2})\s*年/) || q.match(/(?:^|[^\d.])(\d{2})\s*年(?![\d])/);
+  if (abs) {
+    const raw = Number(abs[1]);
+    year = String(raw).length === 4 ? raw : raw > 30 ? 1900 + raw : 2000 + raw;
+  }
   if (year === undefined) {
     for (const [word, delta] of Object.entries(RELATIVE_YEAR)) {
       if (q.includes(word)) { year = now.getFullYear() + delta; break; }
     }
   }
-  // 「明年什么时候」这种：句子里有明确年份锚点，不算开放式扫描，仍按那一年精确取证
-  if (year === undefined && OPEN_TIMING_RE.test(q)) {
+  month = monthFromText(q, now);
+  if (month !== undefined && year === undefined) year = now.getFullYear(); // 月份必然锚定在某一年
+  // 年份与月份都没落地、且句子确实在开放式问时机 → 才转扫年。「明年什么时候」有年份锚点，不走这里。
+  if (year === undefined && month === undefined && OPEN_TIMING_RE.test(q)) {
     const rel = Object.entries(RELATIVE_YEAR).find(([word]) => q.includes(word));
     return { year: undefined, month: undefined, scan: true, from: now.getFullYear() + (rel ? rel[1] : 0) };
   }
-  const monthMatch = q.match(/(\d{1,2})\s*月/);
-  if (monthMatch) { const m = Number(monthMatch[1]); if (m >= 1 && m <= 12) month = m; }
-  else if (/本月|这个月|当月/.test(q)) month = now.getMonth() + 1;
-  else if (/下个月|下月|来月/.test(q)) month = now.getMonth() + 2 > 12 ? 1 : now.getMonth() + 2;
-  else if (/上个月|上月/.test(q)) month = now.getMonth() === 0 ? 12 : now.getMonth();
-  if (month !== undefined && year === undefined) year = now.getFullYear();
   return { year, month };
 }
+
+/** 从句子里挑出承载「所问时段」的那一小句再解析时间：「我本月失业了，接下来财运怎么样」的锚点在前半句。 */
+function whenOfQuestion(q: string, now: Date): { year?: number; month?: number; scan?: boolean; from?: number } {
+  const whole = extractWhen(q, now);
+  const landed = whole.year !== undefined || whole.month !== undefined || whole.scan === true;
+  if (landed) return whole;
+  for (const clause of String(q).split(/[，,。;；！!？?\n]/)) {
+    if (!clause.trim()) continue;
+    const part = extractWhen(clause, now);
+    if (part.year !== undefined || part.month !== undefined || part.scan === true) return { ...whole, ...part };
+  }
+  return whole;
+}
+
+/** 泛问识别：没命中任何主题词、但确实在问整体状况或适配方向。不识别它，「我这个人怎么样」
+ *  只能拿到本命批断的开头几百字，【核心结论】与【事业适配】永远进不了上下文。 */
+export const GENERAL_QUESTION_RE = /怎么样|如何|怎样|总体|整体|全面|概括|一生|一辈子|此命|命局|格局|此人|这个人|适合|方位|方向|行业|从事|发展|注意什么|运势|运程|运气|缺什么|喜用/;
 
 /** 检索计划。人名用一轮子串扫描(命中长名优先)；记录很多时可按 name 长度降序提前 break 或预建前缀索引。 */
 export function analyzeQuestion(question: string, records: Array<Pick<BaziRecord, 'id' | 'name'>>, now = new Date()): ChatPlan {
@@ -91,25 +131,47 @@ export function analyzeQuestion(question: string, records: Array<Pick<BaziRecord
     if (name && q.includes(name)) matched.push({ id: s.id, name });
   }
   matched.sort((a, b) => b.name.length - a.name.length);
-  const when = extractWhen(q, now);
+  const when = whenOfQuestion(q, now);
   const topics = [...new Set(TOPIC_RULES.filter((rule) => rule.re.test(q)).map((rule) => rule.topic))];
-  return { recordId: matched[0]?.id ?? null, personName: matched[0]?.name ?? null, matchedCount: matched.length, year: when.year, month: when.month, scan: when.scan === true, scanFrom: when.from, topics, question: q };
+  return { recordId: matched[0]?.id ?? null, personName: matched[0]?.name ?? null, matchedCount: matched.length, year: when.year, month: when.month, scan: when.scan === true, scanFrom: when.from, topics, question: q, general: topics.length === 0 && GENERAL_QUESTION_RE.test(q) };
+}
+
+/** 本轮问题自带的人名要能覆盖上一轮命主。 */
+function personFromText(text: string, records: Array<Pick<BaziRecord, 'id' | 'name'>>): { recordId: string; personName: string } | null {
+  const q = String(text || '');
+  let best: { id: string; name: string } | null = null;
+  for (const s of records || []) {
+    const name = String(s.name || '').trim();
+    if (name && q.includes(name) && (!best || name.length > best.name.length)) best = { id: s.id, name };
+  }
+  return best ? { recordId: best.id, personName: best.name } : null;
 }
 
 /** 追问继承上文语境：上一轮问的是 2026 年爱情，这轮一句「那我明年呢」不该退化成全新问题。
- *  只做「有历史且本轮自己没说时间/主题」时的补全，本轮若已明说就以本轮为准。 */
-export function applyFollowUp(plan: ChatPlan, history: ChatMessage[]): ChatPlan {
+ *  只做「有历史且本轮自己没说时间/主题」时的补全，本轮若已明说就以本轮为准。
+ *  records 传入时会做人名继承/切换：本轮自己点了别的名字 → 换人；只说「那她呢」→ 沿用上一个人。 */
+export function applyFollowUp(plan: ChatPlan, history: ChatMessage[], records: Array<Pick<BaziRecord, 'id' | 'name'>> = []): ChatPlan {
   if (!Array.isArray(history) || history.length === 0) return plan;
-  const prevUser = [...history].reverse().find((m) => m?.role === 'user' && typeof m.content === 'string');
+  // 往前找到最近一条**点过人名**的用户消息，而不是只看上一条(「那她呢」这种短追问本身不含名字)。
+  const userTurns = history.filter((m) => m?.role === 'user' && typeof m.content === 'string');
+  let prevPerson: { recordId: string; personName: string } | null = null;
+  for (let i = userTurns.length - 1; i >= 0 && !prevPerson; i -= 1) prevPerson = personFromText(userTurns[i].content, records);
+  const prevUser = userTurns[userTurns.length - 1];
   const prevAssistant = [...history].reverse().find((m) => m?.role === 'assistant' && typeof m.content === 'string');
   const source = [prevUser?.content, prevAssistant?.content, plan.question].filter(Boolean).join('\n');
   const next: ChatPlan = { ...plan };
+  // 人名：本轮自己说了就按本轮的来(可能换人)，没说才沿用上一轮，避免整段对话锁死在第一个命主上。
+  const thisTurn = personFromText(plan.question ?? '', records);
+  if (!thisTurn && prevPerson) { next.personName = prevPerson.personName; next.recordId = prevPerson.recordId; }
+  else if (thisTurn) { next.personName = thisTurn.personName; next.recordId = thisTurn.recordId; }
   if (!plan.topics?.length) {
     const inherited = [...new Set(TOPIC_RULES.filter((rule) => rule.re.test(source)).map((rule) => rule.topic))];
-    if (inherited.length) next.topics = inherited;
+    if (inherited.length) { next.topics = inherited; next.general = false; }
+    // 主题与泛问互斥：继承了具体主题就不再按泛问铺开，否则「那她呢」会把三份长证据全塞进来。
+    else next.general = plan.general === true && GENERAL_QUESTION_RE.test(source);
   }
   if (next.year === undefined && !next.scan) {
-    const inheritedWhen = extractWhen(prevUser?.content ?? '', new Date());
+    const inheritedWhen = whenOfQuestion(prevUser?.content ?? '', new Date());
     if (inheritedWhen.year !== undefined) { next.year = inheritedWhen.year; next.month = inheritedWhen.month; }
     else if (inheritedWhen.scan) { next.scan = true; next.scanFrom = inheritedWhen.from; }
   }
@@ -124,6 +186,20 @@ export const KNOWN_SECTION_LABELS = [
   '健康', '事业', '财运', '爱情', '刑冲克害批注', '后天调整', '事业适配', '健康注意',
   '核心结论', '值得关注的时间节点', '行动建议', '身强身弱与喜忌',
 ];
+/** 按句读/条目收口的截断(与服务器 sliceSections 同口径)：正文超过 cap 时退到 cap 之内最后一个
+ *  句末标点或换行处切，不把一句话或一条编号要点拦腰砍断(结论段被切一半正是取证失真的来源)。
+ *  找不到合适切点(首句超长)时才切满 cap，但设下限避免只剩一两个字。 */
+export function cutAtBoundary(text: string, cap: number): string {
+  const str = String(text || '');
+  if (str.length <= cap) return str;
+  const head = str.slice(0, cap);
+  let p = -1;
+  for (const ch of ['。', '！', '？', '；', '\n']) {
+    const idx = head.lastIndexOf(ch);
+    if (idx > p) p = idx;
+  }
+  return p >= 15 ? head.slice(0, p + 1).replace(/\s+$/, '') : head;
+}
 export function sliceSections(text: string, topics: string[], capPer = 700): string {
   const source = String(text || '');
   if (!source) return '';
@@ -134,7 +210,7 @@ export function sliceSections(text: string, topics: string[], capPer = 700): str
   for (const part of source.split(/(?=【)/)) {
     const m = part.match(/^【([^】]+)】([\s\S]*)/);
     if (!m) continue;
-    const label = m[1].trim(); const body = m[2].trim().slice(0, capPer);
+    const label = m[1].trim(); const body = cutAtBoundary(m[2].trim(), capPer);
     // 提问主题里存在真实小节标签时才按标签过滤；只问「大运/格局」这类非小节主题时不过滤
     if (realLabels.length && !realLabels.some((t) => label.includes(t))) continue;
     if (seen.has(label)) continue;
@@ -142,7 +218,7 @@ export function sliceSections(text: string, topics: string[], capPer = 700): str
     blocks.push('【' + label + '】' + body);
   }
   if (blocks.length) return blocks.join('\n');
-  return labels.length ? '' : source.slice(0, capPer);
+  return labels.length ? '' : cutAtBoundary(source, capPer);
 }
 
 const PILLAR_NAMES = ['年', '月', '日', '时'];
@@ -169,7 +245,8 @@ function summarizeHits(row: any, ownGanZhi: string): string[] {
   return [...new Set(out)].sort();
 }
 
-/** 时段运势事实：本地库经 hydrateRecord 已还原完整数组，直接取所问年份/月份行。 */
+/** 时段运势事实：存储是瘦身的(大运/流年/流月数组落库时被清空)，所以记录必须先经 hydrateRecord
+ *  重算再进来；否则这里三行查找恒为空，模型只剩一个年龄可引，问「某年某月」就答不出东西。 */
 export function buildPeriodFacts(record: BaziRecord, plan: ChatPlan): Record<string, unknown> | undefined {
   const n = record.nonAiResult;
   const y = plan.year;
@@ -192,6 +269,18 @@ const findCompleted = (tasks: any[], type: string, year?: number, month?: number
   && (year === undefined || Number(r?.task?.year) === Number(year))
   && (month === undefined || Number(r?.task?.month) === Number(month))
   && r.status === 'completed' && r.analysis);
+// 大运任务按「起运年」存；所问年份多半落在某步运中段，须先用 greatFortunes 找出覆盖它的运、按起运年取，
+// 否则只有正好问起运年那一年才命中，其余九年的「所处大运批断」静默丢失。greatFortunes 缺失时退回精确匹配。
+const coveringDecadeStart = (record: BaziRecord, year: number | undefined): number | undefined => {
+  const rows = record.nonAiResult?.greatFortunes;
+  if (Array.isArray(rows) && year !== undefined) { const g = rows.find((r: any) => Number(r.startYear) <= Number(year) && Number(year) <= Number(r.endYear)); if (g) return Number(g.startYear); }
+  return undefined;
+};
+const decadeOf = (record: BaziRecord, tasks: any[], year: number | undefined) => {
+  const keyYear = coveringDecadeStart(record, year) ?? (year === undefined ? undefined : Number(year));
+  return findCompleted(tasks, 'decade', keyYear)
+    || tasks.find((r: any) => r?.task?.type === 'decade' && r?.task?.decade && Number(r.task.decade.startYear) <= Number(year) && Number(year) <= Number(r.task.decade.endYear) && r.status === 'completed' && r.analysis);
+};
 
 /** 本机离线通道证据组装(口径 = 服务器 collectEvidence，数据源 = 本机 SQLite/镜像库)。 */
 export function buildEvidence(record: BaziRecord, plan: ChatPlan): ChatEvidence {
@@ -205,6 +294,8 @@ export function buildEvidence(record: BaziRecord, plan: ChatPlan): ChatEvidence 
     elements: counted.elements, elementRatio: counted.elementRatio, hiddenStems: n?.hiddenStems, tenGods: n?.tenGods,
     naYin: n?.naYin, twelveLongevity: n?.twelveLongevity,
     patternFacts: n?.patternFacts, strengthScore: n?.strengthScore,
+    // 调候参考：与服务器/桌面端 natal 同源字段，令三通道聊天在本命/喜忌类问题上口径一致。
+    tiaohouFacts: n?.tiaohouFacts,
     shenSha: compactShenSha(n?.shenSha), relationships: n?.relationships,
   };
   const evidence: ChatEvidence = {
@@ -216,6 +307,9 @@ export function buildEvidence(record: BaziRecord, plan: ChatPlan): ChatEvidence 
   const wantsScan = plan.scan === true;
   const wantsPeriod = plan.year !== undefined || wantsScan;
   const topics = plan.topics;
+  // 「泛问」(我这个人怎么样/适合做什么)：没有主题词当节标签，但用户要的恰恰是最依赖全局结论的答案。
+  // 把本命 + 全盘总结 + 后天调整三份都端出来，并把已有小节清单交给模型按问题挑 —— 仍属取证，不属推测。
+  const isGeneral = topics.length === 0 && plan.general === true;
   if (wantsScan) {
     // 开放式时机提问：把未来若干年的流年批断逐条列成时间线，让模型在证据里挑年限
     const labels = topics.length ? topics : ['健康', '事业', '财运', '爱情', '刑冲克害批注'];
@@ -231,7 +325,7 @@ export function buildEvidence(record: BaziRecord, plan: ChatPlan): ChatEvidence 
     }
     if (lines.length) {
       evidence.analyses.push({ heading: from + '—' + (from + SCAN_YEARS - 1) + '年·逐年批断(用于判断应期)', text: lines.join('\n') });
-      const decade = findCompleted(tasks, 'decade', from);
+      const decade = decadeOf(record, tasks, from);
       if (decade) evidence.analyses.push({ heading: '所处大运批断', text: sliceSections(decade.analysis.explanation, labels) });
     } else {
       evidence.missing.push(from + '—' + (from + SCAN_YEARS - 1) + ' 年的流年批断一条都还没生成，无法判断应期');
@@ -243,19 +337,23 @@ export function buildEvidence(record: BaziRecord, plan: ChatPlan): ChatEvidence 
   if (!wantsPeriod) {
     const baseline = findCompleted(tasks, 'baseline');
     if (baseline) {
-      const text = sliceSections(baseline.analysis.explanation, topics.length ? [...topics, '身强身弱与喜忌'] : []) || String(baseline.analysis.explanation ?? '').slice(0, 900);
+      const text = sliceSections(baseline.analysis.explanation, topics.length ? [...topics, '身强身弱与喜忌'] : []) || cutAtBoundary(String(baseline.analysis.explanation ?? ''), 900);
       evidence.analyses.push({ heading: '本命批断', text });
     } else evidence.missing.push('本命批断尚未生成：可先在命盘详情页点「AI 分析」');
     const adjustment = findCompleted(tasks, 'adjustment');
     if (adjustment && (!topics.length || topics.includes('五行'))) evidence.analyses.push({ heading: '后天调整与职业', text: sliceSections(adjustment.analysis.explanation, ['后天调整', '事业适配', '健康注意']) });
     const overview = findCompleted(tasks, 'overview');
     if (overview && !topics.length) evidence.analyses.push({ heading: '全盘总结', text: sliceSections(overview.analysis.explanation, ['核心结论', '值得关注的时间节点', '行动建议']) });
+    if (isGeneral) {
+      const available = [...new Set(evidence.analyses.flatMap((a) => [...String(a.text).matchAll(/【([^】]+)】/g)].map((m) => m[1])))];
+      if (available.length) evidence.sectionIndex = available;
+    }
   } else {
     const labels = topics.length ? topics : ['健康', '事业', '财运', '爱情', '刑冲克害批注'];
     const annual = findCompleted(tasks, 'annual', plan.year);
     if (annual) evidence.analyses.push({ heading: plan.year + '年·流年批断(' + String(annual.analysis.title ?? '') + ')', text: sliceSections(annual.analysis.explanation, labels) });
     else evidence.missing.push(plan.year + ' 年的流年分析尚未生成');
-    const decade = findCompleted(tasks, 'decade', plan.year);
+    const decade = decadeOf(record, tasks, plan.year);
     if (decade) evidence.analyses.push({ heading: '所处大运批断', text: sliceSections(decade.analysis.explanation, labels) });
     if (plan.month !== undefined) {
       const monthly = findCompleted(tasks, 'monthly', plan.year, plan.month);
@@ -284,6 +382,10 @@ export const CHAT_SYSTEM = '你是一位资深子平命理师，正在与用户�
   + '才明确说出"数据库里还没有计算过这批数据"，逐条列出缺了什么，'
   + '并建议用户先到命盘详情页点「AI 分析」把对应的本命/流年/流月批断算出来，然后再来提问；'
   + '此时只允许复述缺口与已有事实，一条都不许推测。'
+  + '【所问时段以检索计划为准】用户问题里的年份/月份说法可能不规范(如把某年说成两位缩写)，'
+  + '一律以本消息给出的检索计划与证据里标注的年份、月份为提问所指，不得因为问题原文的数字与你看到的年份写法不同，就回答"没有那一年的信息"。'
+  + '【泛问处理】用户问的是整体状况或适配方向(没点定某个专题)时，证据会给出【本盘已算出的批断小节】清单：'
+  + '先从清单里挑出与该问题最相关的小节作答，不要平铺所有小节，也不得引用清单里没有的小节名。'
   + '【绝对禁止】禁止自行推算或猜测干支、十神、五行、旺衰、格局、神煞；'
   + '禁止用命理常识、通书、经验、类比或"一般来说""通常""可能会"来补足缺失数据；'
   + '禁止在证据之外新增任何未给出的结论。'
@@ -306,9 +408,13 @@ export function buildChatMessages(input: { question: string; history: ChatMessag
       messages.push({ role: item.role, content: item.content.slice(0, 2000) });
     }
   }
+  // 小节清单放在证据之后：它随命盘内容变化，不属于可缓存的稳定前缀。
+  const sectionIndexText = evidence.sectionIndex?.length
+    ? '\n\n# 本盘已算出的批断小节(只能从中选取作答，不得自行补写没有的小节)\n' + evidence.sectionIndex.map((s) => '【' + s + '】').join('、')
+    : '';
   messages.push({
     role: 'user',
-    content: evidenceText + '\n\n# 语气要求\n' + toneInstructionText(tone) + '\n\n# 用户问题\n' + String(question ?? '').slice(0, 500),
+    content: evidenceText + sectionIndexText + '\n\n# 语气要求\n' + toneInstructionText(tone) + '\n\n# 用户问题\n' + String(question ?? '').slice(0, 500),
   });
   return messages;
 }
@@ -322,10 +428,11 @@ function anyChannelConfigured(): boolean {
 }
 
 /** 「谁都没配」这句话该指向哪儿：连着服务器时密钥在服务器那边，界面却写着「去设置」，
- *  用户点开的是本机凭据框 —— 填了也不会让服务器那条通道动起来。 */
+ *  用户点开的是本机凭据框 —— 填了也不会让服务器那条通道动起来。
+ *  入口方位按实际位置写「右上角」：「设置」按钮靠行尾对齐，窄屏同样靠右。 */
 function serverOnlyReason(detail?: string): string {
   const where = isServerMode()
-    ? '服务器那边还没配 AI 密钥(需要在服务器上配置，本客户端的设置页管不到它)；想马上能问：点左上角「设置」给任一通道填凭据，就走本机通道回答。'
+    ? '服务器那边还没配 AI 密钥(需要在服务器上配置，本客户端的设置页管不到它)；想马上能问：点页面右上角「设置」给任一通道填凭据，就走本机通道回答。'
     : '尚未配置 AI 密钥：配置后即可向我提问(服务器通道或本机通道均可)。';
   return where + (detail ? '（' + detail + '）' : '');
 }
@@ -342,14 +449,19 @@ export async function askChat(input: AskChatInput): Promise<ChatReply> {
   if (isServerMode()) {
     let recordId = input.recordId ?? undefined;
     let periodFacts: Record<string, unknown> | undefined;
-    // 本机若已有该盘完整数据，把引擎现算的时段行一并带上(服务器存储是瘦身版)
+    // 列表记录是瘦身版，先重算出大运/流年数组再取证(服务器那边同样需要这份现算数据)。
     try {
       const records = await listBaziRecords();
-      const plan = applyFollowUp(analyzeQuestion(question, records), history);
+      // 传 records：追问时本机也要能认出「那她呢」沿用上一轮命主，才能让 periodFacts 算在对的人身上。
+      const plan = applyFollowUp(analyzeQuestion(question, records), history, records);
       const target = (recordId ? records.find((r) => r.id === recordId) : undefined)
         ?? (plan.recordId ? records.find((r) => r.id === plan.recordId) : undefined)
         ?? (records.length === 1 ? records[0] : undefined);
-      if (target) { recordId = target.id; periodFacts = buildPeriodFacts(target, { ...plan, recordId: target.id }); }
+      if (target) {
+        recordId = target.id;
+        const full = await hydrateRecord(target);
+        periodFacts = buildPeriodFacts(full, { ...plan, recordId: target.id });
+      }
     } catch { /* 本地库读不到就让服务器完全按库内数据作答 */ }
     try {
       let provider: string | undefined;
@@ -397,12 +509,15 @@ export async function askChat(input: AskChatInput): Promise<ChatReply> {
 async function askChatLocal(input: { question: string; history: ChatMessage[]; tone: number; recordId?: string | null; signal?: AbortSignal }): Promise<ChatReply> {
   const records = await listBaziRecords();
   if (records.length === 0) return { status: 'need_record', reason: '还没有任何命盘：请先在「排盘」页保存一条记录，再向我提问' };
-  const plan = applyFollowUp(analyzeQuestion(input.question, records), input.history);
+  // records 一并传入：本轮没点人名时沿用上一个人，点了别人的名字则换人(否则整段对话锁死在第一个命主)。
+  const plan = applyFollowUp(analyzeQuestion(input.question, records), input.history, records);
   let target = input.recordId ? records.find((r) => r.id === input.recordId) : undefined;
   if (!target && plan.recordId) target = records.find((r) => r.id === plan.recordId);
   if (!target && records.length === 1) target = records[0];
   if (!target) return { status: 'need_record', reason: '你的名下有多条命盘，请告诉我问的是谁(或点选命主)', evidence: { plan, options: records.map((r) => ({ id: r.id, name: r.name })) } };
-  const evidence = buildEvidence(target, plan);
+  // 证据要读大运/流年/流月数组，而存储里这些是空的(落库时瘦身)：只对定下来的这一条做重算。
+  const fullTarget = await hydrateRecord(target);
+  const evidence = buildEvidence(fullTarget, plan);
   const messages = buildChatMessages({ question: input.question, history: input.history, evidence, tone: input.tone });
   const meta = { recordId: target.id, personName: target.name, plan };
   const inTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;

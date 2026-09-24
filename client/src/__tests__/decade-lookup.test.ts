@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findDecade } from '../features/person/PersonDetail';
+import { decadeSegment, findDecade } from '../features/person/PersonDetail';
 import type { BaziRecord } from '../types/domain';
 
 /** 大运段列表(现在引擎产出：按经典起运排定，起点不再是十年整数边界) */
@@ -34,5 +34,26 @@ describe('大运段查找(兼容旧记录的起运年龄式 startYear)', () => {
     const empty = { nonAiResult: { greatFortunes: [] } } as unknown as BaziRecord;
     expect(findDecade(empty, { year: 2025 })).toBeUndefined();
     expect(findDecade(record, {})).toBeUndefined();
+  });
+});
+
+describe('大运标题区间(按本运真实十年显示，不截窗口、不出假十年)', () => {
+  const year = new Date().getFullYear();
+  const at = (createdAt: string, extra: Partial<BaziRecord> = {}) => ({ createdAt, ...extra } as BaziRecord);
+
+  it('本运跨越今天：显示整段十年，而不是被窗口截剩的尾巴', () => {
+    const r = at(new Date(Date.UTC(year - 1, 5, 1)).toISOString());
+    expect(decadeSegment({ year, decade: { ganZhi: '乙酉', startYear: year - 3, endYear: year + 6 } }, r)).toEqual({ start: year - 3, end: year + 6 });
+  });
+
+  it('旧记录同一运少了两年：按起点补满十年，标题仍是完整一运', () => {
+    const r = at(new Date(Date.UTC(year - 1, 5, 1)).toISOString());
+    expect(decadeSegment({ year, decade: { ganZhi: '甲申', startYear: year - 8, endYear: year - 1 } }, r)).toEqual({ start: year - 8, end: year + 1 });
+  });
+
+  it('下一运要多年后才起：照原区间显示，不渲染出「2035-2035」这种假十年', () => {
+    const r = at(new Date(Date.UTC(year - 1, 5, 1)).toISOString(), { nonAiResult: { greatFortunes: [{ ganZhi: '乙酉', startYear: year - 10, endYear: year - 1 }, { ganZhi: '丙戌', startYear: year + 9, endYear: year + 18 }] } } as never);
+    expect(decadeSegment({ year: year - 10 }, r)).toEqual({ start: year - 10, end: year - 1 });
+    expect(decadeSegment({ year: year + 9, decade: { ganZhi: '丙戌', startYear: year + 9, endYear: year + 9 } }, r)).toEqual({ start: year + 9, end: year + 18 });
   });
 });

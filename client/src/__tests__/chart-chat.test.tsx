@@ -5,7 +5,7 @@ import { askChat } from '../data/chatEngine';
 import { listBaziRecords } from '../data/clientRepository';
 
 vi.mock('../data/chatEngine', () => ({ askChat: vi.fn() }));
-vi.mock('../data/clientRepository', () => ({ listBaziRecords: vi.fn(async () => []) }));
+vi.mock('../data/clientRepository', () => ({ listBaziRecords: vi.fn(async () => []), hydrateRecord: vi.fn(async (r) => r) }));
 vi.mock('../data/deepseekAdapter', () => ({ cancelAiSession: vi.fn() }));
 
 afterEach(() => { cleanup(); clearChatThread(); vi.mocked(askChat).mockReset(); vi.clearAllMocks(); vi.mocked(listBaziRecords).mockResolvedValue([] as never); });

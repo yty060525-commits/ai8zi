@@ -41,6 +41,16 @@ describe('网页直连按当前使用通道路由', () => {
     expect(calls[0]).toContain('api.deepseek.com');
   });
 
+  it('未显式选择通道时默认走 Qwen(与设置页默认一致)', async () => {
+    // 「以后默认 qwen」的回归：不设 mingli.provider，默认通道必须是 qwen，
+    // 且必须与设置页显示的「当前使用」同源(都读 mingli.provider，缺省回退同一值)。
+    localStorage.removeItem('mingli.provider');
+    localStorage.setItem('mingli.cred.qwen', 'qwen-key');
+    const res = await browserDirect(record, task);
+    expect(res.status).toBe('completed');
+    expect(calls[0]).toContain('dashscope.aliyuncs.com');
+  });
+
   it('当前通道未配凭据时自动回退到其它已配置通道', async () => {
     localStorage.setItem('mingli.provider', 'qwen'); // 使用中但未配
     localStorage.setItem('mingli.cred.kimi', 'kimi-key');

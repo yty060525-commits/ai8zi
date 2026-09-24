@@ -56,7 +56,7 @@ describe('三通道提示词一致性', () => {
     // schema 键名与占位符 X 是让模型按结构作答所必需的机器可读标记；其余一律不许有拉丁字母。
     const ALLOWED = new Set(['JSON', 'schema', 'title', 'explanation', 'pattern', 'strength', 'usefulElements', 'avoidElements', 'overall', 'health', 'career', 'wealth', 'love', 'notice', 'X']);
     // 这些是「数据结构的内部代号」——它们一旦出现，模型就会照抄成正文(截图事故的根因)。
-    const BANNED = ['inSeason', 'monthHasSupport', 'support', 'drain', 'index', 'label', 'basis', 'special', 'dayMaster', 'hiddenStems', 'tenGods', 'shenSha', 'scope', 'natal', 'patternFacts', 'strengthScore', 'true', 'false', 'null'];
+    const BANNED = ['inSeason', 'monthHasSupport', 'support', 'drain', 'index', 'label', 'basis', 'special', 'dayMaster', 'hiddenStems', 'tenGods', 'shenSha', 'scope', 'natal', 'patternFacts', 'strengthScore', 'tiaohouFacts', 'true', 'false', 'null'];
     for (const name of ['SCOPE_PREFIX', 'BASELINE_PROMPT', 'OVERVIEW_PROMPT', 'ADJUST_PREFIX']) {
       const text = grabJs(server, name);
       const latin = text.match(/[A-Za-z]+/g) || [];
@@ -73,6 +73,16 @@ describe('三通道提示词一致性', () => {
       const text = grabJs(server, name);
       expect(/20[2-9]\d/.test(text)).toBe(false);
       expect(/年龄约 \d/.test(text)).toBe(false);
+    }
+  });
+  it('natal 标题与语气标题两端用同一份常量，且各分支只拼一次', () => {
+    // 标题一旦在某个分支被手写改字(如「本命」→「命主」)，跨通道公共前缀当场分叉；
+    // 定义文本相同不代表拼装顺序相同，所以这里查真实代码里的引用形式。
+    for (const [file, src] of [['deepseekAdapter.ts', adapter], ['server/ai.mjs', server]] as const) {
+      expect(src).toContain('NATAL_BLOCK_HEAD + JSON.stringify(');
+      expect(src).toContain('TONE_HEAD + tone');
+      expect(src.match(/# 本命事实数据\(JSON，只依据此数据\)/g)?.length ?? 0).toBe(1);
+      expect(src.match(/# 语气要求\(必须按此措辞把握全篇\)/g)?.length ?? 0).toBe(1);
     }
   });
 });

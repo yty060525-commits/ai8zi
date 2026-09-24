@@ -36,6 +36,7 @@ describe('simplified chart application flow', () => {
   it('accepts only manually entered four pillars and emits a record', async () => {
     const onRecordCreated = vi.fn();
     render(<ChartPage onRecordCreated={onRecordCreated} />);
+    fireEvent.click(screen.getByRole('button', { name: '手录四柱' })); // 手录路径：默认是「按生日排」，先切到手录
     fireEvent.change(screen.getByLabelText('姓名'), { target: { value: '测试用户' } });
     fireEvent.change(screen.getByLabelText('出生年'), { target: { value: '1984' } });
     fireEvent.change(screen.getByLabelText('出生月'), { target: { value: '2' } });
@@ -97,6 +98,7 @@ describe('simplified chart application flow', () => {
   it('saves a submitted record, refreshes records, and opens its stored detail', async () => {
     resetMockSession();
     render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: '手录四柱' }));
     fireEvent.change(screen.getByLabelText('姓名'), { target: { value: '新记录' } });
     fireEvent.change(screen.getByLabelText('出生年'), { target: { value: '1984' } });
     fireEvent.change(screen.getByLabelText('出生月'), { target: { value: '2' } });
@@ -121,6 +123,7 @@ describe('simplified chart application flow', () => {
   it('does not call AI when a record is created', async () => {
     resetMockSession();
     render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: '手录四柱' }));
     fireEvent.change(screen.getByLabelText('姓名'), { target: { value: '仅保存记录' } });
     fireEvent.change(screen.getByLabelText('出生年'), { target: { value: '1984' } });
     fireEvent.change(screen.getByLabelText('出生月'), { target: { value: '2' } });

@@ -5,7 +5,7 @@ export const PROVIDERS = [
   { id: 'kimi', label: 'Kimi(Moonshot)', endpoint: 'https://api.moonshot.cn/v1/chat/completions', model: 'kimi-k2.6' },
   { id: 'qwen', label: 'Qwen3.8-Flash', endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model: 'qwen3.8-flash', disableThinking: true },
 ];
-export const currentProviderId = (db) => getSetting(db, 'ai.provider', 'deepseek');
+export const currentProviderId = (db) => getSetting(db, 'ai.provider', 'qwen');
 export const providerOf = (id) => PROVIDERS.find((p) => p.id === id) ?? PROVIDERS[0];
 export const providerKey = (db, id) => getSetting(db, 'ai.key.' + id, '');
 export const saveProviderKey = (db, id, key) => { if (key && key.trim()) setSetting(db, 'ai.key.' + id, key.trim()); };
@@ -97,7 +97,7 @@ function summarizeHits(row, ownGanZhi) {
   return [...new Set(out)].sort();
 }
 
-const BASELINE_PROMPT = '你是资深子平命理师。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行、藏干或关系。'
+export const BASELINE_PROMPT = '你是资深子平命理师。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行、藏干或关系。'
   + '当前分析目标：本命。用 JSON(仅 JSON)返回，schema：{"pattern":格局,"strength":身强/身弱/中和偏旺/中和偏弱,"usefulElements":[喜用],"avoidElements":[忌用],"explanation":长文}。'
   // —— 关键口径：格局与旺衰已由引擎按确定算法算出，写在 natal.patternFacts / natal.strengthScore 里，
   //    模型只负责「解读」与「定喜用」，不负责「重判」。这是消除同盘不同答案(命中率)的根本手段。
@@ -106,13 +106,13 @@ const BASELINE_PROMPT = '你是资深子平命理师。严格依据下方【事�
   + '2. 旺衰：直接采用【事实数据】里「旺衰评分」给出的档位，不得改判。其算法：助身方(比劫加印)与克泄耗方(食伤加财加官杀)分别累加——天干每透一位 6 分(月干 9 分)；地支藏干按本气 10 / 中气 5 / 余气 3；月支只对日主自己的通根再乘 2(提纲秉令只增益日主之气，不给财官加倍)；最后按日主在该支的十二长生调整通根之力(帝旺乘 1.4、死绝则不为根)。净分等于(助身方减克泄耗方)除以(助身方加克泄耗方)再乘一百，不低于 25 为身强、不高于负 25 为身弱，其间为中和偏旺或中和偏弱。是否得令＝月支是日主的禄或刃之地(甲乙禄寅、丙戊禄巳、庚辛禄申、壬癸禄亥；甲卯丙戊午庚酉壬子为阳刃)，被邻支冲则破令不算得令。月支藏干有无印比，只表示月支藏干里出现过印比(含中余气)，不等于得令，勿混用。(以上所述算法仅为帮助你理解口径，正文里一律用中文讲结论，任何拉丁字母都不许出现。)\n'
   + '3. explanation 必须以【身强身弱与喜忌】开头，随后按顺序各出现一次【健康】【事业】【财运】【爱情】(不得合并、省略或改名)，末尾可加【总评/行为建议】。\n'
   + '4. 【身强身弱与喜忌】一段必须引用旺衰的数字与明细来写，至少包含：是否得令、助身方得分、克泄耗方得分、净分与档位；再点出命局最关键的病处(如某十神太旺/太弱、何物伤格)。禁止只写「日主偏弱」这类无数据结论。\n'
-  + '5. 喜忌推导规则(通则，须写明所依通则)：身弱→喜印比、忌克泄耗；身强→喜克泄耗、忌印比；中和偏旺/偏弱→以调候与通关需要为主，兼顾抑扬。若格局本身另有要求(如阳刃喜官杀制、建禄喜财官、从格须顺势、专旺须顺生)，以格局要求优先并在文中说明为何与扶抑通则一致或冲突。\n'
+  + '5. 喜忌推导规则(通则，须写明所依通则)：先以扶抑定纲(身弱→喜印比、忌克泄耗；身强→喜克泄耗、忌印比)；再看【事实数据】中那条以季节(春/夏/秋/冬)起首、注明「调候」与「穷通宝鉴…参考」的字段：命局气候偏枯(生于严冬而局中火弱、或生于盛夏而局中水亏)时，调候优先于扶抑，据此微调喜忌并写明「从调候」；该项标注「非急」(多应在春秋)时，调候只作辅助印证，喜忌仍以扶抑与格局为准。凡该字段标注「参考」者，系《穷通宝鉴》按季节归并之论，两源或有出入，不得当作唯一结论。格局本身另有要求者(阳刃喜官杀制、建禄喜财官、从格须顺势、专旺须顺生)，以格局优先并说明与上述通则是否一致。\n'
   + '6. usefulElements / avoidElements 只能填 木/火/土/金/水 五项中的若干项，且必须与第 5 条推出的喜忌一致，不得凭印象填写。\n'
   + '7. 每个主题内部必须分点：每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。禁止在 JSON 顶层重复输出 overall/health/career/wealth/love/notice 等字段，也不要先给短句摘要再写长文。';
 
 // 时段任务(流年/流月/大运)的公共前缀：必须是**模块级常量字符串**，逐字节一致，
 // 这样同盘各任务才能整段命中 DeepSeek/Qwen 的前缀缓存。任何随任务变化的文字都不得写进这里。
-const SCOPE_PREFIX = '你是资深子平命理师，仅分析时段运势。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行或关系。'
+export const SCOPE_PREFIX = '你是资深子平命理师，仅分析时段运势。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行或关系。'
   + '禁止输出注释或代码块/围栏标记，只给最终正文。本命格局与旺衰已由引擎算定并写在【事实数据】的「格局事实」「旺衰评分」里，你不得重判、不得改口径；本期吉凶只在既定喜忌下衡量该期干支的作用。'
   + '用 JSON(仅 JSON)返回，schema：{"title":"古风四字或对仗标题(可选)","explanation":长文}。'
   + 'title 只能用干支+四字直书(如：卯戌六合·和合之象)或古典口诀风格，不得编造伪古文引文。'
@@ -124,7 +124,7 @@ const SCOPE_PREFIX = '你是资深子平命理师，仅分析时段运势。严�
   + '4. 各主题全文只出现一次，禁止先短句后长文重复两遍。每个主题内部必须分点陈述：每条单独一行、行首用 1. 2. 3. 编号，一句话一条，不要整段连排。\n'
   // 大运的年份区间来自引擎的起运推算；不写这条，模型会按「十年一运」想当然地报岁数。
   + '5. 提到大运时段与年龄时，必须照【本命事实数据】里「起运」一项与各柱起始/结束年份的原值说(如「X 年起入某运」)，不得自行换算起运年龄、不得改动区间。';
-const OVERVIEW_PROMPT = '你是资深子平命理师，现在做「全盘总结」。下面给出的是【已经算好的结论】：本命喜忌、以及未来十年的大运/流年/流月逐段批断要点。你的任务不是重新推算，也不是复述每一段，而是横向比较这些结论，挑出真正值得当事人注意的时间节点并说明理由。严格依据给定材料作答，禁止自行补充材料里没有的干支或事件；禁止输出注释或代码块/围栏标记，只给最终正文。用 JSON(仅 JSON)返回，schema：{"title":"古风四字或对仗标题(可选)","explanation":长文}。explanation 必须依次各出现一次【核心结论】【值得关注的时间节点】【行动建议】，顺序一致，不得合并、省略或改名。其中【值得关注的时间节点】是本文重点，要求：1. 按重要程度排序，每条单独一行、行首用 1. 2. 3. 编号；2. 每条写成「年份(或大运段) + 干支 + 为什么值得关注(引材料中的刑冲克害/喜忌依据) + 一句话怎么办」；3. 至少区分「机会窗口」与「风险窗口」两类，各自点明；4. 材料里若某年标注了六冲/三刑/六害等重大作用，必须纳入；5. 只写材料支持得起的结论，宁少勿滥，不要逐年流水账。【核心结论】用 2-4 条概括命局主线与该十年大势；【行动建议】用 2-4 条给出跨年份可执行的通用做法(贴合喜用五行，不重复时间节点里的原话)。全篇简体中文，每个主题内部一条一句，禁止整段连排。';
+export const OVERVIEW_PROMPT = '你是资深子平命理师，现在做「全盘总结」。下面给出的是【已经算好的结论】：本命喜忌、以及未来十年的大运/流年/流月逐段批断要点。你的任务不是重新推算，也不是复述每一段，而是横向比较这些结论，挑出真正值得当事人注意的时间节点并说明理由。严格依据给定材料作答，禁止自行补充材料里没有的干支或事件；禁止输出注释或代码块/围栏标记，只给最终正文。用 JSON(仅 JSON)返回，schema：{"title":"古风四字或对仗标题(可选)","explanation":长文}。explanation 必须依次各出现一次【核心结论】【值得关注的时间节点】【行动建议】，顺序一致，不得合并、省略或改名。其中【值得关注的时间节点】是本文重点，要求：1. 按重要程度排序，每条单独一行、行首用 1. 2. 3. 编号；2. 每条写成「年份(或大运段) + 干支 + 为什么值得关注(引材料中的刑冲克害/喜忌依据) + 一句话怎么办」；3. 至少区分「机会窗口」与「风险窗口」两类，各自点明；4. 材料里若某年标注了六冲/三刑/六害等重大作用，必须纳入；5. 只写材料支持得起的结论，宁少勿滥，不要逐年流水账。【核心结论】用 2-4 条概括命局主线与该十年大势；【行动建议】用 2-4 条给出跨年份可执行的通用做法(贴合喜用五行，不重复时间节点里的原话)。全篇简体中文，每个主题内部一条一句，禁止整段连排。';
 
 export function baselineSummaryOf(baseline) {
   if (!baseline) return '';
@@ -140,9 +140,23 @@ export function baselineSummaryOf(baseline) {
 
 /** 系统提示词：全通道全任务共用同一条，逐字节一致(前缀缓存的第一层)。 */
 export const SYSTEM_SCOPE = '请把思考压缩到最短，直接输出符合要求的简体中文 JSON 正文；全篇不得出现繁体字。';
-/** 输出硬性要求：与任务类型无关的公共约束，放在 natal 之后、可变内容之前。 */
-export const OUTPUT_RULES_TEXT = '\n\n# 输出硬性要求(违反即整篇作废重写)\n'
-  + '1. 全篇一律使用简体中文(UTF-8)，禁止任何繁体字、异体字混入。\n'
+/* ── 提示词分段顺序(与 client/src/data/deepseekAdapter.ts 同一份说明，改一处必须改两处)──
+ * 百炼显式缓存按「从 messages 开头到 cache_control 标记」整段做 key，命中率只取决于各段
+ * **从哪一行开始分叉**。排列原则：跨任务恒定的内容一律排在会变化的内容之前，且恒定段彼此相邻。
+ *   · 全任务共用(实测 user 正文 1714 字，占最短全文 49%)：SYSTEM_SCOPE → natalBlock(# 本命事实数据 + natal JSON)。
+ *     natal 用固定标题拼在指令**之前**，本命/流年/流月/大运四类任务因此共享这一整段。
+ *   · 从任务指令这一行开始分叉：BASELINE/SCOPE/OVERVIEW/ADJUST 四种指令文本互不相同；
+ *     输出硬性要求与语气要求排在分叉之后，只有同一种指令的任务能共享那一段。
+ *   · 分叉之后按可变性递增：本命结论摘要(同时段相同) → 年度段(同年相同) → 月度段 → 目标行。
+ * 实测数字见 client/src/__tests__/qwen-prefix-measure.test.ts；跨通道是否同源由本仓库
+ * test/prompt-parity.test.mjs 比对两端真实拼装结果。*/
+/** 指令段与输出硬性要求之间的固定标题：把可变的指令段夹在两段恒定内容中间。 */
+export const INSTRUCTION_TAIL_MARK = '\n\n# 输出硬性要求(违反即整篇作废重写)\n';
+/** natal 块标题与语气段标题：客户端 deepseekAdapter.ts 用同名常量，跨通道一致性测试靠它们切接缝。 */
+export const NATAL_BLOCK_HEAD = '\n\n# 本命事实数据(JSON，只依据此数据)\n';
+export const TONE_HEAD = '\n\n# 语气要求(必须按此措辞把握全篇)\n';
+/** 输出硬性要求：与任务类型无关的公共约束，排在 natal 与指令之后、语气要求之前。 */
+export const OUTPUT_RULES_TEXT = '1. 全篇一律使用简体中文(UTF-8)，禁止任何繁体字、异体字混入。\n'
   + '2. explanation 的【】小节必须按本任务规定逐段出现、各只出现一次，顺序一致，不得合并、省略或改名。\n'
   + '3. 每个小节至少 1 条编号要点；每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。\n'
   + '4. 禁止输出注释、代码块或任何围栏标记，只给最终正文。\n'
@@ -153,7 +167,7 @@ export const OUTPUT_RULES_TEXT = '\n\n# 输出硬性要求(违反即整篇作废
   + '不能用英文词加上括号注音，也不能在中文后面缀上英文取值。';
 
 /** 后天调整任务前缀：与浏览器直连 ADJUST_PREFIX 逐字节一致(见 prompt-parity 测试)。 */
-const ADJUST_PREFIX = '你是资深子平命理师。根据【本命结论】的喜用五行与下方【资料库】中对应五行的后天调整/职业知识，输出该命局的【后天调整】与【事业职业适配】建议(长文，贴合资料，不要另造体系)。'
+export const ADJUST_PREFIX = '你是资深子平命理师。根据【本命结论】的喜用五行与下方【资料库】中对应五行的后天调整/职业知识，输出该命局的【后天调整】与【事业职业适配】建议(长文，贴合资料，不要另造体系)。'
   + '禁止输出注释或代码块，只给最终正文。JSON schema：{"explanation":长文}，explanation 必须依次各出现一次【后天调整】【事业适配】【健康注意】(不得合并、省略或改名)。'
   + '\n\n# 判定标准(硬性)\n'
   + '1. 一切建议必须由【事实数据】里「旺衰评分」与「格局事实」给出的喜用五行推导出来，不得另立体系、不得假设未给出的事实。\n'
@@ -167,13 +181,19 @@ export function natalFactsOf(record) {
   return {
     gender: record.gender, birthYear: record.birthYear,
     pillars: { year: record.yearPillar, month: record.monthPillar, day: record.dayPillar, hour: record.hourPillar },
-    solarDate: nonAi.solarDate, lunarDate: nonAi.lunarDate, zodiac: nonAi.zodiac, dayMaster: nonAi.dayMaster,
+    dayMaster: nonAi.dayMaster, zodiac: nonAi.zodiac, solarDate: nonAi.solarDate, lunarDate: nonAi.lunarDate,
+    // dayMaster→zodiac→solarDate 与客户端 natal 同序：顺序一错，跨通道公共前缀当场分叉。
+    // 服务器独有的 gender/birthYear/lunarDate/elementRatio/naYin/twelveLongevity 不参与该断言。
     elements: counted?.elements ?? nonAi.elements, elementRatio: counted?.elementRatio ?? nonAi.elementRatio,
-    hiddenStems: nonAi.hiddenStems, tenGods: nonAi.tenGods,
+    // 十神在藏干之前，同样与客户端字面量一致(见 prompt-parity 测试)
+    tenGods: nonAi.tenGods, hiddenStems: nonAi.hiddenStems,
     naYin: nonAi.naYin, twelveLongevity: nonAi.twelveLongevity,
     // 引擎算定的格局与旺衰：放进「本命事实」里(所有任务共用同一段前缀)，
     // 时段任务因此不必再让模型自行判断强弱，也保证同盘各任务口径一致。
     patternFacts: nonAi.patternFacts, strengthScore: nonAi.strengthScore,
+    // 调候：引擎按日主与月令季节算定的中文字符串，作喜忌的「辅助判据」(非硬结论)。
+    //      位置紧随 strengthScore、先于 luckStart —— 与客户端 natal 同序，否则公共前缀当场分叉。
+    tiaohouFacts: nonAi.tiaohouFacts,
     // 起运：大运各柱的年份区间由它定，模型须按此说明「几岁起哪一运」，不得自行估。
     luckStart: nonAi.luckStart,
     shenSha: compactShenSha(nonAi.shenSha), relationships: nonAi.relationships,
@@ -205,35 +225,33 @@ export function buildTaskPayload(record, task, tone = DEFAULT_TONE) {
   }
   let userContent = '';
   const system = SYSTEM_SCOPE;   // 模块级常量：所有请求逐字节一致，缓存前缀从第一条消息就开始
-  const OUTPUT_RULES = OUTPUT_RULES_TEXT;
-  const toneText = '\n\n# 语气要求(必须按此措辞把握全篇)\n' + toneInstruction(tone);
+  const OUTPUT_RULES = INSTRUCTION_TAIL_MARK + OUTPUT_RULES_TEXT;
+  const natalBlock = NATAL_BLOCK_HEAD + JSON.stringify(natal);
+  const toneText = TONE_HEAD + toneInstruction(tone);
   if (task.type === 'adjustment') {
     const guide = task.guide || {};
     const baseline = baselineSummaryOf(task.baseline) || '（暂无本命结论）';
-    // 与其余任务同一排布：常量前缀 → natal(公共) → 输出要求/语气 → 可变尾巴(本命结论、资料库、目标)。
-    userContent = ADJUST_PREFIX
-      + '\n\n# 本命事实数据(JSON，只依据此数据)\n' + JSON.stringify(natal)
-      + OUTPUT_RULES + toneText
+    // 与其余任务同一排布：natal(公共) → 指令(仅这一段分叉) → 输出要求/语气(公共)
+    // → 可变尾巴(本命结论、资料库、目标)。
+    userContent = natalBlock + ADJUST_PREFIX + OUTPUT_RULES + toneText
       + '\n\n# 本命结论(引擎已定，必须沿用，不得重算)\n' + baseline
       + '\n\n# 资料库(喜用五行)\n' + JSON.stringify(guide)
       + '\n\n# 当前分析目标\n后天调整与职业适配';
   } else if (task.type === 'overview') {
-    userContent = OVERVIEW_PROMPT
-      + '\n\n# 本命事实数据(JSON，只依据此数据)\n' + JSON.stringify(natal)
-      + OUTPUT_RULES + toneText
+    userContent = natalBlock + OVERVIEW_PROMPT + OUTPUT_RULES + toneText
       + '\n\n# 本命结论(引擎已定，必须沿用，不得重算)\n' + (baselineSummaryOf(task.baseline) || '（暂无本命结论）')
       + '\n\n# 各时段分析要点(JSON)\n' + JSON.stringify(task.findings ?? {})
       + '\n\n# 当前分析目标\n全盘总结：未来十年中值得关注的节点';
   } else if (task.type === 'baseline') {
-    userContent = BASELINE_PROMPT + '\n\n# 事实数据(JSON)\n' + JSON.stringify({ natal, scope: {} }) + OUTPUT_RULES + toneText;
+    userContent = natalBlock + BASELINE_PROMPT + OUTPUT_RULES + toneText;
   } else {
     const whenLabel = task.type === 'decade' ? '所处大运(含 ' + y + ' 年)' : (task.month !== undefined ? y + '年' + task.month + '月' : y + '年');
     // 年龄仅对流年/流月有意义；大运不再推算年龄
     const ageSeg = task.type !== 'decade' && y !== undefined && record.birthYear ? '(年龄约 ' + (y - record.birthYear) + ')' : '';
-    // 命中率优先的前缀排布：SCOPE_PROMPT(常量) → natal(同盘恒定，且已含引擎算定的格局/旺衰)
-    // → 输出硬性要求(常量) → 语气(按档位分档后同档一致) → 只有「本命摘要/时段数据/目标」这三小段随任务变化。
-    // 「本命结论」摘要挪到 natal 之后：natal 里已有 patternFacts/strengthScore，摘要只是复述同一口径，
-    // 放在前面会把这段可变文本挤进公共前缀，白白缩短可缓存长度。
+    // 命中率优先的前缀排布(见文件头「提示词分段顺序」)：natal(同盘恒定) → SCOPE_PREFIX(指令)
+    // → 输出硬性要求 + 语气(恒定)。只有「本命摘要/时段数据/目标」这三小段随任务变化。
+    // 「本命结论」摘要排在指令之后：它由 task-01 的结论复述而来，与 natal 里的
+    // patternFacts/strengthScore 同一口径，放在 natal 之前会把这段可变文本挤进公共前缀。
     const note = task.baseline ? baselineSummaryOf(task.baseline) : '';
     // 三段式可变尾巴，按「变化频率从低到高」排列，让同一年份的请求彼此共享更长的前缀：
     //   ① 年度段(该年流年+所处大运) —— 同年所有流月任务与流年任务共用；
@@ -253,9 +271,7 @@ export function buildTaskPayload(record, task, tone = DEFAULT_TONE) {
       if (scope.monthlyHits !== undefined) monthPart.monthlyHits = scope.monthlyHits;
       if (scope.age !== undefined) monthPart.age = scope.age;
     }
-    userContent = SCOPE_PREFIX
-      + '\n\n# 本命事实数据(JSON，只依据此数据)\n' + JSON.stringify(natal)
-      + OUTPUT_RULES + toneText
+    userContent = natalBlock + SCOPE_PREFIX + OUTPUT_RULES + toneText
       + (note ? '\n\n# 本命结论(引擎已定，必须沿用，不得重算或推翻)\n' + note : '')
       + '\n\n# 本年度运势数据(JSON)\n' + JSON.stringify(yearPart)
       + (task.month !== undefined ? '\n\n# 本月运势数据(JSON)\n' + JSON.stringify(monthPart) : '')
@@ -272,7 +288,11 @@ export function cacheKey(record, task, model, tone = DEFAULT_TONE) {
   //      旧缓存里的答案是模型自行判断的版本，与新口径不一致，必须整体作废重算一次。
   // v11：大运改为按经典「起运」排定(旧实现把大运对齐到公历十年边界，年份全错)，
   //      旧缓存里那些「丁卯运 2020-2029」的时段结论已不成立，一并作废。
-  return ['v11', model, record.gender, record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar, task.type, task.year ?? 0, task.month ?? 0, record.birthYear, toneBucket].join('|');
+  // v12：natal 的键顺序与「输出硬性要求」标题做了跨通道对齐(十神在藏干前、dayMaster→zodiac→solarDate)，
+  //      旧缓存是另一种口径拼出来的正文；同时把 natal 提到指令之前，本命任务也吃这段公共前缀。
+  // v13：本命事实新增「调候参考」(natal.tiaohouFacts)，通则第 5 条改为按此判喜忌；旧缓存里的本命/时段
+  //      结论是模型自行体会调候的版本，与新口径不一致，整体作废重算一次。
+  return ['v13', model, record.gender, record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar, task.type, task.year ?? 0, task.month ?? 0, record.birthYear, toneBucket].join('|');
 }
 
 /* ---------- 失败原因分类：把上游错误翻译成用户能看懂的原因 ---------- */
@@ -292,10 +312,30 @@ export function classifyFailure(status, bodyText) {
   return snippet ? ('上游报错：' + snippet) : ('HTTP ' + status);
 }
 
+/** 阿里云百炼「上下文缓存」最小可缓存前缀(约 1024 token)；中文近似一字一 token，低于它这次
+ *  请求建不起缓存，打标只是白付 1.25 倍的建缓存费。 */
+export const QWEN_CACHE_MIN_CHARS = 1000;
+
+/** Qwen 通道的显式缓存标记：把最后一条 user 消息的 content 换成带 cache_control 的数组段。
+ *  从 messages 开头到该标记为止的前缀会被做成缓存块，命中部分按输入价一折计费(新建那次 1.25 倍)。
+ *  实测(client/src/__tests__/qwen-prefix-measure.test.ts)：一轮任务的全局公共前缀 1714 字(占最短全文 49%)，
+ *  同一种指令的任务还共享其后的输出要求与语气段；同年流年与该年各流月几乎整篇相同。所以只有第一条付建缓存费，
+ *  其余全部按一折计价 —— 打标确实省钱。
+ *  只包装请求体、不改提示词正文，所以三通道提示词逐字节一致的约束不受影响；
+ *  DeepSeek/Kimi 不认这个字段，原样返回字符串。 */
+export function withQwenCacheMark(provider, messages) {
+  if (provider.id !== 'qwen') return messages;
+  const last = messages.length - 1;
+  const msg = messages[last];
+  const text = typeof msg?.content === 'string' ? msg.content : '';
+  if (!text || text.length < QWEN_CACHE_MIN_CHARS) return messages;
+  return messages.map((m, i) => (i === last ? { ...m, content: [{ type: 'text', text, cache_control: { type: 'ephemeral' } }] } : m));
+}
+
 /** 调一次上游(单 provider，最多 transport 重试一次)；失败返回 {error}。
  *  mode='json'(默认)解析为结构化 analysis；mode='text' 直接返回 {text} 纯正文(聊天用)。 */
 export async function callProvider(provider, key, messages, effort, mode = 'json') {
-  const body = { model: provider.model, messages, max_tokens: 32768 };
+  const body = { model: provider.model, messages: withQwenCacheMark(provider, messages), max_tokens: 32768 };
   // V4.1：思考模式默认开启；按任务类型控制思考力度(本命/后天调整=high，时段=low 以省时省钱)
   if (provider.id === 'deepseek' && effort) body.reasoning_effort = effort;
   // Qwen3.8-Flash 默认带思考(实测慢 ~3.8 倍且对我们的结构化 JSON 无增益)，显式关闭可大幅提速
