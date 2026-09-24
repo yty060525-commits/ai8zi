@@ -597,14 +597,17 @@ export function equationOfTimeMinutes(year: number, month: number, day: number):
 }
 
 /** 真太阳时修正：把「北京时间」朴素钟点换算为出生地真太阳时。
- *  修正量 = (经度 − 120°东)×4 分钟(每 1°=4 分，东经 >120 为正、地方更快) + 均时差。
+ *  修正量 = (经度 − 120°东)×4 分钟(每 1°=4 分，东经 >120 为正、东加西减)。
+ *  采用命理/排盘界主流口径(北京时间官网 time.org.cn、渡星河等一致)：**只做经度差、不加均时差(EoT)**。
+ *  天文「真太阳时」严格含 EoT(±16 分)，但公共排盘惯例忽略之；实测在时辰边界(如 乌鲁木齐
+ *  23:10 钟表→21:00 亥)，加 EoT 会把 亥 误算成 戌，与所有在线参考不符，故此处不计 EoT。
  *  结果按朴素日历回读(Date.UTC 进出，不掺系统时区)，可能跨时辰、甚至跨子夜改公历日；
  *  调用方拿修正后的 {year,month,day,hour,minute} 再交给 computePillarsFromDate / 存 birthYear、birthMonth。 */
 export function applyTrueSolar(
   naive: { year: number; month: number; day: number; hour: number; minute: number },
   longitude: number,
 ): { year: number; month: number; day: number; hour: number; minute: number } {
-  const offsetMin = (longitude - 120) * 4 + equationOfTimeMinutes(naive.year, naive.month, naive.day);
+  const offsetMin = (longitude - 120) * 4;
   const shifted = new Date(Date.UTC(naive.year, naive.month - 1, naive.day, naive.hour, naive.minute) + Math.round(offsetMin * 60000));
   return { year: shifted.getUTCFullYear(), month: shifted.getUTCMonth() + 1, day: shifted.getUTCDate(), hour: shifted.getUTCHours(), minute: shifted.getUTCMinutes() };
 }

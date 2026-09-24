@@ -81,29 +81,29 @@ describe('lunarToSolar 农历→公历', () => {
 });
 
 describe('applyTrueSolar / equationOfTimeMinutes 真太阳时修正', () => {
-  it('均时差极值：2 月中旬约 −14.6 分、11 月初约 +16.4 分(与公开值同号同量级)', () => {
+  it('均时差极值(仅独立工具，修正已不启用 EoT)：2 月中旬约 −14.6 分、11 月初约 +16.4 分', () => {
     expect(equationOfTimeMinutes(2025, 2, 12)).toBeGreaterThan(-15.5);
     expect(equationOfTimeMinutes(2025, 2, 12)).toBeLessThan(-13.5);
     expect(equationOfTimeMinutes(2025, 11, 3)).toBeGreaterThan(15);
     expect(equationOfTimeMinutes(2025, 11, 3)).toBeLessThan(17.5);
   });
 
-  it('北京(116.4°E) 10:00 → 真太阳约 09:44，仍属巳时(改分钟不改时辰)', () => {
+  it('北京(116.4°E) 10:00 → 经度差 −14.4 分 = 09:45，仍属巳时(改分钟不改时辰)', () => {
     const r = applyTrueSolar({ year: 2025, month: 6, day: 21, hour: 10, minute: 0 }, 116.4);
-    expect(r).toMatchObject({ year: 2025, month: 6, day: 21, hour: 9, minute: 44 });
+    expect(r).toMatchObject({ year: 2025, month: 6, day: 21, hour: 9, minute: 45 });
   });
 
-  it('乌鲁木齐(87.6°E) 同一 10:00 → 约 07:48：与北京差一个时辰(辰 vs 巳)', () => {
+  it('乌鲁木齐(87.6°E) 同一 10:00 → −129.6 分 ≈ 07:50：与北京差一个时辰(辰 vs 巳)', () => {
     const bj = computePillarsFromDate(applyTrueSolar({ year: 2025, month: 6, day: 21, hour: 10, minute: 0 }, 116.4)).hourPillar[1];
     const wlq = computePillarsFromDate(applyTrueSolar({ year: 2025, month: 6, day: 21, hour: 10, minute: 0 }, 87.6)).hourPillar[1];
     expect(bj).toBe('巳');
     expect(wlq).toBe('辰');
   });
 
-  it('跨子夜：乌鲁木齐 00:30 修正后回退到前一日 22:18 → 日柱/命盘随之改变', () => {
+  it('跨子夜：乌鲁木齐 00:30 修正后回退到前一日 22:20 → 日柱/命盘随之改变', () => {
     const naive = { year: 2025, month: 6, day: 21, hour: 0, minute: 30 };
     const corrected = applyTrueSolar(naive, 87.6);
-    expect(corrected).toMatchObject({ day: 20, hour: 22, minute: 18 });
+    expect(corrected).toMatchObject({ day: 20, hour: 22, minute: 20 });
     const pUncorrected = computePillarsFromDate(naive);
     const pCorrected = computePillarsFromDate(corrected);
     expect(pCorrected.dayPillar).not.toBe(pUncorrected.dayPillar); // 换日 → 日柱不同

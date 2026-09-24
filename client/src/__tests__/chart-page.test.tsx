@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { ChartPage } from '../features/chart/ChartPage';
 import '../features/chart/nonAiCalculator'; // 预载引擎(缓存)，让页面内的按需加载立即命中
+import { loadTrueSolarProvinces } from '../features/chart/trueSolarCities';
+await loadTrueSolarProvinces(); // 预热真太阳时表(此 await 在 fake timers 之前)，令 ChartPage 效应内复用已解析 promise；app 端仍是首屏懒加载
 
 afterEach(cleanup);
 
@@ -139,31 +141,62 @@ describe('ChartPage simplified form', () => {
     expect(onSecond).not.toHaveBeenCalled();
   });
 
-  it('真太阳时省→市联动：选市后按该市经度修正，改变时柱；未选市给出提示', async () => {
+  it('真太阳时省→市→区联动：有区的市须选到区，按区经度修正改变时柱；缺市/缺区各给提示', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2025-03-08T12:34:56.000Z'));
     const onRecordCreated = vi.fn();
     render(<ChartPage onRecordCreated={onRecordCreated} />);
+    // 省市区整表惰性加载：先等微任务把 provinces 填进下拉
+    await act(async () => { for (let i = 0; i < 60; i += 1) await Promise.resolve(); });
     fireEvent.change(screen.getByLabelText('姓名'), { target: { value: '乌市命主' } });
     fireEvent.change(screen.getByLabelText('出生年'), { target: { value: '2025' } });
     fireEvent.change(screen.getByLabelText('出生月'), { target: { value: '6' } });
     fireEvent.change(screen.getByLabelText('出生日'), { target: { value: '21' } });
     fireEvent.change(screen.getByLabelText('时(0–23)'), { target: { value: '10' } });
     // 选了省但未选市 → 提示，不落库
-    fireEvent.change(screen.getByLabelText('真太阳时·省'), { target: { value: '新疆' } });
+    fireEvent.change(screen.getByLabelText('真太阳时·省'), { target: { value: '新疆维吾尔自治区' } });
     expect(screen.getByLabelText('市')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: '排盘并保存' }));
     await act(async () => { for (let i = 0; i < 30; i += 1) await Promise.resolve(); });
     expect(screen.getByRole('alert').textContent).toContain('请选择出生所在城市');
     expect(onRecordCreated).not.toHaveBeenCalled();
-    // 选乌鲁木齐(87.6°E)：提示显经度，10:00 修正后落辰时(北京则巳时)
-    fireEvent.change(screen.getByLabelText('市'), { target: { value: '乌鲁木齐' } });
-    expect(screen.getByText(/87\.6°E/)).toBeTruthy();
+    // 乌鲁木齐市下有区：只选市不选区 → 提示，不落库
+    fireEvent.change(screen.getByLabelText('市'), { target: { value: '乌鲁木齐市' } });
+    expect(screen.getByLabelText('区/县')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '排盘并保存' }));
+    await act(async () => { for (let i = 0; i < 30; i += 1) await Promise.resolve(); });
+    expect(screen.getByRole('alert').textContent).toContain('请选择出生所在区/县');
+    expect(onRecordCreated).not.toHaveBeenCalled();
+    // 选到区 天山区(87.6°E)：10:00 修正后落辰时(北京则巳时)，且不再显示经度数值提示
+    fireEvent.change(screen.getByLabelText('区/县'), { target: { value: '天山区' } });
     fireEvent.click(screen.getByRole('button', { name: '排盘并保存' }));
     await act(async () => { for (let i = 0; i < 60; i += 1) await Promise.resolve(); });
+    expect(screen.queryByText(/°E/)).toBeNull();
     expect(onRecordCreated).toHaveBeenCalledWith(expect.objectContaining({
       hourPillar: expect.stringMatching(/辰$/),
     }));
+    vi.useRealTimers();
+  });
+
+  it('真太阳时·直辖市：省级即列区、止于区一级(无独立市下拉)', async () => {
+    vi.useFakeTimers();
+    const onRecordCreated = vi.fn();
+    render(<ChartPage onRecordCreated={onRecordCreated} />);
+    await act(async () => { for (let i = 0; i < 60; i += 1) await Promise.resolve(); });
+    fireEvent.change(screen.getByLabelText('姓名'), { target: { value: '京命主' } });
+    fireEvent.change(screen.getByLabelText('出生年'), { target: { value: '2025' } });
+    fireEvent.change(screen.getByLabelText('出生月'), { target: { value: '6' } });
+    fireEvent.change(screen.getByLabelText('出生日'), { target: { value: '21' } });
+    fireEvent.change(screen.getByLabelText('时(0–23)'), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText('真太阳时·省'), { target: { value: '北京市' } });
+    // 直辖市第二级标签是「区」，选到区即可，无第三级
+    expect(screen.getByLabelText('区')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('区'), { target: { value: '朝阳区' } });
+    expect(screen.queryByLabelText('区/县')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '排盘并保存' }));
+    await act(async () => { for (let i = 0; i < 60; i += 1) await Promise.resolve(); });
+    // 朝阳 116.5°E，10:00 修正约 09:46 仍巳时(与不修正同为巳)
+    expect(onRecordCreated).toHaveBeenCalledWith(expect.objectContaining({ hourPillar: expect.stringMatching(/巳$/) }));
     vi.useRealTimers();
   });
 });
