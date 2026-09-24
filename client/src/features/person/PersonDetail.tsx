@@ -569,7 +569,7 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
       <span className="tone-scale"><em>犀利</em><em>中立</em><em>温柔夸夸</em></span>
     </div>
     <p className="ai-status" role="status">状态：{statusText[record.aiStatus]}</p>
-    {offlineActive && <p className="ai-mode-note" role="status">当前为本地离线（第四路）：点「AI 分析」由本机规则引擎就上方排盘事实直接批断，不联网、不消耗额度；结果同样写入本条命盘并随账号同步，可随时切回云端通道用大模型重算覆盖。</p>}
+    {offlineActive && <p className="ai-mode-note" role="status">当前为本地离线（第四路）：点「AI 分析」由本机规则引擎就上方排盘事实直接批断，不联网、不消耗额度；结果同样写入本条命盘并随账号同步，可随时切回云端通道用云端结果重算覆盖。</p>}
     {!offlineActive && aiResults.some((r) => r.source === 'local') && <p className="ai-mode-note" role="status">下方带 <span className="local-dot" aria-hidden="true" /> 的段落为上次本地离线批断的结果；当前已选云端通道，点「AI 分析」会用云端结果重算并覆盖它们。</p>}
     {hint && <p role="status">{hint}</p>}
     {autoWaiting && <div className="button-group"><button className="text-button" type="button" onClick={cancelAutoRetryFromHint}>取消自动重试</button></div>}
