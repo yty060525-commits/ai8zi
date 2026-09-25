@@ -289,10 +289,10 @@ async function hydrateRecords(records: BaziRecord[]): Promise<BaziRecord[]> {
   }));
   return fixed.map((record, i) => {
     const full = charts[i];
-    // 重算时顺带把大运槽位数写进返回的这份盘：老记录没这个数(字段是后加的)，而列表读的是瘦身存储、
-    // 不会自己重算，缺它就少算分母。真正落库由 backfillDecadeSlots 负责(pruneRecord 只在数得出大运段
-    // 时才改这个数，所以带着它存一次就钉住了)。
     if (!full) return record;
+    /* 重算时顺带把大运槽位数补在返回的那份上(老记录没这个数，字段是后加的)。这里**不**自己写库：
+       调用方拿到结果后统一决定要不要落库。在读取内部另开一条异步整条覆盖，会把同一次读取刚
+       清洗掉的结果冲回去(实测：过期任务又复活了)。 */
     return pruneOnRead(stampDecadeSlots({ ...record, nonAiResult: full }));
   });
 }
@@ -497,35 +497,18 @@ function applyMerged(merged: Map<string, BaziRecord>): boolean {
   return changed;
 }
 
-/** 从「这次重算」里取大运槽位数：缺就就地补写进存储，并把带着这个数的那份 nonAiResult 交回去
- *  (没有新算出来就原引用返回，调用方据此判断无需改动)。
- *  为什么只带这一个数而不返回整份 hydrated：① 存储约定是「本命要点 + 空占位」，整条覆盖回去还会把
- *  本轮刚清掉的 AI 正文一起复活(实测)；② 界面拿到存储形状即可，完整数组由 getBaziRecord 现算。 */
-async function backfillDecadeSlots(hydrated: BaziRecord, storedNonAi: BaziRecord['nonAiResult']): Promise<BaziRecord['nonAiResult']> {
-  const slots = hydrated.nonAiResult?.decadeSlots;
-  if (typeof slots !== 'number') return storedNonAi;
-  const current = await baziRepository.getBaziRecord(hydrated.id);
-  if (!current?.nonAiResult) return storedNonAi;
-  if (current.nonAiResult.decadeSlots === slots) return current.nonAiResult;
-  const stamped = { ...current.nonAiResult, decadeSlots: slots };
-  await baziRepository.saveBaziRecord({ ...current, nonAiResult: stamped });
-  return stamped;
-}
-
 export const saveBaziRecord = async (record: Omit<BaziRecord, 'id' | 'aiStatus'> & Partial<Pick<BaziRecord, 'aiStatus'>> | BaziRecord): Promise<BaziRecord> => {
   // aiStatus 只在「新建」时补默认值。以前每次保存都把它抹成未开始：跑完一轮分析后任何一次
   // 保存(改语气、重算非 AI)都会让状态回退，而任务条目还全部留着已完成 —— 界面就成了
   // 「状态未开始 + 每一段都已生成」。
   const input = { ...record } as BaziRecord;
   if (!input.id || !input.aiStatus) input.aiStatus = 'not_started';
-  const stored = await baziRepository.saveBaziRecord(pruneRecord(input));
-  /* 存量盘可能缺大运槽位数(见 stampDecadeSlots)：只有重算排盘才数得出来，而那次计算的结果默认只留在
-     内存里 —— 上一版就栽在这一步，补好的值没落库，下次从存储读回来又是空的，修复只活在当次读取里。 */
-  const stamped = await backfillDecadeSlots(await hydrateRecord(stored), stored.nonAiResult);
-  /* 交出去的那份就是存储里那一份(派生数组为空占位)，最多只多带上这一格槽位数：hydrate 算出的完整数组
-     不能顺着返回值漏给调用方 —— 实测那样同一次保存会有三种厚度(存储 gf=0、详情 gf=9、返回值 gf=9)，
-     任何「比较两次读取」的调用方都会判成数据不一致。要完整盘走 getBaziRecord / refreshRecord。 */
-  const full = stamped === stored.nonAiResult ? stored : { ...stored, nonAiResult: stamped };
+  /* pruneRecord 顺带把大运槽位数记下来了(见 stampDecadeSlots)：那是与排盘同一次的纯计算，不为它多跑一次
+     hydrate。上一版在这里又 hydrate 一遍专门补这个数 —— 实测那整段删掉测试仍全绿，因为传完整盘的调用方
+     pruneRecord 已经覆盖，传瘦身盘的(存量记录)它也算不出来，那种盘由 listBaziRecords 那条补齐路负责。
+     交出去的那份就是存储里那一份(派生数组为空占位)：完整数组不能顺着返回值漏给调用方 —— 实测那样同一次
+     保存会有三种厚度(存储 gf=0、详情 gf=9、返回值 gf=9)，任何「比较两次读取」的调用方都判成数据不一致。 */
+  const full = await baziRepository.saveBaziRecord(pruneRecord(input));
   if (serverActive() || (isTauri && isServerMode())) {
     // 不 await：一次导入/保存可能上百条，逐条等网络往返就是几分钟白屏。
     // 界面随后立刻重读列表也不会丢数据 —— 那一条始终还在内存视图 baziRecords 里，
@@ -540,17 +523,33 @@ export const listBaziRecords = async (): Promise<BaziRecord[]> => {
   // 列表也要校正五行计数：聊天证据直接读列表记录，不走 hydrate(避免为读数拖入历法库)。
   loadOwners();
   const stored = (await baziRepository.listBaziRecords()).map(withOwner);
-  const repaired = stored.map(repairElementCounts);
+  /* 存量盘可能缺大运槽位数(见 stampDecadeSlots)，而它只有重算排盘才数得出来 —— 补不出来的话这台
+     设备上的分母永远比详情页少一段。所以只对「瘦身 + 没钉过槽位数」的少数几条走一次 hydrate：
+     整条列表都拖历法库太贵。hydrateRecords 只算不写，落库统一走下面那条「校正结果回写」——
+     在读取内部另开一条异步整条覆盖，会把同一次读取刚清掉的过期任务冲回来(实测)。 */
+  const unstamped = stored.filter((record) => isPruned(record.nonAiResult) && !hasDecadeStamp(record));
+  const slotsById = new Map<string, number>();
+  if (unstamped.length) {
+    // 只取那一个数：清洗与落库仍走下面那条统一的「校正结果回写」，不在读取内部另开整条覆盖的写入。
+    for (const record of await hydrateRecords(unstamped)) {
+      const slots = record.nonAiResult?.decadeSlots;
+      if (typeof slots === 'number') slotsById.set(record.id, slots);
+    }
+  }
+  const repaired = stored.map((record) => {
+    const fixed = repairElementCounts(record);
+    const slots = slotsById.get(record.id);
+    return (typeof slots === 'number' && fixed.nonAiResult && typeof fixed.nonAiResult.decadeSlots !== 'number')
+      ? { ...fixed, nonAiResult: { ...fixed.nonAiResult, decadeSlots: slots } }
+      : fixed;
+  });
   // 校正结果回写一次：否则每次读列表都要重算，且导出/同步出去的仍是旧的错值。
   // 逐条比对，只有真的被改过的才落库；失败不影响返回(内存里已经是对的)。
   const fixes = repaired.filter((record, i) => record !== stored[i]);
-  if (fixes.length) {
-    try { for (const record of fixes) await baziRepository.saveBaziRecord(pruneRecord(record)); }
-    catch { /* 落库失败只影响下次仍要重算，界面与返回值不受影响 */ }
-  }
+  try { for (const record of fixes) await baziRepository.saveBaziRecord(pruneRecord(record)); }
+  catch { /* 落库失败只影响下次仍要重算，界面与返回值不受影响 */ }
   return repaired;
 };
-
 /** 导出用：把瘦身存储还原成完整盘，保证分享出去的 .sqlite/.sql/.json 自解释、可被第三方直接读懂。 */
 export async function exportableRecords(): Promise<BaziRecord[]> {
   return await hydrateRecords(await listBaziRecords());
