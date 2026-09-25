@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { getServiceStatus, clearServiceCredential, saveServiceCredential, setSelectedService, serviceProvider, serviceOf, PROVIDER_LABEL, type ServiceId } from '../../data/aiSettings';
-import { isLocalSystemEnabled, isLocalSystemUnlocked, lockLocalSystem, setLocalSystemEnabled, unlockLocalSystem } from '../../data/localSystem';
+import { isLocalSystemEnabled, isLocalSystemHidden, isLocalSystemUnlocked, lockLocalSystem, setLocalSystemEnabled, setLocalSystemHidden, unlockLocalSystem } from '../../data/localSystem';
 import { useSecretTitleTap } from './secretEntrance';
 import { compactRecords, getStorageStats, runAiSelfTest, type AiSelfTest } from '../../data/storageInfo';
 import { reloadLocalForSession } from '../../data/clientRepository';
@@ -17,10 +17,6 @@ const services: Array<{ id: ServiceId; label: string }> = [
 ];
 
 export function SettingsPage() {
-  // 本地系统的解锁块默认**不渲染**：设置页上看不到任何「本地系统」字样，只有走暗门才现身。
-  // 已在用的设备例外——否则已经开着本地引擎的人既看不到状态、也没法关掉它。
-  const [revealed, setRevealed] = useState<boolean>(() => isLocalSystemUnlocked());
-  const { onClick: onHeadingTap } = useSecretTitleTap(() => setRevealed(true), !revealed);
   const [statuses, setStatuses] = useState<Record<ServiceId, DisplayStatus>>({ serviceOne: '未配置', serviceTwo: '未配置', serviceThree: '未配置' });
   const [secrets, setSecrets] = useState<Record<ServiceId, string>>({ serviceOne: '', serviceTwo: '', serviceThree: '' });
   const [busyService, setBusyService] = useState<ServiceId | null>(null);
@@ -44,43 +40,52 @@ export function SettingsPage() {
   const [srvMsg, setSrvMsg] = useState<string>();
   const [session, setSession] = useState<ServerSession | null>(() => getServerSession());
 
-  // 本地系统（本机规则引擎）：要先用密钥开通，再手动勾选才接管「AI 分析」。初始化即读本机状态。
-  // 解锁码不再有独立输入框——和 Qwen 共用一格，按内容分流（见 saveQwenOrUnlockLocal）。
+  // 本地系统（本机规则引擎）：要先在自己的密钥框里开通，再手动勾选才接管「AI 分析」。
+  // **它和 Qwen 的云端凭据是两个互不相干的输入框**：解锁码不当凭据用、凭据也不开解锁。
   const [localUnlocked, setLocalUnlocked] = useState<boolean>(() => isLocalSystemUnlocked());
   const [localOn, setLocalOn] = useState<boolean>(() => isLocalSystemEnabled());
+
+  // 解锁块默认**不渲染**：设置页上看不到任何「本地系统」字样，只有走暗门才现身。
+  // 已在用的设备例外——否则开着本地引擎的人既看不到状态、也没法关掉它。
+  // hidden 是压过这条例外的显式标记（就是用户要的「隐藏按钮」，见下面的连点）。
+  const [hidden, setHidden] = useState<boolean>(() => isLocalSystemHidden());
+  const [revealed, setRevealed] = useState<boolean>(false);
+  // 「隐藏按钮」＝同一个连点手势的第二次触发：放出来之后再连点 5 下，整块收回、恢复原貌。
+  // 判据用**当前渲染里的表达式**(localUnlocked || revealed)，不用 setRevealed 刚排队的 state：
+  // 同步连点(fireEvent / 手速极快)期间 React 还没重渲染，闭包里的 `revealed` 会停在旧值 ——
+  // 已开通的设备上第一次连点本该是「收起」，读旧值却会判成「再显示一次」，永远收不掉。
+  const { onClick: onHeadingTap } = useSecretTitleTap(() => {
+    if (localUnlocked || revealed) {
+      setRevealed(false);
+      setHidden(setLocalSystemHidden(true));
+      return;
+    }
+    setRevealed(true);
+    if (hidden) setHidden(setLocalSystemHidden(false));
+  }, true);
+  // 渲染用的最终可见性：显式藏起来时一律不显示（包括已开通的设备）。
+  const showLocalBlock = !hidden && (revealed || localUnlocked);
+  const [localKey, setLocalKey] = useState('');
   const [localNote, setLocalNote] = useState<string>();
   const flashLocalNote = (text: string) => { setLocalNote(text); setTimeout(() => setLocalNote(undefined), 4000); };
+  function doUnlockLocal() {
+    if (!unlockLocalSystem(localKey)) {
+      flashLocalNote('密钥不正确：未开通本地系统，也没有改动任何已有配置');
+      return;
+    }
+    setLocalUnlocked(true);
+    setLocalKey('');
+    flashLocalNote('已开通本地系统，勾选「使用本地系统」才接管 AI 分析');
+  }
   function doLockLocal() {
     lockLocalSystem();
-    setLocalUnlocked(false); setLocalOn(false);
+    setLocalUnlocked(false); setLocalOn(false); setLocalKey('');
     flashLocalNote('已撤销开通：本地系统已关闭并清除本机密钥标记');
   }
   function toggleLocal(on: boolean) {
     const applied = setLocalSystemEnabled(on);
     setLocalOn(applied);
     flashLocalNote(applied ? '已启用本地系统：点「AI 分析」改由本机规则引擎批断（仅本机）' : '已关闭本地系统：切回云端通道');
-  }
-
-  /** Qwen 那一格是**同一个输入框、按内容分流**（用户 2026-09-25 指定）：
-   *   · `sk-` 开头 → 当成云端凭据保存；
-   *   · 不是 sk- 但解锁码填对 → 开通本地系统；
-   *   · 两者都不是 → 配置失败，什么都不写。
-   *  判序不能反：解锁码本身不带 sk-，而真实云端 key 一定带 —— 先认 sk- 才不会把 key 当解锁码试。 */
-  async function saveQwenOrUnlockLocal() {
-    const value = secrets.serviceThree;
-    if (!value.trim()) { setStatuses((c) => ({ ...c, serviceThree: '保存失败' })); flashLocalNote('请先粘贴访问凭据'); return; }
-    if (value.trim().toLowerCase().startsWith('sk-')) { await saveOne('serviceThree'); return; }
-    // 到这里说明它想当解锁码用：只有暗门开着才有输入框可填，本地标记也照常写。
-    if (unlockLocalSystem(value)) {
-      setLocalUnlocked(true);
-      setSecrets((c) => ({ ...c, serviceThree: '' }));
-      setStatuses((c) => ({ ...c, serviceThree: c.serviceThree === '已配置' ? '已配置' : '未配置' }));
-      flashLocalNote('识别为本地系统密钥：已开通，勾选「使用本地系统」才接管 AI 分析');
-      return;
-    }
-    setStatuses((c) => ({ ...c, serviceThree: '保存失败' }));
-    setSecrets((c) => ({ ...c, serviceThree: '' }));
-    flashLocalNote('配置失败：既不是以 sk- 开头的云端凭据，也不是有效的本地系统密钥');
   }
 
   useEffect(() => {
@@ -245,8 +250,9 @@ export function SettingsPage() {
         const st = statuses[service.id];
         const busy = busyService === service.id;
         const isCurrent = serviceProvider(service.id) === currentProvider;
-        // 本地系统与 Qwen **共用同一个输入框**（用户指定「跟 qwen 走一个系统」+「输入特殊代码：
-        // sk 开头是配置，符合解锁码就是本地，两者都不是则配置失败」）。分流见 saveQwenOrUnlockLocal。
+        // 本地系统那块挂在 Qwen 一格的位置里（用户指定「跟 qwen 走一个系统」），但它有**自己的密钥框**，
+        // 与上面的云端凭据互不影响 —— 用户 2026-09-25 明确否掉了「一个框按内容分流」：那等于拿解锁码
+        // 去顶替原本存 Qwen 密钥的地方。
         const isQwen = service.id === 'serviceThree';
         return <div className={isCurrent ? 'channel-block current' : 'channel-block'} key={service.id} aria-label={service.label + ' 通道'}>
           <div className="channel-head">
@@ -256,21 +262,24 @@ export function SettingsPage() {
             {notice[service.id] && <span className="channel-notice" role="status">{notice[service.id]}</span>}
           </div>
           <div className="channel-row">
-            {/* 占位文字与另外两格**保持同一句**（用户 2026-09-25：「输入框显示的文字跟别的保持一致」）。
-                Qwen 那格的特殊之处只在分流规则，已写在下面的说明段里，不再往占位里塞。 */}
+            {/* 占位文字三格**同一句**（用户 2026-09-25：「输入框显示的文字跟别的保持一致」）。
+                Qwen 这格只管云端凭据，解锁码走下面那块自己的输入框，两者互不相干。 */}
             <input aria-label={service.label + ' 访问凭据'} type="password" autoComplete="off" placeholder={st === '已配置' ? '已保存（重新填写可覆盖）' : '粘贴访问凭据'} value={secrets[service.id]} disabled={busy}
               onChange={(event) => { const v = event.target.value; setSecrets((c) => ({ ...c, [service.id]: v })); }} />
-            <button className="primary-button" type="button" disabled={busy} onClick={() => void (isQwen ? saveQwenOrUnlockLocal() : saveOne(service.id))}>{busy ? '处理中…' : '保存'}</button>
+            <button className="primary-button" type="button" disabled={busy} onClick={() => void saveOne(service.id)}>{busy ? '处理中…' : '保存'}</button>
             <button className="text-button" type="button" disabled={busy} onClick={() => void clearOne(service.id)}>清除</button>
           </div>
-          {isQwen && revealed && <div className="local-unlock" aria-label="本地系统">
+          {isQwen && showLocalBlock && <div className="local-unlock" aria-label="本地系统">
             <div className="local-unlock-head">
               <strong>本地系统（本机规则引擎）</strong>
               <span className={localUnlocked ? 'channel-status ok' : 'channel-status'}>{localUnlocked ? '已开通' : '未开通'}</span>
               {localNote && <span className="channel-notice" role="status">{localNote}</span>}
             </div>
-            <p className="copy-help">不联网、不消耗用度：由本机规则引擎就排盘事实直接批断，结果同样写入命盘并随账号同步。就在上方输入框里粘贴：以 sk- 开头的按云端凭据保存，本地系统密钥则开通本地系统；两者都不符合会提示配置失败。开通后再勾选才接管「AI 分析」；仅影响本机，随时可取消勾选切回云端。</p>
-            {localUnlocked && <div className="local-unlock-row">
+            <p className="copy-help">不联网、不消耗用度：由本机规则引擎就排盘事实直接批断，结果同样写入命盘并随账号同步。需粘贴密钥开通（与上面的云端凭据是两个独立的框，互不影响），开通后再勾选才接管「AI 分析」；仅影响本机，随时可取消勾选切回云端。</p>
+            {!localUnlocked
+              ? <div className="channel-row"><input aria-label="本地系统密钥" type="password" autoComplete="off" placeholder="粘贴密钥以开通本地系统" value={localKey} onChange={(event) => setLocalKey(event.target.value)} />
+                <button className="primary-button" type="button" onClick={doUnlockLocal}>开通</button></div>
+              : <div className="local-unlock-row">
                 <label className="checkbox-inline"><input type="checkbox" checked={localOn} onChange={(event) => toggleLocal(event.target.checked)} />使用本地系统（不联网批断）</label>
                 <button className="text-button" type="button" onClick={doLockLocal}>撤销开通（清除密钥）</button>
               </div>}

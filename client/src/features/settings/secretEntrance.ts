@@ -13,18 +13,25 @@ const TAPS = 5;
 /** 两下之间超过这个间隔就重新数：连点要像连点，而不是零散地点了一整天。 */
 const WINDOW_MS = 2000;
 
-/** 返回一个稳定的点击处理器：在同一个元素上连点 5 下即调用 onOpen。
- *  `enabled` 为 false 时完全不计数（已经放出来的区块不必再点）。 */
-export function useSecretTitleTap(onOpen: () => void, enabled = true): { onClick: () => void } {
+/** 返回一个稳定的点击处理器：在同一个元素上连点 5 下即调用 onTrigger。
+ *  `enabled` 为 false 时完全不计数（不需要放出来的时候就别数）。
+ *
+ *  回调走 ref 而不是直接闭包引用：这个钩子的状态(taps/last)存在 useRef 里，而**同步连点**
+ *  (jsdom 的 fireEvent、或用户手速极快)期间 React 还没来得及重渲染，props 里的旧回调会
+ *  连着被调用 5 次 —— 于是「显示→隐藏→显示→…」来回翻转，净结果取决于次数奇偶，看起来
+ *  就像暗门没反应。放进 ref 后每次触发都读最新一次渲染的闭包，状态由它自己判。 */
+export function useSecretTitleTap(onTrigger: () => void, enabled = true): { onClick: () => void } {
   const taps = useRef(0);
   const last = useRef(0);
+  const handler = useRef(onTrigger);
+  handler.current = onTrigger;
   const onClick = useCallback(() => {
     if (!enabled) return;
     const at = Date.now();
     if (at - last.current > WINDOW_MS) taps.current = 0;
     last.current = at;
     taps.current += 1;
-    if (taps.current >= TAPS) { taps.current = 0; onOpen(); }
-  }, [onOpen, enabled]);
+    if (taps.current >= TAPS) { taps.current = 0; handler.current(); }
+  }, [enabled]);
   return { onClick };
 }

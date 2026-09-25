@@ -83,3 +83,25 @@ export function setLocalSystemEnabled(on: boolean): boolean {
 export function resetLocalSystemForTests(): void {
   try { localStorage.removeItem(UNLOCKED_KEY); localStorage.removeItem(ON_KEY); } catch { /* 忽略 */ }
 }
+
+/* ── 暗门本身的开关 ────────────────────────────────────────────────────────
+   用户 2026-09-25：「要加一个隐藏按钮恢复成原貌」。做法是**再叠一层暗门**而不是摆一个
+   看得见的按钮：在标题上连点 5 下已经放出解锁块之后，**再连点 5 下**就把它整块收回、
+   页面回到从没被开过的样子。这样外人扫一眼设置页看不到任何「关掉隐藏」的线索，
+   而知道节奏的人两下就能收回去。
+
+   `mingli.local.hidden` 一旦置起来就压过一切，包括「已开通就直接显示」那条例外 ——
+   这正是它的用途：开着本地引擎的人也要能彻底藏干净。代价要说清楚：**这台设备界面上
+   就没有能关本地系统的控件了**，`isLocalSystemEnabled()` 仍会返回 true、批断仍走本机。
+   要恢复只需在同一处再连点 5 下（状态不持久化到别处，重进设置页也仍然认这个标记）。 */
+const HIDDEN_KEY = 'mingli.local.hidden';
+
+export function isLocalSystemHidden(): boolean {
+  try { return localStorage.getItem(HIDDEN_KEY) === '1'; } catch { return false; }
+}
+
+/** 切换隐藏态，返回切换后的结果。 */
+export function setLocalSystemHidden(hidden: boolean): boolean {
+  try { if (hidden) localStorage.setItem(HIDDEN_KEY, '1'); else localStorage.removeItem(HIDDEN_KEY); } catch { /* 隐私模式忽略：本会话内仍可切换 */ }
+  return hidden;
+}

@@ -24,9 +24,9 @@ const happyPath = async (command: string) => command === 'get_ai_provider_status
 // 每个用例后恢复默认桩：否则某个用例改过的 invoke 实现会污染后续用例(曾导致覆盖测试误判)
 afterEach(() => { cleanup(); resetAiSettingsForTests(); resetLocalSystemForTests(); vi.mocked(invoke).mockImplementation(happyPath); vi.clearAllTimers?.(); });
 
-// Qwen 那一格现在是**一个输入框两件事**：sk- 开头当云端凭据，解锁码开通本地，都不符合报失败。
-// 分流靠内容而不是独立控件，所以这些用例一律往「Qwen3.8-Flash 访问凭据」里填。
+// Qwen 那格只管云端凭据；本地系统走解锁块里**自己的密钥框**（用户否掉了「一个框按内容分流」）。
 const qwenInput = () => screen.getByLabelText('Qwen3.8-Flash 访问凭据') as HTMLInputElement;
+const localKeyInput = () => screen.getByLabelText('本地系统密钥') as HTMLInputElement;
 const qwenSave = () => screen.getAllByRole('button', { name: '保存' })[2];
 
 describe('SettingsPage', () => {
@@ -151,7 +151,8 @@ describe('SettingsPage', () => {
 
   it('本地系统的入口默认完全不可见：没走暗门前，页面上没有「本地系统」字样', () => {
     render(<SettingsPage />);
-    // 这是「藏入口」的核心断言：整块说明与勾选框都不该存在
+    // 这是「藏入口」的核心断言：密钥框、勾选框、整块说明都不该存在
+    expect(screen.queryByLabelText('本地系统密钥')).toBeNull();
     expect(screen.queryByRole('checkbox', { name: /使用本地系统/ })).toBeNull();
     expect(document.body.textContent).not.toContain('本地系统');
   });
@@ -196,15 +197,14 @@ describe('SettingsPage', () => {
     expect(document.body.textContent).not.toContain('sk-qwen-secret');
   });
 
-  it('填对解锁码：开通本地系统，且不写云端凭据', async () => {
+  it('解锁码只进自己的框：开通本地系统，且不写云端凭据', async () => {
     render(<SettingsPage />);
     openSecret();
-    fireEvent.change(qwenInput(), { target: { value: LOCAL_SYSTEM_KEY } });
-    fireEvent.click(qwenSave());
+    fireEvent.change(localKeyInput(), { target: { value: LOCAL_SYSTEM_KEY } });
+    fireEvent.click(screen.getByRole('button', { name: '开通' }));
     await waitFor(() => expect(screen.getByText('已开通')).toBeTruthy());
-    expect(screen.getByText(/识别为本地系统密钥/)).toBeTruthy();
     // 关键反向断言：解锁码不是凭据，不该把 Qwen 标成已配置
-    expect((screen.getAllByText('未配置').length)).toBeGreaterThan(0);
+    expect(screen.getAllByText('未配置').length).toBeGreaterThan(0);
     const box = screen.getByRole('checkbox', { name: /使用本地系统/ }) as HTMLInputElement;
     expect(box.checked, '刚开通时不该自动启用').toBe(false);
     expect(isLocalSystemEnabled()).toBe(false);
@@ -214,25 +214,24 @@ describe('SettingsPage', () => {
     expect(isOfflineMode()).toBe(true);
   });
 
-  it('两者都不是：报配置失败，凭据与本地开通都不写', async () => {
+  it('密钥输错：如实报错、不开通、也不出现勾选框', async () => {
     render(<SettingsPage />);
     openSecret();
-    fireEvent.change(qwenInput(), { target: { value: 'not-the-key' } });
-    fireEvent.click(qwenSave());
-    // 说明文案里也写着「配置失败」四个字，所以只认那条 role=status 的提示
-    await waitFor(() => expect(screen.getByText(/既不是以 sk- 开头的云端凭据/)).toBeTruthy());
+    fireEvent.change(localKeyInput(), { target: { value: 'not-the-key' } });
+    fireEvent.click(screen.getByRole('button', { name: '开通' }));
+    await waitFor(() => expect(screen.getByText(/密钥不正确/)).toBeTruthy());
     expect(screen.getByText('未开通')).toBeTruthy();
-    expect(isLocalSystemUnlocked()).toBe(false);
     expect(screen.queryByRole('checkbox', { name: /使用本地系统/ })).toBeNull();
-    // 失败要清空输入，别把一串无效内容留在框里
-    expect(qwenInput().value).toBe('');
+    expect(isLocalSystemUnlocked()).toBe(false);
+    // 失败要留在框里让人改，且不动云端凭据
+    expect(localKeyInput().value).toBe('not-the-key');
   });
 
   it('撤销开通会连带把本地系统关掉，回去只剩未开通状态', async () => {
     render(<SettingsPage />);
     openSecret();
-    fireEvent.change(qwenInput(), { target: { value: LOCAL_SYSTEM_KEY } });
-    fireEvent.click(qwenSave());
+    fireEvent.change(localKeyInput(), { target: { value: LOCAL_SYSTEM_KEY } });
+    fireEvent.click(screen.getByRole('button', { name: '开通' }));
     await waitFor(() => expect(screen.getByText('已开通')).toBeTruthy());
     fireEvent.click(screen.getByRole('checkbox', { name: /使用本地系统/ }));
     await waitFor(() => expect(isLocalSystemEnabled()).toBe(true));
@@ -248,9 +247,49 @@ describe('SettingsPage', () => {
   it('渲染时不泄漏密钥明文', async () => {
     render(<SettingsPage />);
     openSecret();
-    fireEvent.change(qwenInput(), { target: { value: LOCAL_SYSTEM_KEY } });
-    fireEvent.click(qwenSave());
+    fireEvent.change(localKeyInput(), { target: { value: LOCAL_SYSTEM_KEY } });
+    fireEvent.click(screen.getByRole('button', { name: '开通' }));
     await waitFor(() => expect(screen.getByText('已开通')).toBeTruthy());
     expect(document.body.textContent).not.toContain(LOCAL_SYSTEM_KEY);
+  });
+
+  it('隐藏按钮：放出来之后再连点 5 下，整块收回、恢复原貌', () => {
+    render(<SettingsPage />);
+    const heading = screen.getByRole('heading', { name: '设置' });
+    for (let i = 0; i < 5; i += 1) fireEvent.click(heading);
+    expect(screen.getByLabelText('本地系统密钥')).toBeTruthy();
+    for (let i = 0; i < 5; i += 1) fireEvent.click(heading);
+    expect(screen.queryByLabelText('本地系统密钥'), '第二次连点该把整块收回去').toBeNull();
+    expect(document.body.textContent).not.toContain('本地系统');
+  });
+
+  it('隐藏是持久的：重进设置页仍藏着，而且再连点 5 下能点回来', () => {
+    const first = render(<SettingsPage />);
+    const heading = screen.getByRole('heading', { name: '设置' });
+    for (let i = 0; i < 10; i += 1) fireEvent.click(heading);
+    first.unmount();
+    render(<SettingsPage />);
+    expect(screen.queryByText('未开通'), '藏起来后重进不该自己冒出来').toBeNull();
+    const again = screen.getByRole('heading', { name: '设置' });
+    for (let i = 0; i < 5; i += 1) fireEvent.click(again);
+    expect(screen.getByText('未开通'), '再点一次要能恢复可见').toBeTruthy();
+    expect(localStorage.getItem('mingli.local.hidden'), '恢复可见后隐藏标记该清掉').toBe(null);
+  });
+
+  it('已开通的设备若被藏起来也不显示解锁块：否则「恢复原貌」形同虚设', () => {
+    unlockLocalSystem(LOCAL_SYSTEM_KEY);
+    const first = render(<SettingsPage />);
+    // 默认例外规则：已开通就直接显示（让人看得见状态、关得掉）
+    expect(screen.getByLabelText('本地系统')).toBeTruthy();
+    const heading = screen.getByRole('heading', { name: '设置' });
+    for (let i = 0; i < 5; i += 1) fireEvent.click(heading);
+    first.unmount();
+    // unmount 之后必须**重新挂载**再读：testing-library 的 cleanup 只在 afterEach 跑，
+    // 少了这一行就是在断言那棵已经拆掉的旧树——它对任何实现都恒真，是个空断言。
+    render(<SettingsPage />);
+    // 判据要钉在**整块不存在**上。这里曾误用 queryByText('已开通')，结果是个假失败：
+    // Qwen 凭据保存成功后的提示里也含「已开通」三个字，跟这块 UI 毫无关系。
+    expect(screen.queryByLabelText('本地系统'), '显式藏起来之后，已开通也不该顶开这层').toBeNull();
+    expect(document.body.textContent).not.toContain('本地系统');
   });
 });

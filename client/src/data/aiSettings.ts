@@ -90,6 +90,7 @@ export function resetAiSettingsForTests(): void {
     localStorage.removeItem(OFFLINE_KEY);
     localStorage.removeItem('mingli.local.unlocked');
     localStorage.removeItem('mingli.local.on');
+    localStorage.removeItem('mingli.local.hidden');
     for (const p of ['deepseek', 'kimi', 'qwen'] as AiProvider[]) localStorage.removeItem('mingli.cred.' + p);
   } catch { /* 非浏览器环境忽略 */ }
 }
