@@ -1,6 +1,7 @@
 /* ── 本地系统（原「本地离线·第四路」）的密钥解锁层 ─────────────────────────
-   本地规则引擎免密、不联网、不消耗额度，但**默认锁着**：要在设置页「本地系统」那一格里
-   粘贴解锁码，填对了才出现「使用本地系统」的勾选框，再手动勾选才真的接管「AI 分析」。
+   本地规则引擎免密、不联网、不消耗额度，但**默认整节不出现**：要在设置页里粘贴一次解锁码，
+   输对了那一格才展开，再手动勾选才真的接管「AI 分析」。「关起来」会把这一节收回去、同时把生成
+   方式交还给云端；要再用，就得**再输一次密钥** —— 没有别的手势、也没有别的隐藏方式。
    这样它就从「默认生成方式」退回成一个需要授权才开的旁路生成方式。
 
    **源码里不出现解锁码明文。** 用户 2026-09-25 的要求：「不显示本地启动代码，隐藏起来」。
@@ -61,10 +62,15 @@ export function unlockLocalSystem(key: string): boolean {
   return true;
 }
 
-/** 撤销开通：连带把本地系统关掉并清掉开关标记，避免留下一个勾不上也关不掉的残留状态。 */
-export function lockLocalSystem(): void {
-  try { localStorage.removeItem(UNLOCKED_KEY); } catch { /* 忽略 */ }
-  setLocalSystemEnabled(false);
+/** 「关起来」：把本地系统收回成没展开的样子，**并且一定先让它回到云端**。
+ *  用户 2026-09-25 的口径：「我还可以关起来，随时想还可以再输入打开。但我不要其他的隐藏方式。
+ *  只要关闭了就默认走 qwen。」—— 所以这里必须先把 `mingli.offline` 关掉，再清掉开通标记；
+ *  顺序反了就会留下"界面已经藏起来、引擎还在接管"那种关不掉的状态（§下架那次踩过）。
+ *  两个标记都清 = 唯一的再开方式是**重新输一遍密钥**：不再有连点手势，也不再有"藏着但还开着"的
+ *  第三种持久状态 —— 那正是上一版被否掉的东西。 */
+export function hideLocalSystem(): void {
+  setOfflineMode(false);
+  try { localStorage.removeItem(ON_KEY); localStorage.removeItem(UNLOCKED_KEY); } catch { /* 隐私模式忽略：本会话内仍按已关处理 */ }
   notifyLocalChange();
 }
 
@@ -118,8 +124,9 @@ export function resetLocalSystemForTests(): void {
   try { localStorage.removeItem(UNLOCKED_KEY); localStorage.removeItem(ON_KEY); } catch { /* 忽略 */ }
 }
 
-/* 「撤销开通」就是唯一的收起手段：设置页那块跟着 `isLocalSystemUnlocked()` 收放，
-   撤掉之后整块消失、详情页那块也一起没了，不需要额外的可见性标记。
-   （这里曾另有一层「连点标题 5 下」的暗门和一个 `mingli.local.hidden` 标记。
-   用户 2026-09-25 反馈「不要这个连按五下，多 der 啊，密钥就行了」——暗门把入口藏起来，
-   结果是人在设置页里根本找不到该输密钥的地方。旧设备上残留的那个键不再被读，无害。） */
+/* 这一节的可见性**只有 `isLocalSystemUnlocked()` 一个来源**：设置页与详情页共用同一个判据。
+   曾经有过两套东西都被删掉了 —— ①「标题连点 5 下」的暗门 + `mingli.local.hidden` 标记
+   （用户：「不要这个连按五下，多 der 啊」，而且入口被藏掉后人在设置页里找不到输密钥的地方）；
+   ②紧接着的"密钥框无条件常驻"（用户又要把它藏起来）。现在的口径是两者折中：**默认不摆出这一节，
+   但页面上有一行明说的提示告诉你去哪儿输密钥**，所以不知道口令的人也不会走进死路。
+   旧设备残留的 `mingli.local.hidden` 不再被读，无害。 */

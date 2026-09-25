@@ -24,11 +24,11 @@ afterEach(() => { cleanup(); resetAiSettingsForTests(); resetLocalSystemForTests
 // 但下面这几条不许删 —— 谁再把解锁码塞回凭据框，这里就会红。
 const credInput = () => screen.getByLabelText('Qwen3.8-Flash 访问凭据') as HTMLInputElement;
 const localInput = () => screen.getByLabelText('本地系统密钥') as HTMLInputElement;
-/** 本地系统那一格现在**常驻**（用户 2026-09-25 否掉了「标题连点 5 下」的暗门），
- *  所以这里不再需要任何前置手势 —— 直接读那格的密钥框即可。 */
+/** 本地系统默认整节不展开，但页面上**始终有一行明说的密钥入口**（不需要任何手势）：
+ *  用户 2026-09-25 否掉了「标题连点 5 下」，也要过「密钥框无条件常驻」，最后定在这两者之间。 */
 
 describe('本地系统入口：与 Qwen 凭据彻底分开', () => {
-  it('解锁块自带独立密钥框，凭据框不再参与分流', () => {
+  it('密钥入口自带独立的框，凭据框不再参与分流', () => {
     render(<SettingsPage />);
     expect(localInput()).toBeTruthy();
     // 凭据框的占位与另两格一致，不写「sk- 开头」之类的分流提示
@@ -48,10 +48,10 @@ describe('本地系统入口：与 Qwen 凭据彻底分开', () => {
     expect(document.body.textContent).not.toContain(LOCAL_SYSTEM_KEY);
   });
 
-  it('解锁码只进自己的框；开通后仍要手动勾选才接管', async () => {
+  it('解锁码只进自己的框；展开后仍要手动勾选才接管', async () => {
     render(<SettingsPage />);
     fireEvent.change(localInput(), { target: { value: LOCAL_SYSTEM_KEY } });
-    fireEvent.click(screen.getByRole('button', { name: '开通' }));
+    fireEvent.click(screen.getByRole('button', { name: '展开' }));
     await waitFor(() => expect(screen.getByText('已开通')).toBeTruthy());
     const box = screen.getByRole('checkbox', { name: /使用本地系统/ }) as HTMLInputElement;
     expect(box.checked, '刚开通不该自动启用').toBe(false);

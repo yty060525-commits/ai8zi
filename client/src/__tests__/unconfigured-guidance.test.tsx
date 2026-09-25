@@ -4,7 +4,7 @@ import { App } from '../App';
 import '../features/chart/nonAiCalculator'; // 预载引擎(缓存)，让页面内的按需加载立即命中
 import { initializeMockSession, resetMockSession } from '../data/clientRepository';
 import type { BaziRecord, BaziTaskResult } from '../types/domain';
-import { unlockLocalSystem, lockLocalSystem, resetLocalSystemForTests } from '../data/localSystem';
+import { unlockLocalSystem, hideLocalSystem, resetLocalSystemForTests } from '../data/localSystem';
 
 vi.mock('../data/deepseekAdapter', () => ({ analyzeBazi: vi.fn(), beginAiSession: vi.fn(), cancelAiSession: vi.fn() }));
 
@@ -109,7 +109,7 @@ describe('未配置态的每一处都要给出可点的出路', () => {
     expect(hint.textContent).toContain('不需要任何通道凭据');
     expect(hint.textContent).not.toContain('左上角');
     // 反向钉子：撤销开通后引导语要退回云端口径（证明判据读的就是那把密钥，不是恒真）。
-    lockLocalSystem();
+    hideLocalSystem();
     cleanup();
     await openDetail();
     const back = await screen.findByText(/AI 尚未可用/);

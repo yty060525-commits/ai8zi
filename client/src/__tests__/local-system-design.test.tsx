@@ -4,7 +4,7 @@ import { PersonDetail } from '../features/person/PersonDetail';
 import { SettingsPage } from '../features/settings/SettingsPage';
 import { getBaziRecord, initializeMockSession, listBaziRecords, resetMockSession, saveBaziRecord } from '../data/clientRepository';
 import { isOfflineMode, resetAiSettingsForTests } from '../data/aiSettings';
-import { isLocalSystemEnabled, isLocalSystemUnlocked, lockLocalSystem, resetLocalSystemForTests, setLocalSystemEnabled, unlockLocalSystem } from '../data/localSystem';
+import { isLocalSystemEnabled, isLocalSystemUnlocked, hideLocalSystem, resetLocalSystemForTests, setLocalSystemEnabled, unlockLocalSystem } from '../data/localSystem';
 import type { BaziRecord, BaziTaskResult } from '../types/domain';
 import { calculateNonAi } from '../features/chart/nonAiCalculator';
 import '../features/chart/nonAiCalculator'; // 预载引擎(缓存)，让页面内的按需加载立即命中
@@ -97,14 +97,14 @@ describe('详情页 · 生成方式标注与本机开关的一致性', () => {
     expect(screen.queryByText(/当前为本地系统/), '没勾选就不该说现在是本地系统').toBeNull();
   });
 
-  it('撤销开通后不留「关不掉」的状态：本机标记归零，且不会再声称正在用本地系统', async () => {
+  it('关起来后不留「关不掉」的状态：本机标记归零，且不会再声称正在用本地系统', async () => {
     await seed(mk({ aiTasks: { 'task-01': task('task-01', 'local') } }));
     turnLocalSystemOn();
     render(<PersonDetail personId="p1" onBack={vi.fn()} />);
     await screen.findByRole('heading', { name: '人物详情' });
     expect(isLocalSystemEnabled()).toBe(true);
-    // 撤销走 localSystem 的写入口（设置页那颗按钮就是它），不在测试里手搓键名。
-    lockLocalSystem();
+    // 「关起来」走 localSystem 的写入口（设置页那颗按钮就是它），不在测试里手搓键名。
+    hideLocalSystem();
     expect(isLocalSystemEnabled()).toBe(false);
     expect(isOfflineMode()).toBe(false);
     // 重新进入详情页：它每次现算一次，所以不会拿着旧的「本地系统」横幅不放。
@@ -114,18 +114,18 @@ describe('详情页 · 生成方式标注与本机开关的一致性', () => {
     expect(screen.queryByText(/当前为本地系统/)).toBeNull();
   });
 
-  it('撤销开通走真实入口（设置页那颗按钮），而不是手删 localStorage', async () => {
+  it('关起来走真实入口（设置页那颗按钮），而不是手删 localStorage', async () => {
     // 上一版这条用例是**假覆盖**：它自己把三个键 removeItem 掉，等于替被测代码做完了工作，
-    // 于是「lockLocalSystem 不连带关开关」这个变异照样全绿。判据必须驱动真实路径。
+    // 于是「hideLocalSystem 只清标记不关开关」这个变异照样全绿。判据必须驱动真实路径。
     await seed(mk({ aiTasks: { 'task-01': task('task-01', 'local') } }));
     unlockLocalSystem(KEY);
     setLocalSystemEnabled(true);
     expect(isLocalSystemEnabled()).toBe(true);
     render(<SettingsPage />);
-    fireEvent.click(screen.getByRole('button', { name: /撤销开通/ }));
+    fireEvent.click(screen.getByRole('button', { name: /关起来/ }));
     // 撤销后勾选框与撤销按钮一起收回，只剩常驻的密钥框（判据问的是**控件**，不是整节标题）。
     await waitFor(() => expect(screen.queryByRole('checkbox', { name: /使用本地系统/ })).toBeNull());
-    expect(screen.queryByRole('button', { name: /撤销开通/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /关起来/ })).toBeNull();
     expect(isLocalSystemUnlocked(), '开通标记该清掉').toBe(false);
     expect(isOfflineMode(), '底层开关必须被一起关掉 —— 否则本地引擎还在接管却没地方关').toBe(false);
     expect(isLocalSystemEnabled()).toBe(false);
@@ -136,16 +136,18 @@ describe('详情页 · 生成方式标注与本机开关的一致性', () => {
     expect(screen.queryByText(/当前为本地系统/)).toBeNull();
   });
 
-  it('入口常驻 ≠ 打开功能：看得见那一格不代表本地系统在接管', async () => {
+  it('未展开时只剩一行密钥入口：摆着入口也不代表本地系统在接管', async () => {
     await seed(mk({ aiTasks: { 'task-01': task('task-01', 'local') } }));
-    // 未开通 + 没勾选：设置页那一格摆着（它现在无条件常驻），但引擎不该接管。
+    // 未展开 + 没勾选：页面上仍有一行明说的密钥入口（不必任何手势），但引擎不该接管。
     expect(unlockLocalSystem(KEY), '解锁码不对，前提没成立').toBe(true);
-    lockLocalSystem();
+    hideLocalSystem();
     expect(isLocalSystemUnlocked(), '前提：本机回到未开通').toBe(false);
     render(<SettingsPage />);
-    // 未开通态判据问**控件**：密钥框在、勾选框不在。整节标题现在无条件常驻，拿它当判据会恒真。
-    expect(screen.getByLabelText('本地系统密钥'), '这一格现在常驻，不必先解锁才看得见').toBeTruthy();
+    // 判据问**控件**：密钥框在、勾选框与「关起来」都不在。整节标题在未展开时不出现。
+    expect(screen.getByLabelText('本地系统密钥'), '不知道口令的人也要找得到输密钥的地方').toBeTruthy();
+    expect(screen.queryByText('本地系统（本机规则引擎）'), '未展开时整节标题不该出现').toBeNull();
     expect(screen.queryByRole('checkbox', { name: /使用本地系统/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /关起来/ })).toBeNull();
     cleanup();
     // 正例钉子：本机没勾着的时候，详情页不许声称正在用本地系统 —— 即使库里存着上一轮的本机结果。
     render(<PersonDetail personId="p1" onBack={vi.fn()} />);
@@ -378,7 +380,7 @@ describe('详情页「本地系统」整块的可见性跟着本机是否开通�
   it('撤销开通后详情页也不再露头：两块共用同一个判据', async () => {
     await seed(mk());
     expect(unlockLocalSystem(KEY), '解锁码不对，前提没成立').toBe(true);
-    lockLocalSystem();
+    hideLocalSystem();
     expect(isLocalSystemUnlocked(), '前提：撤销之后本机就是未开通').toBe(false);
     render(<App />);
     await openDetail();

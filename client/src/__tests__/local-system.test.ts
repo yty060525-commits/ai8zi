@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { isOfflineMode, resetAiSettingsForTests } from '../data/aiSettings';
 import {
-  isLocalSystemEnabled, isLocalSystemUnlocked, lockLocalSystem,
+  isLocalSystemEnabled, isLocalSystemUnlocked, hideLocalSystem,
   resetLocalSystemForTests, setLocalSystemEnabled, unlockLocalSystem, verifyLocalKey,
 } from '../data/localSystem';
 
@@ -54,7 +54,7 @@ describe('本地系统密钥解锁', () => {
     setLocalSystemEnabled(true);
     expect(isLocalSystemEnabled()).toBe(true);
 
-    lockLocalSystem();
+    hideLocalSystem();
     expect(isLocalSystemUnlocked()).toBe(false);
     expect(isLocalSystemEnabled()).toBe(false);
     // 底层开关也必须一起关掉：否则引擎还在跑，界面却没地方可关
