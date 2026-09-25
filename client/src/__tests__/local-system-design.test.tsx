@@ -4,7 +4,7 @@ import { PersonDetail } from '../features/person/PersonDetail';
 import { SettingsPage } from '../features/settings/SettingsPage';
 import { getBaziRecord, initializeMockSession, listBaziRecords, resetMockSession, saveBaziRecord } from '../data/clientRepository';
 import { isOfflineMode, resetAiSettingsForTests } from '../data/aiSettings';
-import { isLocalSystemEnabled, isLocalSystemUnlocked, lockLocalSystem, resetLocalSystemForTests, setLocalSystemEnabled, setLocalSystemHidden, unlockLocalSystem } from '../data/localSystem';
+import { isLocalSystemEnabled, isLocalSystemHidden, isLocalSystemUnlocked, lockLocalSystem, resetLocalSystemForTests, setLocalSystemEnabled, setLocalSystemHidden, unlockLocalSystem } from '../data/localSystem';
 import type { BaziRecord, BaziTaskResult } from '../types/domain';
 import { calculateNonAi } from '../features/chart/nonAiCalculator';
 import '../features/chart/nonAiCalculator'; // 预载引擎(缓存)，让页面内的按需加载立即命中
@@ -330,3 +330,53 @@ vi.mock('../data/baziOrchestrator', async (importOriginal) => {
     }) as typeof actual.orchestrateBaziAnalysis,
   };
 });
+
+describe('详情页「本地系统」整块的可见性跟着暗门走', () => {
+  /* 走真实导航：记录页是异步加载的，行按钮要等；打开后停在详情页。
+     不直接 render(<PersonDetail/>) —— 那会绕过 App 的实例复用，测不出跨页读数。 */
+  const openDetail = async () => {
+    fireEvent.click(screen.getByRole('button', { name: '记录' }));
+    fireEvent.click(await screen.findByRole('button', { name: '查看设计测试' }, { timeout: 4000 }));
+    await screen.findByRole('heading', { name: '人物详情' });
+  };
+
+  /* 设置页那侧早就按 hidden/unlocked 收放了，详情页这块却一直没判：结果是
+     · 从没开过第四路的设备，在命盘里看见一整块用不上的入口；
+     · 知道暗门节奏的人把设置页藏干净，详情页还留着同一功能的标题和按钮 —— 从另一头又把门露出来。
+     判据只问 DOM（那块的唯一标题），不自报状态。 */
+  const sectionShown = () => !!screen.queryByText('本地系统（本机规则引擎）');
+
+  it('未开通：详情页不摆出这一块；开通后重进即出现', async () => {
+    await seed(mk());
+    render(<App />);
+    await openDetail();
+    expect(sectionShown(), '本机根本没开通，详情页不该摆出第四路入口').toBe(false);
+    // 正例钉子：同一份记录、同一条路径，只是本机开通了 —— 这块就该在。
+    expect(unlockLocalSystem(KEY), '解锁码不对，前提没成立').toBe(true);
+    cleanup();
+    resetMockSession();
+    await seed(mk());
+    render(<App />);
+    await openDetail();
+    expect(sectionShown()).toBe(true);
+  });
+
+  it('藏着时也不从详情页露头：那块跟着同一个判据收放', async () => {
+    await seed(mk());
+    expect(unlockLocalSystem(KEY), '解锁码不对，前提没成立').toBe(true);
+    setLocalSystemHidden(true);
+    expect(isLocalSystemHidden()).toBe(true);
+    render(<App />);
+    await openDetail();
+    expect(sectionShown(), '设置页藏好了，详情页却还摆着同一功能').toBe(false);
+    // 反向钉子：清掉隐藏标记后走同一条路径，它必须回来（证明上面那句不是恒假）。
+    setLocalSystemHidden(false);
+    cleanup();
+    resetMockSession();
+    await seed(mk());
+    render(<App />);
+    await openDetail();
+    expect(sectionShown()).toBe(true);
+  });
+});
+
