@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SettingsPage } from '../features/settings/SettingsPage';
 import { isOfflineMode, resetAiSettingsForTests } from '../data/aiSettings';
-import { isLocalSystemEnabled, isLocalSystemUnlocked, resetLocalSystemForTests, unlockLocalSystem } from '../data/localSystem';
+import { isLocalSystemEnabled, isLocalSystemUnlocked, resetLocalSystemForTests, setLocalSystemHidden, unlockLocalSystem } from '../data/localSystem';
 import { invoke } from '@tauri-apps/api/core';
 import { vi } from 'vitest';
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
@@ -291,5 +291,30 @@ describe('SettingsPage', () => {
     // Qwen 凭据保存成功后的提示里也含「已开通」三个字，跟这块 UI 毫无关系。
     expect(screen.queryByLabelText('本地系统'), '显式藏起来之后，已开通也不该顶开这层').toBeNull();
     expect(document.body.textContent).not.toContain('本地系统');
+  });
+
+  it('已开通又被藏起来的设备：重进后连点 5 下要出得来（曾经是一条死路）', () => {
+    // 浏览器实测撞到的：本机已开通 → 收起(hidden=1) → 刷新 → 再连点 5 下，块永远出不来。
+    // 因为「看得见」的判据只看 revealed，而这块在已开通设备上从来不是靠 revealed 显示的。
+    unlockLocalSystem(LOCAL_SYSTEM_KEY);
+    setLocalSystemHidden(true);
+    render(<SettingsPage />);
+    expect(screen.queryByLabelText('本地系统'), '开局仍该是藏着的').toBeNull();
+    const heading = screen.getByRole('heading', { name: '设置' });
+    for (let i = 0; i < 5; i += 1) fireEvent.click(heading);
+    expect(screen.getByLabelText('本地系统'), '藏着时连点 5 下该把它放回来').toBeTruthy();
+    expect(localStorage.getItem('mingli.local.hidden'), '放回来就该清掉隐藏标记').toBe(null);
+    // 放回来的意义在于关得掉：勾选框要在，本地引擎不至于还在跑却没控件。
+    expect(screen.getByRole('checkbox', { name: /使用本地系统/ })).toBeTruthy();
+  });
+
+  it('收回已开通设备的解锁块：第一下连点就该置 hidden（不能靠第二下补救）', () => {
+    unlockLocalSystem(LOCAL_SYSTEM_KEY);
+    render(<SettingsPage />);
+    expect(screen.getByLabelText('本地系统')).toBeTruthy();
+    const heading = screen.getByRole('heading', { name: '设置' });
+    for (let i = 0; i < 5; i += 1) fireEvent.click(heading);
+    expect(screen.queryByLabelText('本地系统')).toBeNull();
+    expect(localStorage.getItem('mingli.local.hidden')).toBe('1');
   });
 });

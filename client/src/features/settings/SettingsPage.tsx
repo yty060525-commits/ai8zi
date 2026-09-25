@@ -51,19 +51,17 @@ export function SettingsPage() {
   const [hidden, setHidden] = useState<boolean>(() => isLocalSystemHidden());
   const [revealed, setRevealed] = useState<boolean>(false);
   // 「隐藏按钮」＝同一个连点手势的第二次触发：放出来之后再连点 5 下，整块收回、恢复原貌。
-  // 判据用**当前渲染里的表达式**(localUnlocked || revealed)，不用 setRevealed 刚排队的 state：
-  // 同步连点(fireEvent / 手速极快)期间 React 还没重渲染，闭包里的 `revealed` 会停在旧值 ——
-  // 已开通的设备上第一次连点本该是「收起」，读旧值却会判成「再显示一次」，永远收不掉。
+  // 判据必须取自**渲染表达式同一套值**(showLocalBlock)，不能只读刚排队的 revealed state：
+  // 同步连点(fireEvent / 手速极快)期间 React 还没重渲染，闭包里的 `revealed` 会停在旧值。
+  // 三态各有一条出路，缺一条就是死路（曾在浏览器实测里撞上第三条）。
+  // showLocalBlock 在下方声明：函数体到点击时才执行，TDZ 只在「渲染期就调用」才会炸。
   const { onClick: onHeadingTap } = useSecretTitleTap(() => {
-    if (localUnlocked || revealed) {
-      setRevealed(false);
-      setHidden(setLocalSystemHidden(true));
-      return;
-    }
-    setRevealed(true);
+    if (showLocalBlock) { setRevealed(false); setHidden(setLocalSystemHidden(true)); return; }
     if (hidden) setHidden(setLocalSystemHidden(false));
+    setRevealed(true);
   }, true);
   // 渲染用的最终可见性：显式藏起来时一律不显示（包括已开通的设备）。
+  // 它同时是上面那个点击处理的判据来源：**页面显示的与处理器认定的必须是同一个表达式**。
   const showLocalBlock = !hidden && (revealed || localUnlocked);
   const [localKey, setLocalKey] = useState('');
   const [localNote, setLocalNote] = useState<string>();
