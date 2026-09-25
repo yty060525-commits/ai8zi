@@ -319,7 +319,7 @@ export function keyMissingHintOf(): string {
   return 'AI 尚未可用：请先点页面右上角「设置」，在任一服务(DeepSeek / Kimi / Qwen3.8-Flash)里填写访问凭据并保存，再回来点 AI 分析。';
 }
 
-function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (next: BaziRecord) => void }) {
+function AIAnalysis({ record, showLocalSection, onUpdated }: { record: BaziRecord; showLocalSection: boolean; onUpdated: (next: BaziRecord) => void }) {
   const [progress, setProgress] = useState<{ done: number; total: number; label: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [hint, setHint] = useState<string>();
@@ -493,7 +493,7 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
         const cleared = await saveBaziRecord({ ...base, aiTasks: undefined, aiAnalysis: undefined, aiOverview: undefined, aiError: undefined, aiStatus: 'not_started' });
         onUpdated(cleared);
         base = cleared;
-        setHint(offline ? '已切换到本地离线（第四路）：正在用本机规则引擎重算并覆盖云端结果…' : '已切回云端通道：正在用云端重算并覆盖本地批断结果…');
+        setHint(offline ? '已切换到本地系统：正在用本机规则引擎重算并覆盖云端结果…' : '已切回云端通道：正在用云端重算并覆盖本地批断结果…');
       }
       const expectedIds = expectedTaskIds(base, horizonRef.current);
       /* 「哪些任务算跑完了」的谓词与状态行那句进度同源（见 baziOrchestrator 的 completedTaskCount），
@@ -605,7 +605,8 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
     </div>
     <p className="ai-status" role="status">状态：{record.aiStatus === 'pending' ? aiStatusText(record, horizonRef.current) : statusText[record.aiStatus]}</p>
     {localSystemOn && <p className="ai-mode-note" role="status">当前为本地系统：点「AI 分析」由本机规则引擎就上方排盘事实直接批断，不联网、不消耗额度；结果同样写入本条命盘并随账号同步，可在设置页取消勾选切回云端重算覆盖。</p>}
-    {!localSystemOn && aiResults.some((r) => r.source === 'local') && <p className="ai-mode-note" role="status">下方带 <span className="local-dot" aria-hidden="true" /> 的段落为上次本地系统批断的结果；当前用云端通道，点「AI 分析」会用云端结果重算并覆盖它们。</p>}
+    {/* 这句提到第四路，所以和上面那块同源：本机没开通的人不该从残留数据里读出「曾经用过本地系统」。 */}
+    {!localSystemOn && showLocalSection && aiResults.some((r) => r.source === 'local') && <p className="ai-mode-note" role="status">下方带 <span className="local-dot" aria-hidden="true" /> 的段落为上次本地系统批断的结果；当前用云端通道，点「AI 分析」会用云端结果重算并覆盖它们。</p>}
     {hint && <p role="status">{hint}</p>}
     {autoWaiting && <div className="button-group"><button className="text-button" type="button" onClick={cancelAutoRetryFromHint}>取消自动重试</button></div>}
     {(progress || busy) && <div className="progress-block" aria-label="AI 分析进度">
@@ -625,7 +626,7 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
       ? keyMissingHintOf()
       : '个别任务自动重试多轮后仍未成功。常见原因：余额不足或额度已用完 / 密钥无效 / 请求过于频繁（限流）/ 网络超时或不可达 / 所选服务不可用。请按下方原因处理后，再点 AI 分析（只补失败项，不重复花钱）。'}</p>}
     {record.aiError && !/未配置|没有可用的通道凭据/.test(record.aiError) && <p role="alert">原因：{safeAiError(record.aiError)}</p>}
-    {record.aiAnalysis && <div className="long-text"><strong>格局与强弱</strong>{record.aiTasks?.['task-01']?.source === 'local' ? <span className="local-dot" title="本地离线批断（第四路）" aria-label="本地离线批断" /> : null}<p>{sanitizeAnalysisText(record.aiAnalysis.pattern || '') || '—'} · {sanitizeAnalysisText(record.aiAnalysis.strength || '') || '—'}</p><p>喜：{(record.aiAnalysis.usefulElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}　忌：{(record.aiAnalysis.avoidElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}</p><PointsView text={record.aiAnalysis.explanation} /></div>}
+    {record.aiAnalysis && <div className="long-text"><strong>格局与强弱</strong>{record.aiTasks?.['task-01']?.source === 'local' ? <span className="local-dot" title="上次由本机规则引擎批断" aria-label="本机批断" /> : null}<p>{sanitizeAnalysisText(record.aiAnalysis.pattern || '') || '—'} · {sanitizeAnalysisText(record.aiAnalysis.strength || '') || '—'}</p><p>喜：{(record.aiAnalysis.usefulElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}　忌：{(record.aiAnalysis.avoidElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}</p><PointsView text={record.aiAnalysis.explanation} /></div>}
     {/* 全盘总结正文(含古风标题)在下方「② 全盘总结」分组里完整展示；这里只留一处入口提示，避免同一段内容渲染两遍 */}
     {record.aiOverview && <p className="long-text" aria-label="全盘总结提要"><strong>全盘总结已完成：</strong>值得关注的年份与机会/风险窗口见下方「② 全盘总结」段落。</p>}
     {aiResults.length > 0 && <div className="ai-scopes">
@@ -659,7 +660,7 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
             const analysis = item.analysis;
             const lead = analysis && (analysis.pattern || analysis.strength) ? <p className="scope-lead">格局：{sanitizeAnalysisText(analysis.pattern || '') || '—'} · 强弱：{sanitizeAnalysisText(analysis.strength || '') || '—'}　喜：{(analysis.usefulElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}　忌：{(analysis.avoidElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}</p> : null;
             return <details key={group.key + '-' + idx} className="scope-item" open={group.key === 'baseline' && item.status === 'completed'}>
-              <summary>{describeScope(item, record)}{item.source === 'local' ? <span className="local-dot" title="本地离线批断（第四路）：不联网、可随时用云端重算覆盖" aria-label="本地离线批断" /> : null}<span className="scope-status">　{statusText[item.status === 'completed' ? 'completed' : item.status === 'failed' ? 'failed' : 'not_configured']}</span></summary>
+              <summary>{describeScope(item, record)}{item.source === 'local' ? <span className="local-dot" title="上次由本机规则引擎批断，可随时用云端重算覆盖" aria-label="本机批断" /> : null}<span className="scope-status">　{statusText[item.status === 'completed' ? 'completed' : item.status === 'failed' ? 'failed' : 'not_configured']}</span></summary>
               {item.status === 'completed' && analysis ? <div className="scope-body">{analysis.title ? <p className="scope-title"><strong>{sanitizeAnalysisText(analysis.title)}</strong></p> : null}{lead}<PointsView text={analysis.explanation} /></div> : item.status === 'failed' ? (busy ? <p className="retry-hint">该任务失败，正在自动重新调用 AI…</p> : <p className="form-error">自动重试多轮后仍失败：{safeAiError(item.error ?? '未知错误')}</p>) : item.status === 'not_configured' ? <p>未配置密钥，本项未生成。<button type="button" className="text-button chat-settings-link" onClick={openSettings}>去设置 ›</button></p> : null}
             </details>;
           })}
@@ -761,6 +762,6 @@ export function PersonDetail({ personId, onBack, refreshKey = 0 }: PersonDetailP
       ? <div className="button-group" role="group" aria-label="确认删除"><span className="danger-hint">确定删除「{record.name}」？四柱、排盘数据与全部 AI 结果一并清除，无法撤销。</span><button className="danger-button" type="button" onClick={() => void remove()}>确认删除</button><button className="text-button" type="button" onClick={() => setConfirmDelete(false)}>取消</button></div>
       : <button className="text-button" type="button" onClick={onBack}>返回记录</button>}<button className="danger-button" type="button" onClick={() => setConfirmDelete(true)} hidden={confirmDelete}>删除数据</button></div></header>
     {notice && <p role="status">{notice}</p>}
-    <BasicInfo record={record} /><NonAiAnalysis result={record.nonAiResult} record={record} /><div className="section-actions"><button className="text-button" type="button" onClick={() => void recalculateNonAi()}>重新计算非 AI</button></div>{showLocalSection && <LocalAnalysisSection record={record} />}<AIAnalysis record={record} onUpdated={setRecord} />
+    <BasicInfo record={record} /><NonAiAnalysis result={record.nonAiResult} record={record} /><div className="section-actions"><button className="text-button" type="button" onClick={() => void recalculateNonAi()}>重新计算非 AI</button></div>{showLocalSection && <LocalAnalysisSection record={record} />}<AIAnalysis record={record} showLocalSection={showLocalSection} onUpdated={setRecord} />
   </main>;
 }

@@ -114,6 +114,30 @@ describe('详情页 · 生成方式标注与本机开关的一致性', () => {
     expect(screen.queryByText(/当前为本地系统/)).toBeNull();
   });
 
+  /* 残留数据也不许说话。上一版「上次本地系统批断的结果」那句只看 aiTasks 里有没有 local 结果，
+     于是出现这种泄漏：机主在这台设备上跑过一次本地批断、又关起来，此后**任何**打开这条记录的人
+     （换设备、别人看同一条）都会在详情页看见一句提到第四路的话 —— 界面上藏得再干净也白藏。
+     现在它和横幅一样受「已开通」约束；而「已开通但没勾选」仍要说（见上面那条用例），不是恒关。 */
+  it('关起来后残留的 local 结果也不再对陌生人提第四路', async () => {
+    await seed(mk({ aiTasks: { 'task-01': task('task-01', 'local') } }));
+    turnLocalSystemOn();
+    hideLocalSystem();
+    // 正向钉子：数据确实还在 record 里（同步上去的 source:'local' 没被清掉），
+    // 否则下面这句「不显示」会因为前提没了而恒真。
+    const saved = await listBaziRecords();
+    expect(JSON.stringify(saved.find((r) => r.id === 'p1'))).toContain('"source":"local"');
+    cleanup();
+    render(<PersonDetail personId='p1' onBack={vi.fn()} />);
+    await screen.findByRole('heading', { name: '人物详情' });
+    expect(screen.queryByText(/上次本地系统批断的结果/), '未开通的人不该看见这句话').toBeNull();
+    // 绿点本身可以留（它只是个记号），但 hover / 无障碍名不许再报出「第四路」这种来历。
+    const dot = document.querySelector('.local-dot');
+    expect(dot, '正向钉子：本机结果确实带着绿点，否则下面两条否定式是空断言').toBeTruthy();
+    expect(dot?.getAttribute('title')).not.toMatch(/本地|第四路/);
+    expect(dot?.getAttribute('aria-label')).not.toMatch(/本地|第四路/);
+    expect(screen.getByRole('heading', { name: '人物详情' })).toBeTruthy();
+  });
+
   it('关起来走真实入口（设置页那颗按钮），而不是手删 localStorage', async () => {
     // 上一版这条用例是**假覆盖**：它自己把三个键 removeItem 掉，等于替被测代码做完了工作，
     // 于是「hideLocalSystem 只清标记不关开关」这个变异照样全绿。判据必须驱动真实路径。
