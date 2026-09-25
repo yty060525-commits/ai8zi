@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { deleteBaziRecord, getBaziRecord, refreshRecord, saveBaziRecord } from '../../data/clientRepository';
-import { ABORTED_MESSAGE, analysisHorizon, buildBaziTasks, expectedTaskIds, isRetryableFailure, orchestrateBaziAnalysis, DEFAULT_TONE } from '../../data/baziOrchestrator';
+import { ABORTED_MESSAGE, aiStatusText, analysisHorizon, buildBaziTasks, expectedTaskIds, isRetryableFailure, orchestrateBaziAnalysis, DEFAULT_TONE } from '../../data/baziOrchestrator';
 import { beginAiSession, cancelAiSession } from '../../data/deepseekAdapter';
 import { clearChartCache } from '../../data/storageInfo';
 import { sanitizeAnalysisText } from '../chart/elements';
@@ -495,14 +495,17 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
         setHint(offline ? '已切换到本地离线（第四路）：正在用本机规则引擎重算并覆盖云端结果…' : '已切回云端通道：正在用云端重算并覆盖本地批断结果…');
       }
       const expectedIds = expectedTaskIds(base, horizonRef.current);
-      const completeTasks = expectedIds.filter((id) => {
+      /* 「哪些任务算跑完了」的谓词与状态行那句进度同源（见 baziOrchestrator 的 completedTaskCount），
+         这里只需要 id 清单来逐条查引擎来源，所以用 expectedIds 自己滤一遍同一谓词。 */
+      const isDone = (id: string) => {
         const item = base.aiTasks?.[id];
         return item?.status === 'completed' && !!item.analysis && (!!item.analysis.explanation || !!item.analysis.pattern);
-      });
+      };
+      const completeIds = expectedIds.filter(isDone);
       // 引擎是否一致：本轮要用的生成方式(离线/云端)与已有结果的来源相同。缺省 source 视为云端。
       // 不一致时不走「命中缓存」早退，直接进入重算 —— 让切换第四路/切回云端能覆盖彼此。
-      const engineMatch = completeTasks.every((id) => (((base.aiTasks?.[id]?.source) ?? 'cloud') === 'local') === offline);
-      if (expectedIds.length > 0 && completeTasks.length === expectedIds.length && engineMatch) {
+      const engineMatch = completeIds.every((id) => (((base.aiTasks?.[id]?.source) ?? 'cloud') === 'local') === offline);
+      if (expectedIds.length > 0 && completeIds.length === expectedIds.length && engineMatch) {
         const ran = usedTone(base.id);   // 本机这条盘上次生成用的语气；undefined = 本机还没跑过(可能是同步/换设备来的)
         // 本机没跑过、或语气与上次一致 → 视为命中缓存，绝不当成「改语气」把整盘成果清掉重算。
         if (ran === undefined || ran === currentTone) {
@@ -599,7 +602,7 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
       <span className="tone-value">{toneLabel(tone)}{tone === 80 ? '（默认：八成好话 + 两成委婉点不足）' : ''}</span>
       <span className="tone-scale"><em>犀利</em><em>中立</em><em>温柔夸夸</em></span>
     </div>
-    <p className="ai-status" role="status">状态：{statusText[record.aiStatus]}</p>
+    <p className="ai-status" role="status">状态：{record.aiStatus === 'pending' ? aiStatusText(record, horizonRef.current) : statusText[record.aiStatus]}</p>
     {localSystemOn && <p className="ai-mode-note" role="status">当前为本地系统：点「AI 分析」由本机规则引擎就上方排盘事实直接批断，不联网、不消耗额度；结果同样写入本条命盘并随账号同步，可在设置页取消勾选切回云端重算覆盖。</p>}
     {!localSystemOn && aiResults.some((r) => r.source === 'local') && <p className="ai-mode-note" role="status">下方带 <span className="local-dot" aria-hidden="true" /> 的段落为上次本地系统批断的结果；当前用云端通道，点「AI 分析」会用云端结果重算并覆盖它们。</p>}
     {hint && <p role="status">{hint}</p>}

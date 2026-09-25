@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { exportableRecords, listBaziRecords, syncAdminAll, unsyncedRecordIds } from '../../data/clientRepository';
 import { exportRecordsSQLite, exportRecordsSQLText } from '../../data/sqliteExport';
 import { getServerSession, isServerMode } from '../../data/serverClient';
+import { aiStatusText } from '../../data/baziOrchestrator';
 import { zodiacOfBranch } from '../../utils/interpersonal';
 import type { BaziRecord } from '../../types/domain';
 
@@ -162,7 +163,7 @@ export function RecordsPage({ onOpenPerson, refreshKey = 0 }: RecordsPageProps) 
                       (实测 2024-02-06 甲辰年却显示「生肖 兔」，与同一行左侧「甲辰年」自相矛盾)。
                       年柱缺失时才回退存量值。 */}
                   {record.nonAiResult && <span className="chart-summary">公历 {record.nonAiResult.solarDate} · 生肖 {zodiacOfBranch(record.yearPillar?.[1] ?? '') || record.nonAiResult.zodiac} · 日主 {record.nonAiResult.dayMaster}</span>}
-                  <span className="ai-status">AI：{record.aiStatus === 'completed' ? '已完成' : record.aiStatus === 'not_configured' ? '未配置' : record.aiStatus === 'failed' ? '失败' : record.aiStatus === 'pending' ? '分析中' : '未开始'}</span>
+                  <span className="ai-status">AI：{record.aiStatus === 'pending' ? aiStatusText(record) : record.aiStatus === 'completed' ? '已完成' : record.aiStatus === 'not_configured' ? '未配置' : record.aiStatus === 'failed' ? '失败' : '未开始'}</span>
                   {/* 还没推上服务器的盘：不标出来，用户会先在同机「问问 AI」上撞到「还没有任何命盘」。 */}
                   {unsynced.has(record.id) && <span className="ai-status unsynced">未同步：仅存本机，问 AI 前先在设置里登录服务器</span>}
                   <span className="row-action">查看 →</span>

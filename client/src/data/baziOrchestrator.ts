@@ -198,7 +198,28 @@ export function expectedTaskIds(record: BaziRecord, now?: Date): string[] {
   const overview = record.aiOverview;
   if (overview?.explanation || overview?.pattern) ids.push(OVERVIEW_TASK_ID);
   return ids;
-}/** 单条要点截断长度：总结只需要结论，不需要把每篇长文原样再发一遍。 */
+}
+
+/** 本轮必填清单里已经真正跑出正文的条数。谓词与「结果完整、可以早退」那处判定同源，
+ *  所以进度说的数字和再点一次 AI 分析时实际要补的条数必然一致。 */
+export function completedTaskCount(record: BaziRecord, now?: Date): number {
+  return expectedTaskIds(record, now).filter((id) => {
+    const item = record.aiTasks?.[id];
+    return item?.status === 'completed' && !!item.analysis && (!!item.analysis.explanation || !!item.analysis.pattern);
+  }).length;
+}
+
+/** 「分析中」这一句在详情页与记录列表都要出现，措辞只能有一个来源：
+ *  编排器每跑完一个任务都会把整份快照落库，所以 pending 的盘其实已有一批正文在库里 ——
+ *  只说「分析中」等于把这份进度藏起来。一条都还没跑出来时不加 (0/x)，那会让人以为已在排队。 */
+export function aiStatusText(record: BaziRecord, now?: Date): string {
+  if (record.aiStatus !== 'pending') return '';
+  const done = completedTaskCount(record, now);
+  const total = expectedTaskIds(record, now).length;
+  return done > 0 ? '分析中（' + done + '/' + total + '）' : '分析中';
+}
+
+/** 单条要点截断长度：总结只需要结论，不需要把每篇长文原样再发一遍。 */
 export const FINDING_SNIPPET = 260;
 
 /** 从正文里提炼「值得注意」的句子：优先带年份/干支与风险词的编号行。 */

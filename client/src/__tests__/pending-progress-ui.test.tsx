@@ -1,0 +1,68 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, render, screen } from '@testing-library/react';
+
+import { PersonDetail } from '../features/person/PersonDetail';
+import { RecordsPage } from '../features/records/RecordsPage';
+import { configureBaziRepository, initializeMockSession, memoryBaziRepository, resetMockSession } from '../data/clientRepository';
+import { calculateNonAi } from '../features/chart/nonAiCalculator';
+import type { BaziAIAnalysis, BaziRecord, BaziTaskResult } from '../types/domain';
+
+/* 上一轮把「异地 pending 不许锁死按钮」修掉了，但这块状态本身还是只说「分析中」：
+   编排器每跑完一条都会落库（PersonDetail 的 onProgress ⇒ saveBaziRecord(step.record)），
+   所以「分析中」的盘其实已经有一批正文在库里了。用户看到的却仍是一个没有进度的词 ——
+   不知道还要等多久、也不知道再点一次是接着跑还是从头再来。记录列表同理：手机上翻列表时
+   只有这一处能看到全局，一行「AI：分析中」什么也没交代。 */
+
+const chart = calculateNonAi(
+  { birthYear: 1990, birthMonth: 5, birthDay: 15, yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午' },
+  'male', '2025-01-01T00:00:00.000Z');
+
+const analysis = (explanation: string): BaziAIAnalysis => ({ pattern: '正官格', strength: '身强', usefulElements: ['水'], avoidElements: ['火'], explanation });
+
+const doneTask = (id: string): BaziTaskResult => ({ task: { taskId: id, type: 'baseline' }, status: 'completed', analysis: analysis('这一段已批') });
+
+/** 一份「跑到一半」的盘：pending + 前几条已有正文。 */
+const halfRun = (name: string, ids: string[]): BaziRecord => ({
+  id: 'p1', name, gender: 'male', birthYear: 1990, birthMonth: 5,
+  createdAt: '2025-01-01T00:00:00.000Z', yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午',
+  nonAiResult: chart, aiStatus: 'pending',
+  aiTasks: Object.fromEntries(ids.map((id) => [id, doneTask(id)])),
+});
+
+afterEach(() => { cleanup(); resetMockSession(); configureBaziRepository(memoryBaziRepository); });
+
+describe('pending 态要把已完成的条数摆出来', () => {
+  it('详情页状态行：分析中要带 x/y', async () => {
+    const rec = halfRun('半程盘', ['task-01', 'task-02', 'task-03']);
+    initializeMockSession([{ id: 'p1', name: '半程盘', nameInitial: 'B', gender: 'male', birthSummary: '甲子年' }],
+      [{ person: { id: 'p1', name: '半程盘', nameInitial: 'B', gender: 'male', birthSummary: '甲子年' }, record: rec, aiAnalysis: { status: 'pending', result: '' } }]);
+    render(<PersonDetail personId="p1" onBack={vi.fn()} />);
+    const line = await screen.findByText(/^状态：/);
+    expect(line.textContent).toMatch(/分析中（3\/\d+）/);
+  });
+
+  it('记录列表一行同样带进度，而不是光秃秃的「分析中」', async () => {
+    configureBaziRepository({ ...memoryBaziRepository, listBaziRecords: async () => [halfRun('半程盘', ['task-01', 'task-02'])] });
+    render(<RecordsPage onOpenPerson={vi.fn()} />);
+    const row = await screen.findByRole('button', { name: '查看半程盘' });
+    expect(row.textContent).toMatch(/AI：分析中（2\/\d+）/);
+  });
+
+  /* 反向钉子：没跑过任何一条时不许写成「（0/23）」——那会让人以为已经在排队了。 */
+  it('一条都还没完成时保持原来的「分析中」，不加 0/xx', async () => {
+    configureBaziRepository({ ...memoryBaziRepository, listBaziRecords: async () => [halfRun('刚起步', [])] });
+    render(<RecordsPage onOpenPerson={vi.fn()} />);
+    const row = await screen.findByRole('button', { name: '查看刚起步' });
+    expect(row.textContent).toContain('AI：分析中');
+    expect(row.textContent).not.toMatch(/分析中（0\//);
+  });
+
+  it('已完成/失败的盘不受影响：不出现进度括号', async () => {
+    const finished: BaziRecord = { ...halfRun('跑完了', ['task-01']), aiStatus: 'completed' };
+    configureBaziRepository({ ...memoryBaziRepository, listBaziRecords: async () => [finished] });
+    render(<RecordsPage onOpenPerson={vi.fn()} />);
+    const row = await screen.findByRole('button', { name: '查看跑完了' });
+    expect(row.textContent).toContain('AI：已完成');
+    expect(row.textContent).not.toMatch(/（\d+\/\d+）/);
+  });
+});
