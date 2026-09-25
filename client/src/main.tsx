@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
+import { unlockFromLocation } from './data/localSystem';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import './styles.css';
 
@@ -60,6 +61,18 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || ['localho
     }).catch(() => { /* 离线或禁用 SW 时不影响主流程 */ });
   });
 }
+
+/* 「本地系统」这一路在界面上不留任何入口：机主用地址栏 `?local=<解锁码>` 展开（见 localSystem.ts）。
+   这里只把查询串里的这一段抹掉，让解锁码不留在地址栏、浏览历史或分享出去的链接里；
+   页面本身不跳走 —— GitHub Pages 按**含查询串的完整路径**回源，删参数后硬跳 /ai8zi/ 之外的
+   路径会 404，而 SPA 的首页状态本来就在内存里，留着当前视图最省事。 */
+try {
+  if (unlockFromLocation()) {
+    const clean = new URL(location.href);
+    clean.searchParams.delete('local');
+    history.replaceState(null, '', clean.pathname + clean.search + clean.hash);
+  }
+} catch { /* 非浏览器环境（构建期）忽略 */ }
 
 createRoot(rootElement).render(
   <StrictMode>

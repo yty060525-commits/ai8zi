@@ -136,23 +136,22 @@ describe('详情页 · 生成方式标注与本机开关的一致性', () => {
     expect(screen.queryByText(/当前为本地系统/)).toBeNull();
   });
 
-  it('未展开时只剩一行密钥入口：摆着入口也不代表本地系统在接管', async () => {
+  it('未开通时界面上零痕迹，且库里有本机结果也不代表它在接管', async () => {
     await seed(mk({ aiTasks: { 'task-01': task('task-01', 'local') } }));
-    // 未展开 + 没勾选：页面上仍有一行明说的密钥入口（不必任何手势），但引擎不该接管。
+    // 未展开 + 没勾选：设置页上连「本地系统」四个字都不该出现（展开走地址栏）。
     expect(unlockLocalSystem(KEY), '解锁码不对，前提没成立').toBe(true);
     hideLocalSystem();
     expect(isLocalSystemUnlocked(), '前提：本机回到未开通').toBe(false);
-    render(<SettingsPage />);
-    // 判据问**控件**：密钥框在、勾选框与「关起来」都不在。整节标题在未展开时不出现。
-    expect(screen.getByLabelText('本地系统密钥'), '不知道口令的人也要找得到输密钥的地方').toBeTruthy();
-    expect(screen.queryByText('本地系统（本机规则引擎）'), '未展开时整节标题不该出现').toBeNull();
+    const { container } = render(<SettingsPage />);
+    expect(container.textContent).not.toContain('本地系统');
+    expect(screen.queryByLabelText('本地系统密钥'), '密钥框也已经撤掉').toBeNull();
     expect(screen.queryByRole('checkbox', { name: /使用本地系统/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /关起来/ })).toBeNull();
     cleanup();
     // 正例钉子：本机没勾着的时候，详情页不许声称正在用本地系统 —— 即使库里存着上一轮的本机结果。
     render(<PersonDetail personId="p1" onBack={vi.fn()} />);
     await screen.findByRole('heading', { name: '人物详情' });
-    expect(screen.queryByText(/当前为本地系统/), '入口摆着 ≠ 引擎接管').toBeNull();
+    expect(screen.queryByText(/当前为本地系统/), '存着本机结果 ≠ 引擎接管').toBeNull();
     // 走真实入口开通并勾选（不手搓键名），同一条路径上横幅就该出现。
     turnLocalSystemOn();
     cleanup();

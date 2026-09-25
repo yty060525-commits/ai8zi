@@ -178,10 +178,8 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .channel-notice { font-size: 12px; padding: 2px 8px; background: #eef4ff; border: 1px solid #9bb6e8; color: #1b3f8b; }
 
-/* 本地系统（本机规则引擎）：默认整节不出现，只留下面这一行朴素的密钥入口；
-   输对才铺开成 .local-system 那一节。样式上刻意不加色块、不做装饰（用户要极简）。 */
-.local-entry { margin-bottom: 24px; }
-.local-entry .channel-row { margin-top: 6px; }
+/* 本地系统（本机规则引擎）：界面上**没有入口**（展开走地址栏 `?local=<解锁码>`，见 localSystem.ts）。
+   只有本机已开通时才会出现下面这一节；样式沿用其它小节，不加色块、不做装饰（用户要极简）。 */
 .local-system h2 { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .local-unlock-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .local-unlock-row .checkbox-inline { border-color: #1f7a3d; }
