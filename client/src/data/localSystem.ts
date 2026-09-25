@@ -74,6 +74,10 @@ export function isLocalSystemEnabled(): boolean {
   return isLocalSystemUnlocked() && isOfflineMode();
 }
 
+/* 详情页那句「没密钥」的引导语要在渲染时现读本地系统的状态（见 PersonDetail 的
+   keyMissingHintOf），所以这里以取值函数形式转出，别在模块加载时就把它定成常量。 */
+export const localSystemUnlocked = isLocalSystemUnlocked;
+
 /* 上面这个读数是 localStorage 直读的，React 并不知道它什么时候变。详情页要用它当**一轮分析的
    快照**（见 PersonDetail 的 AIAnalysis）：只在挂载时读一次会留下一个跨页缺口 ——
    用户去设置页取消勾选再返回，那边横幅仍写着「当前为本地系统」、这边却已经切回云端。

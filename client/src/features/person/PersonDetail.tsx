@@ -6,7 +6,7 @@ import { clearChartCache } from '../../data/storageInfo';
 import { sanitizeAnalysisText } from '../chart/elements';
 import { isServerMode } from '../../data/serverClient';
 import { canBuildLocalAnalysis, buildLocalAnalysis, buildLocalTaskAnalysis } from '../../data/localAnalysis';
-import { isLocalSystemEnabled, subscribeLocalSystem } from '../../data/localSystem';
+import { isLocalSystemEnabled, localSystemUnlocked, subscribeLocalSystem } from '../../data/localSystem';
 import type { BaziRecord, BaziTaskResult, NonAiChart } from '../../types/domain';
 import { interpersonalZodiac, zodiacOfBranch } from '../../utils/interpersonal';
 
@@ -301,15 +301,23 @@ function PointsView({ text }: { text?: string }) {
   ))}</div>;
 }
 
-/* 「没密钥」这句话该指向哪儿：连着服务器时分析默认由服务器完成，但本客户端的设置页只能填
-   本机三条通道的凭据(服务器那侧的密钥要在服务器上配)。旧文案让人去填一个用不上的地方，
-   所以两条路都说清楚：要么在服务器上给 AI 配密钥，要么在本机填凭据改用本机通道。
-   两处口径要对齐界面实物：「设置」按钮靠行尾对齐(.settings-entry margin-left:auto)、窄屏同样靠右，
-   所以方位写「右上角」；三条通道在设置页上就叫 DeepSeek / Kimi / Qwen3.8-Flash，
-   别再写成用户根本找不到的「通义」。 */
-const keyMissingHint = isServerMode()
-  ? 'AI 尚未可用：现在连着服务器，分析默认由服务器完成，而服务器那边还没配 AI 密钥(需要在服务器上配置，本客户端的设置页管不到它)。想马上能用：点页面右上角「设置」，在任一服务(DeepSeek / Kimi / Qwen3.8-Flash)里填写访问凭据并保存，分析就会改走本机通道。'
-  : 'AI 尚未可用：请先点页面右上角「设置」，在任一服务(DeepSeek / Kimi / Qwen3.8-Flash)里填写访问凭据并保存，再回来点 AI 分析。';
+/* 「没密钥」这句话该指向哪儿：三条分支各说清一条出路。**必须在渲染时现读**，不能写成模块级常量 ——
+   真机和测试都是先加载本模块、之后才往 localStorage 里写开通标记，常量会在「还没开通」那一刻把话
+   定死，之后用户开开关关这句都不改口（第一版就是这么写的，用例直接打回）。 */
+export function keyMissingHintOf(): string {
+  /* 本机已开通第四路时不能再教人去填云端凭据：只要勾上那一项，点「AI 分析」压根不碰任何通道密钥，
+     由本机规则引擎直接批断。旧文案在这种状态下仍写「填凭据…分析就会改走本机通道」，等于让用户为
+     一个本机早就备好的出路再花一次钱。判的是「已开通」而非「已勾选」：没勾选时确实还得配凭据。 */
+  if (localSystemUnlocked())
+    return 'AI 尚未可用：当前已勾选「使用本地系统」，点「AI 分析」由本机规则引擎直接批断，不需要任何通道凭据；若想改用云端大模型，请到页面右上角「设置」取消勾选，并在任一服务(DeepSeek / Kimi / Qwen3.8-Flash)里填写访问凭据并保存。';
+  /* 连着服务器时分析默认由服务器完成，但本客户端的设置页只能填本机三条通道的凭据(服务器那侧的密钥要
+     在服务器上配)，所以两条路都说清楚。口径要对齐界面实物：「设置」按钮靠行尾对齐(.settings-entry
+     margin-left:auto)、窄屏同样靠右，方位才写「右上角」；三条通道在设置页上就叫 DeepSeek / Kimi /
+     Qwen3.8-Flash，别写成用户找不到的「通义」。 */
+  if (isServerMode())
+    return 'AI 尚未可用：现在连着服务器，分析默认由服务器完成，而服务器那边还没配 AI 密钥(需要在服务器上配置，本客户端的设置页管不到它)。想马上能用：点页面右上角「设置」，在任一服务(DeepSeek / Kimi / Qwen3.8-Flash)里填写访问凭据并保存，分析就会改走本机通道。';
+  return 'AI 尚未可用：请先点页面右上角「设置」，在任一服务(DeepSeek / Kimi / Qwen3.8-Flash)里填写访问凭据并保存，再回来点 AI 分析。';
+}
 
 function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (next: BaziRecord) => void }) {
   const [progress, setProgress] = useState<{ done: number; total: number; label: string } | null>(null);
@@ -602,11 +610,11 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
       <div className="progress-track" role="progressbar" aria-valuenow={progress?.done ?? 0} aria-valuemin={0} aria-valuemax={progress?.total || queuedTotal() || 1}><div className="progress-fill" style={{ width: `${Math.round(((progress?.done ?? 0) / (progress?.total || queuedTotal() || 1)) * 100)}%` }} /></div>
     </div>}
     {record.aiStatus === 'pending' && <p role="status">按任务逐个调用 AI（本命 → 每年流年 → 每月流月 → 大运 → 后天调整 → 全盘总结），每个任务数秒到数十秒；失败会自动重试一次，进度即时保存，中断后可随时继续。</p>}
-    {(record.aiStatus === 'not_configured' || hasUnconfiguredTask) && <p role="status">{keyMissingHint}<button type="button" className="text-button chat-settings-link" onClick={openSettings}>去设置 ›</button></p>}
+    {(record.aiStatus === 'not_configured' || hasUnconfiguredTask) && <p role="status">{keyMissingHintOf()}<button type="button" className="text-button chat-settings-link" onClick={openSettings}>去设置 ›</button></p>}
     {record.aiStatus === 'failed' && <p role="status">{/未配置|没有可用的通道凭据/.test(record.aiError ?? '')
       // 一个凭据都没填时曾按 failed 上报(现已归为 not_configured)，此处兜住历史数据，
       // 别把「余额不足/限流」那串无关原因摆在一个根本没配密钥的用户面前。
-      ? keyMissingHint
+      ? keyMissingHintOf()
       : '个别任务自动重试多轮后仍未成功。常见原因：余额不足或额度已用完 / 密钥无效 / 请求过于频繁（限流）/ 网络超时或不可达 / 所选服务不可用。请按下方原因处理后，再点 AI 分析（只补失败项，不重复花钱）。'}</p>}
     {record.aiError && !/未配置|没有可用的通道凭据/.test(record.aiError) && <p role="alert">原因：{safeAiError(record.aiError)}</p>}
     {record.aiAnalysis && <div className="long-text"><strong>格局与强弱</strong>{record.aiTasks?.['task-01']?.source === 'local' ? <span className="local-dot" title="本地离线批断（第四路）" aria-label="本地离线批断" /> : null}<p>{sanitizeAnalysisText(record.aiAnalysis.pattern || '') || '—'} · {sanitizeAnalysisText(record.aiAnalysis.strength || '') || '—'}</p><p>喜：{(record.aiAnalysis.usefulElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}　忌：{(record.aiAnalysis.avoidElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}</p><PointsView text={record.aiAnalysis.explanation} /></div>}

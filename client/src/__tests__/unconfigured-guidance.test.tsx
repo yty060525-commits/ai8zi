@@ -4,6 +4,7 @@ import { App } from '../App';
 import '../features/chart/nonAiCalculator'; // 预载引擎(缓存)，让页面内的按需加载立即命中
 import { initializeMockSession, resetMockSession } from '../data/clientRepository';
 import type { BaziRecord, BaziTaskResult } from '../types/domain';
+import { unlockLocalSystem, lockLocalSystem, resetLocalSystemForTests } from '../data/localSystem';
 
 vi.mock('../data/deepseekAdapter', () => ({ analyzeBazi: vi.fn(), beginAiSession: vi.fn(), cancelAiSession: vi.fn() }));
 
@@ -36,7 +37,7 @@ const person = [{ id: 'unconfigured-person', name: '缺密钥测试', nameInitia
 beforeEach(() => {
   initializeMockSession(person, [{ person: person[0], record: structuredClone(record), aiAnalysis: { status: 'failed' } }]);
 });
-afterEach(() => { cleanup(); resetMockSession(); try { localStorage.clear(); } catch {} });
+afterEach(() => { cleanup(); resetMockSession(); resetLocalSystemForTests(); try { localStorage.clear(); } catch {} });
 
 async function openDetail() {
   render(<App />);
@@ -89,5 +90,29 @@ describe('未配置态的每一处都要给出可点的出路', () => {
     expect(before).toBeGreaterThan(0);
     act(() => { window.dispatchEvent(new Event('mingli:open-settings')); });
     expect(await screen.findByText('AI 通道（三条可同时配置）')).toBeTruthy();
+  });
+  it('本机已开通本地系统时，引导语不许再教用户去填云端凭据', async () => {
+    // 负例钉子：同一个「未配置」状态，没开通本机密钥时仍要说「去填凭据」。
+    await openDetail();
+    const cloudHint = await screen.findByText(/AI 尚未可用/);
+    expect(cloudHint.textContent).toContain('填写访问凭据');
+    expect(cloudHint.textContent, '本机根本没开通时不该提第四路').not.toContain('使用本地系统');
+    // 正例：开通那把密钥（不勾选）之后，同样的记录、同样的 not_configured 状态，
+    // 这句话必须改口指向第四路 —— 否则等于让一个本机早就备好的出路摆着，还催人花钱。
+    // 开通码写错就会静默返回 false，那这条用例会在一个根本没开通的状态下通过
+    // —— 反向钉子（撤销后退回云端口径）也就跟着假绿。所以先断言「确实开通了」。
+    expect(unlockLocalSystem('mingli-local-2026'), '解锁码不对，这条用例的前提没成立').toBe(true);
+    cleanup();
+    await openDetail();
+    const hint = await screen.findByText(/AI 尚未可用/);
+    expect(hint.textContent, '本机已备好第四路却仍催人填云端凭据').toContain('使用本地系统');
+    expect(hint.textContent).toContain('不需要任何通道凭据');
+    expect(hint.textContent).not.toContain('左上角');
+    // 反向钉子：撤销开通后引导语要退回云端口径（证明判据读的就是那把密钥，不是恒真）。
+    lockLocalSystem();
+    cleanup();
+    await openDetail();
+    const back = await screen.findByText(/AI 尚未可用/);
+    expect(back.textContent).not.toContain('使用本地系统');
   });
 });
