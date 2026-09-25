@@ -68,7 +68,7 @@ export function SettingsPage() {
    *  判序不能反：解锁码本身不带 sk-，而真实云端 key 一定带 —— 先认 sk- 才不会把 key 当解锁码试。 */
   async function saveQwenOrUnlockLocal() {
     const value = secrets.serviceThree;
-    if (!value.trim()) { setStatuses((c) => ({ ...c, serviceThree: '保存失败' })); flashLocalNote('请先粘贴凭据或密钥'); return; }
+    if (!value.trim()) { setStatuses((c) => ({ ...c, serviceThree: '保存失败' })); flashLocalNote('请先粘贴访问凭据'); return; }
     if (value.trim().toLowerCase().startsWith('sk-')) { await saveOne('serviceThree'); return; }
     // 到这里说明它想当解锁码用：只有暗门开着才有输入框可填，本地标记也照常写。
     if (unlockLocalSystem(value)) {
@@ -256,7 +256,9 @@ export function SettingsPage() {
             {notice[service.id] && <span className="channel-notice" role="status">{notice[service.id]}</span>}
           </div>
           <div className="channel-row">
-            <input aria-label={service.label + ' 访问凭据'} type="password" autoComplete="off" placeholder={isQwen ? '粘贴访问凭据（sk- 开头）或本地系统密钥' : st === '已配置' ? '已保存（重新填写可覆盖）' : '粘贴访问凭据'} value={secrets[service.id]} disabled={busy}
+            {/* 占位文字与另外两格**保持同一句**（用户 2026-09-25：「输入框显示的文字跟别的保持一致」）。
+                Qwen 那格的特殊之处只在分流规则，已写在下面的说明段里，不再往占位里塞。 */}
+            <input aria-label={service.label + ' 访问凭据'} type="password" autoComplete="off" placeholder={st === '已配置' ? '已保存（重新填写可覆盖）' : '粘贴访问凭据'} value={secrets[service.id]} disabled={busy}
               onChange={(event) => { const v = event.target.value; setSecrets((c) => ({ ...c, [service.id]: v })); }} />
             <button className="primary-button" type="button" disabled={busy} onClick={() => void (isQwen ? saveQwenOrUnlockLocal() : saveOne(service.id))}>{busy ? '处理中…' : '保存'}</button>
             <button className="text-button" type="button" disabled={busy} onClick={() => void clearOne(service.id)}>清除</button>
