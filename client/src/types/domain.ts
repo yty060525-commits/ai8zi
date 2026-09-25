@@ -58,6 +58,8 @@ export interface NonAiChart {
   forecastRange: number[];
   relationships: RelationshipFacts;
   greatFortunes: Array<{ ganZhi: string; startYear: number; endYear: number; tenGod?: string; relationships: RelationshipFacts }>;
+  /** 落库时记下的「未来十年内起运的大运段条数」：数组被瘦身后仍要能算出与详情页一致的分析进度分母。 */
+  decadeSlots?: number;
   /** 起运(出生到起运的跨度与公历日期)：大运各柱的起点由它决定。老记录无此字段。 */
   luckStart?: { years: number; months: number; days: number; date: string } | null;
   annualFortunes: FortunePeriod[];

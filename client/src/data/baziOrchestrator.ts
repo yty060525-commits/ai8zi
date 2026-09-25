@@ -155,6 +155,13 @@ export function analysisHorizon(record: BaziRecord, now: Date = new Date()): { y
   return created.year > current.year || (created.year === current.year && created.month > current.month) ? created : current;
 }
 
+/** 大运槽位的窗口年数：起运落在「今年之后、今年+N」内才算本轮要跑的段。
+ *  buildBaziTasks 与落库时记槽位数（stampDecadeSlots）都读这一个值，别再各写一份字面量。
+ *  说明可测性边界：引擎只排出 GREAT(=9) 柱大运，而这一路的大运起点恒为十年一格，
+ *  实测 180 种组合里窗口内恰好 1 段 —— 所以「上界挪两年」在现网根本不会改变任何数字，
+ *  把它写成断言只会得到一条恒真用例。真正会红的是「槽位数没算出来/没带上」那类缺陷。 */
+export const DECADE_WINDOW_YEARS = 9;
+
 export function buildBaziTasks(record: BaziRecord, now?: Date): BaziAnalysisTask[] {
   const annual = record.nonAiResult?.annualFortunes ?? [];
   const start = analysisHorizon(record, now);
@@ -180,8 +187,19 @@ export function buildBaziTasks(record: BaziRecord, now?: Date): BaziAnalysisTask
   // 上界 startYear <= year+9 与改动前的窗口末尾同一条：更远的运还没到讨论的时候，也不该占槽位。
   const greatFortunes = record.nonAiResult?.greatFortunes ?? [];
   const decadeTasks: BaziAnalysisTask[] = greatFortunes
-    .filter((g) => g.startYear > year && g.startYear <= year + 9)
+    .filter((g) => g.startYear > year && g.startYear <= year + DECADE_WINDOW_YEARS)
     .map((g, i) => ({ taskId: `task-${String(i + FIRST_DECADE_TASK_INDEX).padStart(2, '0')}`, type: 'decade' as const, year: g.startYear, decade: g }));
+  /* 记录列表读的是瘦身存储(greatFortunes 为空数组，完整数组只有 hydrate 才补得回，而列表故意不为读数
+     拖入历法库)。少了大运槽位，分母就会比详情页少一截 —— 同一个人在列表看到 2/24、点进详情看到 2/25。
+     落库时把条数记在 decadeSlots 上，这里只补**数量**：槽上没有干支，就不编造 decade 载荷，
+     所以下面两处取载荷的地方对空槽返回 undefined，DeepSeek 适配器会据此拒发请求（宁缺勿错）。 */
+  if (!decadeTasks.length) {
+    const horizon = analysisHorizon(record, now);
+    const slots = record.nonAiResult?.decadeSlots ?? 0;
+    for (let i = 0; i < slots; i += 1) {
+      decadeTasks.push({ taskId: `task-${String(i + FIRST_DECADE_TASK_INDEX).padStart(2, '0')}`, type: 'decade', year: horizon.year });
+    }
+  }
   return [...core, ...decadeTasks];
 }
 
@@ -200,6 +218,19 @@ export function expectedTaskIds(record: BaziRecord, now?: Date): string[] {
   return ids;
 }
 
+/** 「后天调整」任务的固定 id：本命喜用算得出来时，编排器会在时段任务跑完后追加它。 */
+export const ADJUSTMENT_TASK_ID = 'task-30';
+
+/** 这一轮最终会跑完的全部任务（进度分母的唯一来源）。
+ *  expectedTaskIds 只到「界面必填」为止 —— task-30/task-31 是跑到中途才 push 的，所以任何一处
+ *  拿 buildBaziTasks 的长度当总数都会少算，用户会在列表看到 2/23、点进详情看到 2/24。
+ *  注意别把它喂给完整性早退判定：那条要求 task-30 不占槽位（见 expectedTaskIds 上方注释）。 */
+export function plannedTaskIds(record: BaziRecord, now?: Date): string[] {
+  const ids = expectedTaskIds(record, now);
+  if (!ids.includes(ADJUSTMENT_TASK_ID)) ids.splice(ids.indexOf(OVERVIEW_TASK_ID) >= 0 ? ids.indexOf(OVERVIEW_TASK_ID) : ids.length, 0, ADJUSTMENT_TASK_ID);
+  return ids;
+}
+
 /** 本轮必填清单里已经真正跑出正文的条数。谓词与「结果完整、可以早退」那处判定同源，
  *  所以进度说的数字和再点一次 AI 分析时实际要补的条数必然一致。 */
 export function completedTaskCount(record: BaziRecord, now?: Date): number {
@@ -215,8 +246,7 @@ export function completedTaskCount(record: BaziRecord, now?: Date): number {
 export function aiStatusText(record: BaziRecord, now?: Date): string {
   if (record.aiStatus !== 'pending') return '';
   const done = completedTaskCount(record, now);
-  const total = expectedTaskIds(record, now).length;
-  return done > 0 ? '分析中（' + done + '/' + total + '）' : '分析中';
+  return done > 0 ? '分析中（' + done + '/' + plannedTaskIds(record, now).length + '）' : '分析中';
 }
 
 /** 单条要点截断长度：总结只需要结论，不需要把每篇长文原样再发一遍。 */

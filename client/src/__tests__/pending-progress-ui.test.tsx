@@ -3,7 +3,8 @@ import { cleanup, render, screen } from '@testing-library/react';
 
 import { PersonDetail } from '../features/person/PersonDetail';
 import { RecordsPage } from '../features/records/RecordsPage';
-import { configureBaziRepository, initializeMockSession, memoryBaziRepository, resetMockSession } from '../data/clientRepository';
+import { configureBaziRepository, getBaziRecord, initializeMockSession, listBaziRecords, memoryBaziRepository, resetMockSession, saveBaziRecord } from '../data/clientRepository';
+import { aiStatusText } from '../data/baziOrchestrator';
 import { calculateNonAi } from '../features/chart/nonAiCalculator';
 import type { BaziAIAnalysis, BaziRecord, BaziTaskResult } from '../types/domain';
 
@@ -64,5 +65,30 @@ describe('pending 态要把已完成的条数摆出来', () => {
     const row = await screen.findByRole('button', { name: '查看跑完了' });
     expect(row.textContent).toContain('AI：已完成');
     expect(row.textContent).not.toMatch(/（\d+\/\d+）/);
+  });
+
+  /* 线上实测抓到过「列表 2/23、详情 2/24」同屏自相矛盾。根因不是文案各写一份，而是两处读到的
+     数据厚薄不同：存储落库时派生数组被瘦身（greatFortunes 变空），详情页走 hydrate 重算补回来、
+     分母含大运槽位，列表刻意不重算 ⇒ 少一条大运就少一个槽位。所以这条用例必须真的走一遍
+     saveBaziRecord → 存储 → listBaziRecords / getBaziRecord，直接把 rec 递给两个组件是测不出来的。 */
+  it('同一份盘存进库里之后：列表与详情的分数仍要逐字相同', async () => {
+    const rec = halfRun('两头看', ['task-01', 'task-02', 'task-03', 'task-04']);
+    await saveBaziRecord(rec);
+
+    const fromList = await listBaziRecords();
+    const fromDetail = await getBaziRecord('p1');
+    expect(fromList.length, '前提：库里读得回这一条').toBe(1);
+    expect(fromDetail?.nonAiResult?.greatFortunes?.length ?? 0, '前提：详情这条路拿到的是完整盘').toBeGreaterThan(0);
+    expect(fromList[0].nonAiResult?.greatFortunes?.length ?? 0, '前提：列表这条路是瘦身后的大运数组').toBe(0);
+
+    const listText = aiStatusText(fromList[0], new Date());
+    const detailText = aiStatusText(fromDetail!, new Date());
+    expect(detailText, '详情页没给出分数').toMatch(/分析中（4\/\d+）/);
+    expect(listText, '两处分数不同源 ⇒ 用户会以为程序数错了').toBe(detailText);
+
+    cleanup();
+    render(<RecordsPage onOpenPerson={vi.fn()} />);
+    const row = (await screen.findByRole('button', { name: '查看两头看' })).textContent ?? '';
+    expect(row).toContain('AI：' + detailText);
   });
 });

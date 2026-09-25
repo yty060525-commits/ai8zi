@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { deleteBaziRecord, getBaziRecord, refreshRecord, saveBaziRecord } from '../../data/clientRepository';
-import { ABORTED_MESSAGE, aiStatusText, analysisHorizon, buildBaziTasks, expectedTaskIds, isRetryableFailure, orchestrateBaziAnalysis, DEFAULT_TONE } from '../../data/baziOrchestrator';
+import { ABORTED_MESSAGE, aiStatusText, analysisHorizon, expectedTaskIds, isRetryableFailure, orchestrateBaziAnalysis, plannedTaskIds, DEFAULT_TONE } from '../../data/baziOrchestrator';
 import { beginAiSession, cancelAiSession } from '../../data/deepseekAdapter';
 import { clearChartCache } from '../../data/storageInfo';
 import { sanitizeAnalysisText } from '../chart/elements';
@@ -380,7 +380,7 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
 
   /** 第一次进度回调之前没有分母可显示，只拿它撑住进度条的形状(不写进「任务 x / y」，
    *  因为 +2 那两条占位此刻还未必会发，写出来就是虚报总数)。 */
-  const queuedTotal = () => buildBaziTasks(record, horizonRef.current).length + 2;
+  const queuedTotal = () => plannedTaskIds(record, horizonRef.current).length;
 
   const showCopyNote = (text: string) => {
     setCopyNote(text);
@@ -524,7 +524,7 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
       beginAiSession();
       markBusy(true); enteredBusy = true;
       setHint(undefined); setCopyNote(undefined);
-      setProgress({ done: 0, total: expectedIds.length + 2, label: '准备任务…' });
+      setProgress({ done: 0, total: plannedTaskIds(base, horizonRef.current).length, label: '准备任务…' });
       const pending = await saveBaziRecord({ ...base, aiStatus: 'pending', aiError: undefined });   // 不再写 toneUsed：语气是本机的事，不进会同步的 record
       onUpdated(pending);
       let lastSnapshot: BaziRecord = pending;

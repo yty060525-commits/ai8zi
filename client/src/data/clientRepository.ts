@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { apiAdmin, apiRecords, getServerSession, isServerMode } from './serverClient';
 import { sqlMirror } from './offlineSql';
 import { ELEMENT_RULE_VERSION, countElements } from '../features/chart/elements';
-import { analysisHorizon, buildBaziTasks } from './baziOrchestrator';
+import { DECADE_WINDOW_YEARS, analysisHorizon, buildBaziTasks } from './baziOrchestrator';
 import type { BaziTaskResult } from '../types/domain';
 
 let sessionPeople: Person[] = [];
@@ -138,11 +138,26 @@ export function configureBaziRepository(repository: BaziRepositoryPort) {
   baziRecords = [];
 }
 
+/** 把「未来十年内起运的大运段条数」原样带到瘦身记录上。
+ *  进度分母按大运段计槽位，而 greatFortunes 数组在存储里是空的、只有 hydrate（动态导入历法库）才补得回；
+ *  记录列表刻意不走 hydrate，于是同一个人在列表看到 2/24、点进详情看到 2/25。这里在唯一拿得到完整数组的
+ *  时机把它记下来，列表就能算出与详情页相同的分母。 */
+export function stampDecadeSlots(record: BaziRecord): BaziRecord {
+  const n = record.nonAiResult;
+  if (!n?.greatFortunes?.length) return record;   // 只有真数得出大运段时才落这个数
+  const year = analysisHorizon(record).year;      // 与 buildBaziTasks 同一个锚点，别各写一份
+  const slots = n.greatFortunes.filter((g) => g.startYear > year && g.startYear <= year + DECADE_WINDOW_YEARS).length;
+  if (n.decadeSlots === slots) return record;
+  return { ...record, nonAiResult: { ...n, decadeSlots: slots } };
+}
+
 /** 存储瘦身：落库只存“本命要点 + 空占位”，派生数组由确定性内核随时重算。 */
 export function pruneRecord(record: BaziRecord): BaziRecord {
   const n = record.nonAiResult;
   if (!n) return record;
-  return { ...record, nonAiResult: { ...n, greatFortunes: [], annualFortunes: [], monthlyFortunes: [] } };
+  const stamped = stampDecadeSlots(record);
+  const m = stamped.nonAiResult!;
+  return { ...stamped, nonAiResult: { ...m, greatFortunes: [], annualFortunes: [], monthlyFortunes: [] } };
 }
 function isPruned(nonAi: BaziRecord['nonAiResult']): boolean {
   return !!nonAi && Array.isArray(nonAi.greatFortunes) && nonAi.greatFortunes.length === 0
@@ -244,7 +259,7 @@ export async function hydrateRecord(record: BaziRecord): Promise<BaziRecord> {
 /** 批量还原：历法库只要动态导入一次。 */
 async function hydrateRecords(records: BaziRecord[]): Promise<BaziRecord[]> {
   const fixed = records.map(repairElementCounts);
-  const needs = fixed.filter((record) => isPruned(record.nonAiResult) && canRecompute(record));
+  const needs = fixed.filter((record) => (isPruned(record.nonAiResult) || !hasDecadeStamp(record)) && canRecompute(record));
   if (!needs.length) return fixed;
   let calculateNonAi: typeof import('../features/chart/nonAiCalculator').calculateNonAi;
   try { ({ calculateNonAi } = await import('../features/chart/nonAiCalculator')); } catch { return fixed; }
@@ -274,8 +289,17 @@ async function hydrateRecords(records: BaziRecord[]): Promise<BaziRecord[]> {
   }));
   return fixed.map((record, i) => {
     const full = charts[i];
-    return full ? pruneOnRead({ ...record, nonAiResult: full }) : record;
+    // 重算时顺带把大运槽位数写进返回的这份盘：老记录没这个数(字段是后加的)，而列表读的是瘦身存储、
+    // 不会自己重算，缺它就少算分母。真正落库由 backfillDecadeSlots 负责(pruneRecord 只在数得出大运段
+    // 时才改这个数，所以带着它存一次就钉住了)。
+    if (!full) return record;
+    return pruneOnRead(stampDecadeSlots({ ...record, nonAiResult: full }));
   });
+}
+
+/** 这条瘦身记录是否已经带着大运槽位数（缺它就算不出与详情页同源的分母）。 */
+function hasDecadeStamp(record: BaziRecord): boolean {
+  return typeof record.nonAiResult?.decadeSlots === 'number';
 }
 
 function canRecompute(record: BaziRecord): boolean {
@@ -473,6 +497,21 @@ function applyMerged(merged: Map<string, BaziRecord>): boolean {
   return changed;
 }
 
+/** 从「这次重算」里取大运槽位数：缺就就地补写进存储，并把带着这个数的那份 nonAiResult 交回去
+ *  (没有新算出来就原引用返回，调用方据此判断无需改动)。
+ *  为什么只带这一个数而不返回整份 hydrated：① 存储约定是「本命要点 + 空占位」，整条覆盖回去还会把
+ *  本轮刚清掉的 AI 正文一起复活(实测)；② 界面拿到存储形状即可，完整数组由 getBaziRecord 现算。 */
+async function backfillDecadeSlots(hydrated: BaziRecord, storedNonAi: BaziRecord['nonAiResult']): Promise<BaziRecord['nonAiResult']> {
+  const slots = hydrated.nonAiResult?.decadeSlots;
+  if (typeof slots !== 'number') return storedNonAi;
+  const current = await baziRepository.getBaziRecord(hydrated.id);
+  if (!current?.nonAiResult) return storedNonAi;
+  if (current.nonAiResult.decadeSlots === slots) return current.nonAiResult;
+  const stamped = { ...current.nonAiResult, decadeSlots: slots };
+  await baziRepository.saveBaziRecord({ ...current, nonAiResult: stamped });
+  return stamped;
+}
+
 export const saveBaziRecord = async (record: Omit<BaziRecord, 'id' | 'aiStatus'> & Partial<Pick<BaziRecord, 'aiStatus'>> | BaziRecord): Promise<BaziRecord> => {
   // aiStatus 只在「新建」时补默认值。以前每次保存都把它抹成未开始：跑完一轮分析后任何一次
   // 保存(改语气、重算非 AI)都会让状态回退，而任务条目还全部留着已完成 —— 界面就成了
@@ -480,7 +519,13 @@ export const saveBaziRecord = async (record: Omit<BaziRecord, 'id' | 'aiStatus'>
   const input = { ...record } as BaziRecord;
   if (!input.id || !input.aiStatus) input.aiStatus = 'not_started';
   const stored = await baziRepository.saveBaziRecord(pruneRecord(input));
-  const full = await hydrateRecord(stored);
+  /* 存量盘可能缺大运槽位数(见 stampDecadeSlots)：只有重算排盘才数得出来，而那次计算的结果默认只留在
+     内存里 —— 上一版就栽在这一步，补好的值没落库，下次从存储读回来又是空的，修复只活在当次读取里。 */
+  const stamped = await backfillDecadeSlots(await hydrateRecord(stored), stored.nonAiResult);
+  /* 交出去的那份就是存储里那一份(派生数组为空占位)，最多只多带上这一格槽位数：hydrate 算出的完整数组
+     不能顺着返回值漏给调用方 —— 实测那样同一次保存会有三种厚度(存储 gf=0、详情 gf=9、返回值 gf=9)，
+     任何「比较两次读取」的调用方都会判成数据不一致。要完整盘走 getBaziRecord / refreshRecord。 */
+  const full = stamped === stored.nonAiResult ? stored : { ...stored, nonAiResult: stamped };
   if (serverActive() || (isTauri && isServerMode())) {
     // 不 await：一次导入/保存可能上百条，逐条等网络往返就是几分钟白屏。
     // 界面随后立刻重读列表也不会丢数据 —— 那一条始终还在内存视图 baziRecords 里，

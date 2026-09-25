@@ -51,8 +51,12 @@ describe('storage slimming (prune/hydrate)', () => {
     configureBaziRepository(memoryBaziRepository);
     const saved = await saveBaziRecord(fullRecord());
     expect(saved.id).toBeTruthy();
-    expect(saved.nonAiResult!.monthlyFortunes).toHaveLength(120); // 保存返回完整盘
+    /* 保存返回的是「存储那一份」(派生数组为空占位)，不是 hydrate 的完整盘。两条读路径都得和它逐字相等：
+       实测把这里改成返回完整盘之后，同一次保存出现三种厚度 —— 列表 gf=0、详情 gf=9、返回值自身 gf=9，
+       于是任何一处「比较两次读取」的调用方(界面去重、导入回环)都会对不上。要完整盘走 getBaziRecord。 */
+    expect(saved.nonAiResult!.monthlyFortunes).toHaveLength(0); // 保存返回瘦身盘
     const listed = await listBaziRecords();
+    expect(listed).toEqual([saved]); // 列表与刚保存那份逐字相同
     expect(listed[0].nonAiResult!.monthlyFortunes).toHaveLength(0); // 列表读瘦身数据
     expect(listed[0].nonAiResult!.zodiac).toBe('鼠');
     const detail = await getBaziRecord(saved.id!);
