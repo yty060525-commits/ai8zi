@@ -574,7 +574,7 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
     setHint('已取消自动重试。需要时可手动点 AI 分析。');
   }
   async function clearResultsOnly() {
-    if (record.aiStatus === 'pending' || busy) return;
+    if (busy) return;
     cancelAutoRetry();
     autoRetryCountRef.current = 0;
     const cleared = await saveBaziRecord({ ...record, aiTasks: undefined, aiAnalysis: undefined, aiOverview: undefined, aiError: undefined, aiStatus: 'not_started' });
@@ -592,7 +592,7 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
   useEffect(() => () => { if (noteTimer.current) clearTimeout(noteTimer.current); if (autoTimerRef.current) clearTimeout(autoTimerRef.current); }, []);
 
   return <section className="detail-section" aria-labelledby="ai-title" aria-label="AI 分析">
-    <div className="section-heading"><div><p className="eyebrow">03 / AI ANALYSIS</p><h2 id="ai-title">AI 分析</h2></div><div className="button-group"><button className="primary-button" type="button" onClick={() => void requestAnalysis()} disabled={record.aiStatus === 'pending' || busy}>{busy ? '分析中…' : 'AI 分析'}</button>{(record.aiStatus === 'pending' || busy) && <button className="danger-button stop-button" type="button" onClick={stopAnalysis}>立即停止</button>}<button className="text-button" type="button" onClick={() => void clearResultsOnly()} disabled={record.aiStatus === 'pending' || busy}>清除AI结果与缓存（只清除，不重算）</button></div></div>
+    <div className="section-heading"><div><p className="eyebrow">03 / AI ANALYSIS</p><h2 id="ai-title">AI 分析</h2></div><div className="button-group"><button className="primary-button" type="button" onClick={() => void requestAnalysis()} disabled={busy}>{busy ? '分析中…' : 'AI 分析'}</button>{busy && <button className="danger-button stop-button" type="button" onClick={stopAnalysis}>立即停止</button>}<button className="text-button" type="button" onClick={() => void clearResultsOnly()} disabled={busy}>清除AI结果与缓存（只清除，不重算）</button></div></div>
     <div className="tone-block" aria-label="分析语气">
       <span className="tone-label">措辞语气</span>
       <input id="tone-slider" type="range" min={0} max={100} step={5} value={tone} aria-valuetext={toneLabel(tone)} onChange={(event) => { const v = Number(event.target.value); setTone(v); saveRecordTone(record.id, v); }} />
@@ -604,11 +604,16 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
     {!localSystemOn && aiResults.some((r) => r.source === 'local') && <p className="ai-mode-note" role="status">下方带 <span className="local-dot" aria-hidden="true" /> 的段落为上次本地系统批断的结果；当前用云端通道，点「AI 分析」会用云端结果重算并覆盖它们。</p>}
     {hint && <p role="status">{hint}</p>}
     {autoWaiting && <div className="button-group"><button className="text-button" type="button" onClick={cancelAutoRetryFromHint}>取消自动重试</button></div>}
-    {(progress || busy || (record.aiStatus === 'pending' && !progress)) && <div className="progress-block" aria-label="AI 分析进度">
+    {(progress || busy) && <div className="progress-block" aria-label="AI 分析进度">
       <p className="progress-text">任务 {progress ? progress.done + ' / ' + progress.total : '0'}：{progress?.label ?? '准备中…'}</p>
       <div className="progress-track" role="progressbar" aria-valuenow={progress?.done ?? 0} aria-valuemin={0} aria-valuemax={progress?.total || queuedTotal() || 1}><div className="progress-fill" style={{ width: `${Math.round(((progress?.done ?? 0) / (progress?.total || queuedTotal() || 1)) * 100)}%` }} /></div>
     </div>}
-    {record.aiStatus === 'pending' && <p role="status">按任务逐个调用 AI（本命 → 每年流年 → 每月流月 → 大运 → 后天调整 → 全盘总结），每个任务数秒到数十秒；失败会自动重试一次，进度即时保存，中断后可随时继续。</p>}
+    {/* 同一份 pending 有两种来历：本机真在跑，或别的设备跑一半走了/刷新前没来得及收尾。
+       只有前者才该讲进度与自动重试 —— 对后者说「进度即时保存」是谎话，用户会一直等。 */}
+    {record.aiStatus === 'pending' && <p role="status">{busy
+      ? '按任务逐个调用 AI（本命 → 每年流年 → 每月流月 → 大运 → 后天调整 → 全盘总结），每个任务数秒到数十秒；失败会自动重试一次，进度即时保存，中断后可随时继续。'
+      : '这条盘显示「分析中」，但那不是本设备发起的：多半是另一台设备上分析没跑完就离开了。这里没有在等，直接点「AI 分析」即可补齐。'}
+    </p>}
     {(record.aiStatus === 'not_configured' || hasUnconfiguredTask) && <p role="status">{keyMissingHintOf()}<button type="button" className="text-button chat-settings-link" onClick={openSettings}>去设置 ›</button></p>}
     {record.aiStatus === 'failed' && <p role="status">{/未配置|没有可用的通道凭据/.test(record.aiError ?? '')
       // 一个凭据都没填时曾按 failed 上报(现已归为 not_configured)，此处兜住历史数据，
