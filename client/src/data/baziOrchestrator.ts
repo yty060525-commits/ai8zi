@@ -2,7 +2,6 @@ import type { AiFindings, BaziAIAnalysis, BaziAnalysisTask, BaziRecord, BaziTask
 import * as adapter from './deepseekAdapter';
 import { chinaYearMonth } from '../utils/date';
 import { ELEMENT_GUIDES, primaryElement, type ElementGuide } from './elementKnowledge';
-import { buildLocalTaskAnalysis } from './localAnalysis';
 import { sanitizeAnalysisText } from '../features/chart/elements';
 export type TaskRunner = (task: BaziAnalysisTask, payload: { nonAiResult: BaziRecord['nonAiResult']; task: BaziAnalysisTask }) => Promise<BaziTaskResult>;
 export interface AiProgress { done: number; total: number; label: string; record: BaziRecord; }
@@ -249,6 +248,8 @@ const makeDefaultRunner = (record: BaziRecord, signal?: AbortSignal, tone?: numb
 /** 本地离线（第四路）runner：由 localAnalysis 规则引擎就地就排盘事实产出与云端各篇同构的正文。
  *  不触网、不耗额度；缺该时段排盘数据时以 local_unavailable 失败(非可重试)，如实反映而不编造。 */
 const makeLocalRunner = (record: BaziRecord, now?: Date): TaskRunner => async (task) => {
+  /* 规则引擎按需加载：只有真的走本机这一路才付这 41 KB，云端那条主路径不必带着它进首屏包。 */
+  const { buildLocalTaskAnalysis } = await import('./localAnalysis');
   const analysis = buildLocalTaskAnalysis(record, task, now ?? new Date());
   return analysis
     ? { task, status: 'completed' as const, analysis, source: 'local' as const }

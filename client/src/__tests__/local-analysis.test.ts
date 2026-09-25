@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { calculateNonAi } from '../features/chart/nonAiCalculator';
-import { buildLocalAnalysis, buildLocalTaskAnalysis, canBuildLocalAnalysis, LOCAL_ANALYSIS_ENGINE_VERSION } from '../data/localAnalysis';
+import { buildLocalAnalysis, buildLocalTaskAnalysis, LOCAL_ANALYSIS_ENGINE_VERSION } from '../data/localAnalysis';
+import { canBuildLocalAnalysis } from '../data/localSystem';
 import { REQUIRED_SECTIONS } from '../data/baziOrchestrator';
 import type { BaziAnalysisTask, BaziRecord } from '../types/domain';
 

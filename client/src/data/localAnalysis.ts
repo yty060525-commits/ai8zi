@@ -17,12 +17,14 @@
  * ========================================================================== */
 import { STEMS, BRANCHES, ELEMENTS, stemElementIndex, HIDDEN_STEMS } from '../features/chart/elements';
 import { ELEMENT_GUIDES, primaryElement, type ElementKey } from './elementKnowledge';
+import { canBuildLocalAnalysis } from './localSystem';
 import type { BaziAIAnalysis, BaziAnalysisTask, BaziRecord, FortunePeriod, NonAiChart } from '../types/domain';
 
 export const LOCAL_ANALYSIS_ENGINE_VERSION = 'local-rules-v2';
 
 /** 引擎可复算、无需外部输入的最小事实来源；缺排盘数据时上层据此禁用按钮。 */
-export const canBuildLocalAnalysis = (record: BaziRecord): boolean => !!record.nonAiResult;
+/* 判据已搬到 data/localSystem.ts（见那里的 canBuildLocalAnalysis）：调用方在页面加载阶段
+   就该能问到它，不该为此把本模块整个规则引擎拖进首屏包。 */
 
 export interface LocalAnalysis {
   pattern: string;

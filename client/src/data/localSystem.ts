@@ -78,6 +78,10 @@ export function isLocalSystemEnabled(): boolean {
    keyMissingHintOf），所以这里以取值函数形式转出，别在模块加载时就把它定成常量。 */
 export const localSystemUnlocked = isLocalSystemUnlocked;
 
+/* 「这盘能不能出本地批断」：整条第四路在调引擎之前就用它挡空盘，所以判据放在本模块，
+   与规则引擎本体（localAnalysis，41 KB）解耦 —— 页面加载阶段只为这句判断去拖整个引擎不值。 */
+export const canBuildLocalAnalysis = (record: { nonAiResult?: unknown }): boolean => !!record.nonAiResult;
+
 /* 上面这个读数是 localStorage 直读的，React 并不知道它什么时候变。详情页要用它当**一轮分析的
    快照**（见 PersonDetail 的 AIAnalysis）：只在挂载时读一次会留下一个跨页缺口 ——
    用户去设置页取消勾选再返回，那边横幅仍写着「当前为本地系统」、这边却已经切回云端。

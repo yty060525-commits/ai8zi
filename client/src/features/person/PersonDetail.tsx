@@ -5,8 +5,7 @@ import { beginAiSession, cancelAiSession } from '../../data/deepseekAdapter';
 import { clearChartCache } from '../../data/storageInfo';
 import { sanitizeAnalysisText } from '../chart/elements';
 import { isServerMode } from '../../data/serverClient';
-import { canBuildLocalAnalysis, buildLocalAnalysis, buildLocalTaskAnalysis } from '../../data/localAnalysis';
-import { isLocalSystemEnabled, isLocalSystemHidden, localSystemUnlocked, subscribeLocalSystem } from '../../data/localSystem';
+import { canBuildLocalAnalysis, isLocalSystemEnabled, isLocalSystemHidden, localSystemUnlocked, subscribeLocalSystem } from '../../data/localSystem';
 import type { BaziRecord, BaziTaskResult, NonAiChart } from '../../types/domain';
 import { interpersonalZodiac, zodiacOfBranch } from '../../utils/interpersonal';
 
@@ -671,8 +670,21 @@ const readLocalVisible = () => localSystemUnlocked() && !isLocalSystemHidden();
 function LocalAnalysisSection({ record }: { record: BaziRecord }) {
   const [data, setData] = useState<{ lead: string; blocks: Array<{ title: string; text: string }> } | null>(null);
   const [note, setNote] = useState<string>();
+  const [loading, setLoading] = useState(false);
   const disabled = !canBuildLocalAnalysis(record);
-  const run = () => {
+  const run = async () => {
+    setLoading(true);
+    let engine: typeof import('../../data/localAnalysis');
+    try {
+      // 点一次才加载一次规则引擎；module 自带缓存，第二次点击不会再走网络。
+      engine = await import('../../data/localAnalysis');
+    } catch (error) {
+      setLoading(false);
+      setData(null); setNote('本地引擎加载失败：' + (error instanceof Error ? error.message : String(error)));
+      return;
+    }
+    setLoading(false);
+    const { buildLocalAnalysis, buildLocalTaskAnalysis } = engine;
     try {
       const base = buildLocalAnalysis(record);
       if (!base) { setData(null); setNote('缺少基础排盘数据：请先点上方「重新计算非 AI」再来本地批断。'); return; }
@@ -690,7 +702,7 @@ function LocalAnalysisSection({ record }: { record: BaziRecord }) {
   const copyAll = async () => { if (data) { await copy(data.blocks.map((b) => b.title + '\n' + b.text).join('\n\n')); setNote('已复制本地批断'); } };
   return <section className="detail-section" aria-label="本地系统">
     <div className="section-heading"><div><p className="eyebrow">03 / LOCAL SYSTEM</p><h2>本地系统（本机规则引擎）</h2></div>
-      <div className="button-group"><button className="primary-button" type="button" onClick={run} disabled={disabled}>{disabled ? '先算排盘数据' : '生成本地批断'}</button>{data && <button className="text-button" type="button" onClick={() => void copyAll()}>复制本地批断</button>}</div></div>
+      <div className="button-group"><button className="primary-button" type="button" onClick={() => void run()} disabled={disabled || loading}>{disabled ? '先算排盘数据' : loading ? '加载引擎…' : '生成本地批断'}</button>{data && <button className="text-button" type="button" onClick={() => void copyAll()}>复制本地批断</button>}</div></div>
     <p className="local-note">不联网、不调用云端服务、不消耗额度：由本机规则引擎就上方排盘事实直接批断，含本命、全盘总结与后天调整，供参考与兜底；多因素权衡的综合细断请以「AI 分析」为准。</p>
     {note && <p role="status">{note}</p>}
     {data && <div className="long-text"><p className="scope-lead">{data.lead}</p>{data.blocks.map((block) => <div className="local-block" key={block.title}><p className="scope-lead">{block.title}</p><PointsView text={block.text} /></div>)}</div>}

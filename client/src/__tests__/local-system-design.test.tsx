@@ -9,7 +9,7 @@ import type { BaziRecord, BaziTaskResult } from '../types/domain';
 import { calculateNonAi } from '../features/chart/nonAiCalculator';
 import '../features/chart/nonAiCalculator'; // 预载引擎(缓存)，让页面内的按需加载立即命中
 import { App } from '../App';
-import { canBuildLocalAnalysis } from '../data/localAnalysis';
+import { canBuildLocalAnalysis } from '../data/localSystem';
 
 import { invoke } from '@tauri-apps/api/core';
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
@@ -377,6 +377,54 @@ describe('详情页「本地系统」整块的可见性跟着暗门走', () => {
     render(<App />);
     await openDetail();
     expect(sectionShown()).toBe(true);
+  });
+});
+
+
+/* 拆包后的功能不变量：规则引擎不再静态进首屏包（见「本地规则引擎按需加载」那组），
+   改成点「生成本地批断」时才 await import。这条走真实交互路径钉**没被拆坏** —— 按需取到的
+   仍是同一个真引擎，能出本命/十年/调整三块。变异对照：动态 import 的路径写错 ⇒ 红；把按钮的
+   disabled 判据写成常真 ⇒ 点不动、等不到正文 ⇒ 红。 */
+describe('详情页本地批断由按需加载的引擎产出', () => {
+  it('点击后渲染出三块正文', async () => {
+    const chart = calculateNonAi({ birthYear: 1990, birthMonth: 5, birthDay: 15, yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午' }, 'male', '2025-01-01T00:00:00.000Z');
+    await seed(mk({ nonAiResult: chart }));
+    expect(unlockLocalSystem(KEY), '解锁码不对，前提没成立').toBe(true);
+    render(<PersonDetail personId="p1" onBack={vi.fn()} />);
+    const button = await screen.findByRole('button', { name: '生成本地批断' }, { timeout: 4000 });
+    fireEvent.click(button);
+    await waitFor(() => expect(screen.queryByText('本命命局')).toBeTruthy(), { timeout: 4000 });
+    expect(screen.getByText('未来十年 · 全盘总结')).toBeTruthy();
+    expect(screen.getByText('后天调整与职业适配')).toBeTruthy();
+  });
+});
+
+/* 拆包后的设计不变量：规则引擎不进首屏包，只在真的走第四路时才 await import。
+   判据读**真实模块源码**(?raw)，不碰组件、不发请求。变异对照见各条注释。 */
+const read = async (p: string) => String((await import(p)).default);
+
+describe('本地规则引擎按需加载', () => {
+  const cases = [
+    ['编排器', '../../src/data/baziOrchestrator.ts?raw'],
+    ['详情页', '../../src/features/person/PersonDetail.tsx?raw'],
+  ] as const;
+
+  for (const [label, path] of cases) {
+    it(`${label} 只用动态 import 取引擎`, async () => {
+      const src = await read(path);
+      expect(src.length, `${label} 源码没读到，这条判据就是空转`).toBeGreaterThan(1000);
+      expect(/import\s[^;]*?from\s*['"][^'"]*localAnalysis['"]/.test(src),
+        `${label} 又用静态 import 拉引擎：vite 会把它合回首屏 chunk`).toBe(false);
+      expect(/import\(\s*['"][^'"]*localAnalysis['"]\s*\)/.test(src),
+        `${label} 里没有动态 import，说明调用点被删了`).toBe(true);
+    });
+  }
+
+  it('判据住在 localSystem，不在引擎里', async () => {
+    const engine = await read('../../src/data/localAnalysis.ts?raw');
+    expect(engine).not.toMatch(/export\s+const\s+canBuildLocalAnalysis/);
+    expect(canBuildLocalAnalysis({ nonAiResult: {} }), '正例：有排盘数据应放行').toBe(true);
+    expect(canBuildLocalAnalysis({}), '反例：没排盘数据必须挡住').toBe(false);
   });
 });
 
