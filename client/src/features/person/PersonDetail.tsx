@@ -5,7 +5,7 @@ import { beginAiSession, cancelAiSession } from '../../data/deepseekAdapter';
 import { clearChartCache } from '../../data/storageInfo';
 import { sanitizeAnalysisText } from '../chart/elements';
 import { isServerMode } from '../../data/serverClient';
-import { canBuildLocalAnalysis, isLocalSystemEnabled, localSystemUnlocked, subscribeLocalSystem } from '../../data/localSystem';
+import { canBuildLocalAnalysis, ensureLocalChartComplete, isLocalSystemEnabled, localSystemUnlocked, subscribeLocalSystem } from '../../data/localSystem';
 import type { BaziRecord, BaziTaskResult, NonAiChart } from '../../types/domain';
 import { interpersonalZodiac, zodiacOfBranch } from '../../utils/interpersonal';
 
@@ -696,12 +696,15 @@ function LocalAnalysisSection({ record }: { record: BaziRecord }) {
     setLoading(false);
     const { buildLocalAnalysis, buildLocalTaskAnalysis } = engine;
     try {
-      const base = buildLocalAnalysis(record);
+      /* 详情页这份记录是读取时 hydrate 过的（时段数组已补回），但仍可能来自别的写入路径而带着
+         瘦身数据 —— 统一过一次补算入口，判据与「AI 分析」那条路同源，不在这里各写一份。 */
+      const chart = await ensureLocalChartComplete(record);
+      const base = buildLocalAnalysis(chart);
       if (!base) { setData(null); setNote('缺少基础排盘数据：请先点上方「重新计算非 AI」再来本地批断。'); return; }
       const blocks: Array<{ title: string; text: string }> = [{ title: '本命命局', text: base.explanation }];
-      const overview = buildLocalTaskAnalysis(record, { taskId: 'local-overview', type: 'overview' });
+      const overview = buildLocalTaskAnalysis(chart, { taskId: 'local-overview', type: 'overview' });
       if (overview?.explanation) blocks.push({ title: '未来十年 · 全盘总结', text: overview.explanation });
-      const adjust = buildLocalTaskAnalysis(record, { taskId: 'local-adjust', type: 'adjustment' });
+      const adjust = buildLocalTaskAnalysis(chart, { taskId: 'local-adjust', type: 'adjustment' });
       if (adjust?.explanation) blocks.push({ title: '后天调整与职业适配', text: adjust.explanation });
       setData({ lead: `格局：${base.pattern} · 强弱：${base.strength}　喜：${base.usefulElements.join('、') || '—'}　忌：${base.avoidElements.join('、') || '—'}`, blocks });
       setNote(undefined);

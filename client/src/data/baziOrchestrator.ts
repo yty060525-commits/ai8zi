@@ -1,6 +1,10 @@
 import type { AiFindings, BaziAIAnalysis, BaziAnalysisTask, BaziRecord, BaziTaskResult, BaziTaskType } from '../types/domain';
 import * as adapter from './deepseekAdapter';
 import { chinaYearMonth } from '../utils/date';
+/* 只引这一件事，且**别指望在模块初始化期用它**：nonAiCalculator 静态依赖本模块，而 localSystem
+   要补算时又动态引 nonAiCalculator —— 把这里的 import 改成静态直调不会红，但会把初始化顺序变成
+   orchestrator → localSystem → (运行时) nonAiCalculator → orchestrator。见那条「只用动态 import」的判据。 */
+import { ensureLocalChartComplete } from './localSystem';
 import { ELEMENT_GUIDES, primaryElement, type ElementGuide } from './elementKnowledge';
 import { sanitizeAnalysisText } from '../features/chart/elements';
 export type TaskRunner = (task: BaziAnalysisTask, payload: { nonAiResult: BaziRecord['nonAiResult']; task: BaziAnalysisTask }) => Promise<BaziTaskResult>;
@@ -296,12 +300,26 @@ const makeDefaultRunner = (record: BaziRecord, signal?: AbortSignal, tone?: numb
   return { task, status: result.status, analysis: 'analysis' in result ? result.analysis : undefined, error: 'error' in result ? result.error : undefined, source: 'cloud' as const };
 };
 
+/** 本地 runner 取「补算过的盘」这件事**单独成一个导出函数**：它不是内部细节，而是这条接线唯一的
+ *  存在证明 —— 用例只能从模块对象上把它当判据读（见 orchestration.test.ts 那条）。
+ *  留在闭包里直接调 ensureLocalChartComplete 的话，删掉那一行也不会红：编排器拿到的记录本来就带齐
+ *  时段数组，"少补算一次"在正文上看不出来。 */
+export function localChartForTask(record: BaziRecord): Promise<BaziRecord> {
+  return ensureLocalChartComplete(record);
+}
+/* 必须 `import * as` 命名空间 + 经对象取，不能写成裸调用 `localChartForTask(record)`：
+   ESM 的 live binding 让裸引用永远绑回编译期的原函数，vi.spyOn(orch,'localChartForTask') 换不掉它
+   （实测桩零调用）。变异对照：删掉下面这行 await ⇒ 那条用例红；改回裸调用 ⇒ 也红。 */
+import * as self from './baziOrchestrator';
+
 /** 本地离线（第四路）runner：由 localAnalysis 规则引擎就地就排盘事实产出与云端各篇同构的正文。
  *  不触网、不耗额度；缺该时段排盘数据时以 local_unavailable 失败(非可重试)，如实反映而不编造。 */
 const makeLocalRunner = (record: BaziRecord, now?: Date): TaskRunner => async (task) => {
   /* 规则引擎按需加载：只有真的走本机这一路才付这 41 KB，云端那条主路径不必带着它进首屏包。 */
   const { buildLocalTaskAnalysis } = await import('./localAnalysis');
-  const analysis = buildLocalTaskAnalysis(record, task, now ?? new Date());
+  // 存储里那份是瘦身的（大运/流年/流月数组为空）；不补算就喂引擎，全盘总结一个年份节点都出不来。
+  const chart = await self.localChartForTask(record);
+  const analysis = buildLocalTaskAnalysis(chart, task, now ?? new Date());
   return analysis
     ? { task, status: 'completed' as const, analysis, source: 'local' as const }
     : { task, status: 'failed' as const, error: 'local_unavailable: 缺少该时段排盘数据，请先「重新计算非 AI」', source: 'local' as const };

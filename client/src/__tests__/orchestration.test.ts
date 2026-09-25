@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildBaziTasks, isRetryableFailure, orchestrateBaziAnalysis, sanitizeAnalysis } from '../data/baziOrchestrator';
 import { calculateNonAi } from '../features/chart/nonAiCalculator';
 import { ELEMENT_GUIDES } from '../data/elementKnowledge';
@@ -328,5 +328,26 @@ describe('本地离线（第四路）批量', () => {
 
   it('local_unavailable 判为不可重试(缺数据不空转重试)', () => {
     expect(isRetryableFailure('local_unavailable: 缺少该时段排盘数据')).toBe(false);
+  });
+
+  /* 这条钉的是**接线本身**，不是引擎：把 runner 里那句补算调用删掉（变异 A）必须红。
+     为什么只能这样测 —— 编排器拿到的记录本来就带齐时段数组，所以"少补算一次"在正文上完全
+     看不出来；只有拦下「runner 有没有过一次补算入口、交出去的是不是入参那份」才量得到。 */
+  it('本地 runner 把盘交给引擎之前先过一次补算入口（不直接吃瘦身数据）', async () => {
+    const orch = await import('../data/baziOrchestrator');
+    const input = fullRecord('male');
+    const seen: unknown[] = [];
+    const spy = vi.spyOn(orch, 'localChartForTask').mockImplementation(async (rec: BaziRecord) => {
+      seen.push(rec.nonAiResult);
+      return rec;                                  // 桩原样返回：本用例只关心"过没过这道口"
+    });
+    try {
+      const result = await orchestrateBaziAnalysis(input, undefined, undefined, { local: true, now: OFFLINE_NOW, retryDelayMs: 0 });
+      expect(seen.length, 'runner 一次都没走补算入口 ⇒ 接线被删了').toBeGreaterThan(0);
+      expect(seen[0], '交给引擎的不是入参那份盘').toBe(input.nonAiResult);
+      expect(Object.values(result.aiTasks ?? {}).every((r) => r.status === 'completed')).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

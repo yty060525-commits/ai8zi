@@ -51,6 +51,10 @@ const seed = async (record: BaziRecord) => {
   return record;
 };
 
+/** 页面上摆出来的全部文字。⚠ 别用 `document.body.innerText`：jsdom 没实现它，读回来是
+ *  undefined，于是任何字符串判据都变成「undefined 与 string」的无效比较（实测踩过）。 */
+const baseText = () => document.body.textContent ?? '';
+
 /** 打开「已开通 + 已勾选」的本地系统：走真实写入口，不手搓键名。 */
 const turnLocalSystemOn = () => {
   unlockLocalSystem(KEY);
@@ -435,6 +439,54 @@ describe('详情页本地批断由按需加载的引擎产出', () => {
     await waitFor(() => expect(screen.queryByText('本命命局')).toBeTruthy(), { timeout: 4000 });
     expect(screen.getByText('未来十年 · 全盘总结')).toBeTruthy();
     expect(screen.getByText('后天调整与职业适配')).toBeTruthy();
+  });
+});
+
+/* 用户实测报的「没有时间节点」：存储里的派生数组是瘦身过的（greatFortunes/annualFortunes 为空，
+   读取时才由 hydrate 现算补回），而本地引擎只认 record.nonAiResult。走**真实 UI 路径**点一次
+   「生成本地批断」，看它拿到的到底是哪一份数据 —— 修复前这里必红：正文只剩一句
+   「未来十年各年均无显著犯忌或进气之年」，一个年份节点都没有。 */
+describe('详情页本地批断要有时段事实（大运算得出、节点列得全）', () => {
+  /* 未 hydrate 的存储形态 = pruneRecord 的输出。这里**先走真实落库路径**再把它抠出来，而不是
+     手搓形状：上一版手搓时带上了 strengthScore/patternFacts，读取路径(isPruned)顺手替它补算了
+     ⇒ 用例恒绿，把「本地批断拿瘦身盘算不出时间节点」这条真缺陷整个漏掉。 */
+  const storedChart = async () => {
+    const full = calculateNonAi({ birthYear: 1990, birthMonth: 5, birthDay: 15, yearPillar: '庚午', monthPillar: '壬午', dayPillar: '丙寅', hourPillar: '癸巳' }, 'male', '2026-09-25T02:00:00.000Z');
+    const saved = await saveBaziRecord(mk({ nonAiResult: full }) as BaziRecord);
+    const n = saved.nonAiResult;
+    expect(n, '前提：记录存下来了').toBeTruthy();
+    // 前提钉子：这份才是「没 hydrate 过的存储形态」，时段数组必须真的是空的
+    expect(n!.greatFortunes, '存储里大运没被瘦身分 ⇒ 这条判据是空转').toHaveLength(0);
+    expect(n!.annualFortunes, '存储里流年没被瘦身分 ⇒ 这条判据是空转').toHaveLength(0);
+    return n;
+  };
+
+  it('瘦身记录上点「生成本地批断」：全盘总结仍列出具体年份节点与大运段', async () => {
+    await seed(mk({ nonAiResult: await storedChart() }));
+    unlockLocalSystem(KEY);
+    render(<PersonDetail personId="p1" onBack={vi.fn()} />);
+    const button = await screen.findByRole('button', { name: '生成本地批断' }, { timeout: 4000 });
+    fireEvent.click(button);
+    await waitFor(() => expect(screen.queryByText('未来十年 · 全盘总结')).toBeTruthy(), { timeout: 4000 });
+    const text = baseText();
+    // 判据取正向：只有真的算出大运段/年份节点才算通过（负向断言读不出「到底有没有」）。
+    expect(text, '大运段没算出来 ⇒ 引擎拿到的是瘦身数据').toContain('未来十年先走');
+    expect(text, '一个四位年份节点都没有 ⇒ 就是用户说的「没有时间节点」').toMatch(/20\d{2}年（/);
+    expect(text.match(/20\d{2}年（/g)!.length, '关键节点不该只有一个').toBeGreaterThan(1);
+  });
+
+  it('补算标记落本机后不再重复重算；换一条盘仍会补算（标记不跨记录）', async () => {
+    const { localChartNeedsHydrate, markLocalChartHydrated } = await import('../data/localSystem');
+    await seed(mk({ nonAiResult: await storedChart() }));
+    unlockLocalSystem(KEY);
+    render(<PersonDetail personId="p1" onBack={vi.fn()} />);
+    const button = await screen.findByRole('button', { name: '生成本地批断' }, { timeout: 4000 });
+    fireEvent.click(button);
+    await waitFor(() => expect(screen.queryByText('未来十年 · 全盘总结')).toBeTruthy(), { timeout: 4000 });
+    expect(localChartNeedsHydrate('p1'), '跑过一次就该记下：这盘的时段数据已备齐').toBe(false);
+    expect(baseText()).toMatch(/20\d{2}年（/);    // 反向钉子：同一条判据对没跑过的 p2 必须仍是 true，否则上面那句 false 可能只是恒假
+    markLocalChartHydrated('other-id');
+    expect(localChartNeedsHydrate('p2'), '标记串到别的盘上了').toBe(true);
   });
 });
 

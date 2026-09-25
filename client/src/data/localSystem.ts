@@ -123,8 +123,75 @@ export function setLocalSystemEnabled(on: boolean): boolean {
 
 /** 「本地系统」相关的本机键（解锁标记，以及底层 mingli.offline）一起清掉，供测试与撤销使用。 */
 export function resetLocalSystemForTests(): void {
-  try { localStorage.removeItem(UNLOCKED_KEY); localStorage.removeItem(ON_KEY); } catch { /* 忽略 */ }
+  try { localStorage.removeItem(UNLOCKED_KEY); localStorage.removeItem(ON_KEY); localStorage.removeItem(CHARTS_KEY); } catch { /* 忽略 */ }
 }
+
+/* ── 「这一盘的时段数据补算过了没有」的本机台账 ───────────────────────────────
+   背景：存储里的记录是瘦身过的 —— greatFortunes / annualFortunes / monthlyFortunes 三个数组
+   落库时清空，读取时才由 hydrate 现算补回（见 clientRepository 的 pruneRecord / hydrateRecords）。
+   规则引擎只认传进来的 record.nonAiResult：谁把**未补算**的那份直接交给它，大运流年就是空的，
+   于是「全盘总结」里一个年份节点都出不来（用户 2026-09-25 实测报的「没有时间节点」）。
+   所以走第四路之前先按这份台账判断要不要补算一次。刻意不往 record.nonAiResult 上加布尔位：
+   那个对象会随记录上行服务器、下发别的设备，为本该隐形的功能在同步数据里留痕不值当。
+   ⚠ 台账只是**观测点**，不是开关：`ensureLocalChartComplete` 每次都会补算（幂等、确定性），
+   用例靠这个数判「真的跑过一次」，别把它读成「没记上就不算」。
+   ⚠ 这条路径只在本机已开通时才写；未开通的人这里永远是空的 ⇒ 界面上依旧零痕迹。 */
+const CHARTS_KEY = 'mingli.local.charts';
+const MAX_HYDRATED_CHARTS = 200;
+
+function readHydratedCharts(): string[] {
+  try {
+    const raw = localStorage.getItem(CHARTS_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string' && id.length > 0) : [];
+  } catch { return []; }
+}
+
+/** 记下「这条记录的时段数据已经在这台设备上备齐过」。空 id 直接忽略：没有主键就写出一条谁也匹配不上的脏项。 */
+export function markLocalChartHydrated(id: string | undefined): void {
+  if (!id) return;
+  const ids = readHydratedCharts();
+  if (ids.includes(id)) return;
+  ids.push(id);
+  // 有界：换机/长期使用时不至于无限撑大，超出后丢最早的（丢了最多多算一次，无害）。
+  const kept = ids.slice(-MAX_HYDRATED_CHARTS);
+  try { localStorage.setItem(CHARTS_KEY, JSON.stringify(kept)); } catch { /* 存不下就下次多补算一次 */ }
+}
+
+/** 这台设备是否还需要为这条记录现算一次大运/流年。
+ *  **未开通的人恒为 false** —— 不为一个在他界面上根本不存在的功能付任何计算代价。 */
+export function localChartNeedsHydrate(id: string | undefined): boolean {
+  if (!isLocalSystemUnlocked() || !id) return false;
+  return !readHydratedCharts().includes(id);
+}
+
+/** 走第四路前把这份记录补成时段事实齐全的盘（大运/流年/流月）。存储里那份是瘦身的，直接喂给
+ *  规则引擎会一个年份节点都出不来 —— 就是用户报的「没有时间节点」。
+ *  · **未开通的人原样返回**：不为一个在他界面上根本不存在的功能多算一个字。
+ *  · 每次现算，不查台账、也不看数组是否已非空：时段窗口按**当前时刻**排（见 hydrateRecords 同款
+ *    口径），今天已经补算过的盘到了下个月仍该重算；而台账只是观测点，不是开关。
+ *  · 补算失败就原样返回 —— 引擎会按「缺该时段数据」如实报，绝不拿空数组硬凑批断。
+ *  ⚠ 这里用**动态 import** 取历法引擎：nonAiCalculator 静态依赖 baziOrchestrator，而编排器又要
+ *  调本函数；静态引会在打包期形成循环（实测让 `REQUIRED_SECTIONS` 在初始化时为 undefined，
+ *  一整批用例连带崩掉）。异步边界能把这个环解开。 */
+export async function ensureLocalChartComplete<T extends { id?: string; nonAiResult?: unknown }>(record: T): Promise<T> {
+  if (!isLocalSystemUnlocked()) return record;      // 没开通的人：一个字都不多算
+  markLocalChartHydrated(record.id);                 // 幂等；没有 id/存不下时只是少记一笔，不影响这次补算
+  let calculateNonAi: typeof import('../features/chart/nonAiCalculator').calculateNonAi;
+  try {
+    ({ calculateNonAi } = await import('../features/chart/nonAiCalculator'));
+    const r = record as unknown as { birthYear?: number | string; birthMonth?: number | string; nonAiResult?: { birthDay?: number }; yearPillar?: string; monthPillar?: string; dayPillar?: string; hourPillar?: string; gender?: string; createdAt?: string };
+    const nonAiResult = calculateNonAi({
+      birthYear: Number(r.birthYear), birthMonth: Number(r.birthMonth), birthDay: r.nonAiResult?.birthDay,
+      yearPillar: r.yearPillar ?? '', monthPillar: r.monthPillar ?? '', dayPillar: r.dayPillar ?? '', hourPillar: r.hourPillar ?? '',
+    }, r.gender === 'female' ? 'female' : 'male', new Date().toISOString());
+    markLocalChartHydrated(record.id);
+    return { ...record, nonAiResult } as T;
+  } catch {
+    return record;
+  }
+}
+
 
 /** 界面上唯一的展开方式：地址栏里的 `?local=<解锁码>`。
  *  它**不是**页面上的一个控件 —— 别人盯着设置页看也看不出这里能输什么，所以符合
