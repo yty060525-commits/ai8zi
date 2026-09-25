@@ -1,8 +1,8 @@
 /* PWA 缓存：页面(导航)网络优先=每次打开自动取最新版；资源文件缓存优先以支持离线。
-   CACHE 里的 1790324892573 由 vite.config.ts 在构建时替换成当次构建的时间戳 ——
+   CACHE 里的 1790326973411 由 vite.config.ts 在构建时替换成当次构建的时间戳 ——
    必须有这一层：CACHE 若是写死的常量，旧缓存在任何一次发版后都不会被清掉，
    装了 PWA 的手机就永远停在旧版本(资源是缓存优先，命中就直接用、根本不联网)。 */
-const CACHE = 'mingli-1790324892573';
+const CACHE = 'mingli-1790326973411';
 
 self.addEventListener('install', (e) => { self.skipWaiting(); });
 
