@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { deleteBaziRecord, getBaziRecord, refreshRecord, saveBaziRecord } from '../../data/clientRepository';
 import { ABORTED_MESSAGE, analysisHorizon, buildBaziTasks, expectedTaskIds, isRetryableFailure, orchestrateBaziAnalysis, DEFAULT_TONE } from '../../data/baziOrchestrator';
 import { beginAiSession, cancelAiSession } from '../../data/deepseekAdapter';
@@ -6,7 +6,7 @@ import { clearChartCache } from '../../data/storageInfo';
 import { sanitizeAnalysisText } from '../chart/elements';
 import { isServerMode } from '../../data/serverClient';
 import { canBuildLocalAnalysis, buildLocalAnalysis, buildLocalTaskAnalysis } from '../../data/localAnalysis';
-import { isLocalSystemEnabled } from '../../data/localSystem';
+import { isLocalSystemEnabled, subscribeLocalSystem } from '../../data/localSystem';
 import type { BaziRecord, BaziTaskResult, NonAiChart } from '../../types/domain';
 import { interpersonalZodiac, zodiacOfBranch } from '../../utils/interpersonal';
 
@@ -337,10 +337,30 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
 
   const aiResults = Object.values(record.aiTasks ?? {});
   // 本机当前是否真的让「本地系统」（原本地离线·第四路）接管生成方式：既要已用解锁码开通、
-  // 又要勾选了「使用本地系统」。进详情页时现算一次，不进 record（它是本机的事，不该同步）。
-  const localSystemOn = isLocalSystemEnabled();
-  // 这套已生成结果里是否混有本地批断：用于顶部一句轻量说明，提示绿点含义与「可用云端重算覆盖」。
-  const hasLocalResults = aiResults.some((item) => item.source === 'local');
+  // 又要勾选了「使用本地系统」。不进 record（它是本机的事，不该同步）。
+  /* 一次读取 + 一份快照，两个理由各对应一种曾经过的状态：
+     · **一轮分析进行中**不许改读数 —— 长跑期间用户去设置页改了勾选，横幅与本轮余下的任务都必须
+       仍按开跑时的引擎走完（否则同一轮会被劈成半本机半云端，绿点/来源标注自相矛盾）。冻结闸门就是
+       下面那句 `!busyRef.current`：requestAnalysis 在第一个 await **之前**就 markBusy(true)，
+       而它取的正是这份 ref 读数 ⇒ busy 为真期间快照不再跟随 live。
+     · 但「一直冻着」也不能过头：以前只在挂载时读一次，于是留下一条真路径 —— 详情页 → 设置页
+       取消勾选 → 返回（App 不换组件、record 也没变，压根不重渲染），横幅仍写着「当前为本地系统」，
+       而点「AI 分析」已经悄悄走回云端。所以订阅本机标记：标记一变就重算快照，只要本轮还没开跑
+       就跟界面同步；两种坏状态都不留。
+     不变量：**横幅那句话与本轮发射点的 options.local 必须是同一个值**（同生同灭）。只动其中一侧
+     的写法都有对应变异体盯着：H 删闸门 / I 让横幅脱离快照 / F1 退化成挂载快照 / G 去掉订阅。 */
+  const readLocalSystem = useCallback(() => isLocalSystemEnabled(), []);
+  const localSystemLive = useSyncExternalStore(subscribeLocalSystem, readLocalSystem, readLocalSystem);
+  const localSystemRef = useRef<{ id: string; on: boolean }>({ id: '', on: false });
+  const snapshot = localSystemRef.current;
+  // 「换一条盘」必须重取读数（同组件复用实例）；同一条盘则只在**本轮没在跑**时跟随界面。
+  if (snapshot.id !== record.id || (snapshot.on !== localSystemLive && !busyRef.current)) {
+    localSystemRef.current = { id: record.id, on: localSystemLive };
+  }
+  /* 横幅用的就是这个快照：**跑着的时候**勾掉了也继续写「当前为本地系统」，因为引擎确实还在按本机
+     规则批断（正文也是这么产出的）；这一轮收尾后快照才跟随新读数，那句话随之消失。
+     反过来（一掉勾就改口）才是 bug —— 用户会以为已经停了，而任务还在按旧引擎写进同一条命盘。 */
+  const localSystemOn = localSystemRef.current.on;
   // 列表里有一条「未配置」，整条记录却常是 completed(其余任务成功)：此时上面的 not_configured
   // 引导不出现，用户只看到一句「状态：已完成」加一堆「未配置」的条目，不知道该去哪儿补。
   const hasUnconfiguredTask = aiResults.some((item) => item.status === 'not_configured');
@@ -448,8 +468,10 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
     let enteredBusy = false;
     try {
       const currentTone = toneRef.current;
-      // 本机是否让「本地系统」接管生成方式（= 已解锁且已勾选；见 localSystem.ts）。
-      const offline = isLocalSystemEnabled();
+      /* 整轮分析用**同一个**生成方式读数：中途用户在设置页改了勾选，也不该让这一轮一半走本机、
+         一半走云端。所以这里读 `localSystemLive`（当前值），紧接着 markBusy(true) 把闸门落下 ——
+         上面那份快照在 busy 为真期间不再跟随界面，横幅与发射点用的都是这一个值。 */
+      const offline = localSystemLive;
       // 本地系统要有完整排盘数据才能产出各篇正文：没有数据时如实挡下，绝不拿空盘硬凑批断。
       if (offline && !canBuildLocalAnalysis(base)) {
         setHint('本地系统需要先有排盘数据：请点上方「重新计算非 AI」，再点 AI 分析。');

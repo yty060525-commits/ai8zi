@@ -14,7 +14,7 @@
    刻意不进 AiProvider/ServiceId 枚举、也不上行服务器或桌面端：它是**本机每台设备
    各管各的**的生成方式，不该同步，更不该让三条云端通道与服务器去重·前缀 parity 认识
    一个永不出网的 provider。浏览器与桌面 WebView 都有 localStorage，够它持久化。 */
-import { isOfflineMode, setOfflineMode } from './aiSettings';
+import { isOfflineMode, OFFLINE_STORAGE_KEY, setOfflineMode } from './aiSettings';
 
 /** 解锁码的混淆表（十六进制，两位一字符），不是明文。
  *  改锁＝换这一行：明文每个字符 c → (c ^ 0x5d) 的十六进制。
@@ -57,6 +57,7 @@ export function isLocalSystemUnlocked(): boolean {
 export function unlockLocalSystem(key: string): boolean {
   if (!verifyLocalKey(key)) return false;
   try { localStorage.setItem(UNLOCKED_KEY, '1'); } catch { /* 隐私模式忽略：本会话内仍可用 */ }
+  notifyLocalChange();
   return true;
 }
 
@@ -64,6 +65,7 @@ export function unlockLocalSystem(key: string): boolean {
 export function lockLocalSystem(): void {
   try { localStorage.removeItem(UNLOCKED_KEY); } catch { /* 忽略 */ }
   setLocalSystemEnabled(false);
+  notifyLocalChange();
 }
 
 /** 本地系统当前是否真的在接管「AI 分析」：**既要已开通、又要勾选了**。
@@ -72,11 +74,35 @@ export function isLocalSystemEnabled(): boolean {
   return isLocalSystemUnlocked() && isOfflineMode();
 }
 
+/* 上面这个读数是 localStorage 直读的，React 并不知道它什么时候变。详情页要用它当**一轮分析的
+   快照**（见 PersonDetail 的 AIAnalysis）：只在挂载时读一次会留下一个跨页缺口 ——
+   用户去设置页取消勾选再返回，那边横幅仍写着「当前为本地系统」、这边却已经切回云端。
+   所以这里补一个最小订阅：写路径都经过本文件，写入后逐个通知即可；同时兜住别的标签页。 */
+type LocalListener = () => void;
+const localListeners = new Set<LocalListener>();
+function notifyLocalChange() {
+  for (const listener of [...localListeners]) listener();
+}
+try {
+  window.addEventListener('storage', (event) => {
+    // 连 HIDDEN_KEY 一起听：撤销开通时那块整块消失，详情页的读数也得跟着重算。
+    if (event.key === null || event.key === UNLOCKED_KEY || event.key === ON_KEY || event.key === OFFLINE_STORAGE_KEY || event.key === HIDDEN_KEY) notifyLocalChange();
+  });
+} catch { /* 非浏览器环境（构建期/Node）没有 window：单进程内不需要跨标签通知 */ }
+
+/** 订阅「本地系统」本机标记的变化，返回退订函数。配合 React 的 useSyncExternalStore 用。 */
+export function subscribeLocalSystem(listener: LocalListener): () => void {
+  localListeners.add(listener);
+  return () => { localListeners.delete(listener); };
+}
+
 /** 勾选/取消「使用本地系统」。未开通时一律不生效，防止绕过解锁直接把引擎打开。 */
 export function setLocalSystemEnabled(on: boolean): boolean {
   if (on && !isLocalSystemUnlocked()) return false;
   try { if (on) localStorage.setItem(ON_KEY, '1'); else localStorage.removeItem(ON_KEY); } catch { /* 忽略 */ }
-  return setOfflineMode(on);
+  const applied = setOfflineMode(on);
+  notifyLocalChange();
+  return applied;
 }
 
 /** 「本地系统」相关的本机键（解锁标记，以及底层 mingli.offline）一起清掉，供测试与撤销使用。 */

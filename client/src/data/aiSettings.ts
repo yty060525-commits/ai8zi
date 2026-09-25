@@ -74,7 +74,10 @@ export const PROVIDER_LABEL: Record<AiProvider, string> = { deepseek: 'DeepSeek'
    它是否允许被打开由上层 `localSystem.ts` 的密钥解锁把关：**别在这里加"恒 false"之类的
    暗门** —— 上一版就是这么干的（功能下架时把读写都改成空操作），后果是"入口藏起来了、
    开关却还开着"且界面上再也关不掉。闸门只应有一处，且必须有个看得见的开关与之配对。 */
-const OFFLINE_KEY = 'mingli.offline';
+/** 这个键的**字面量**：给需要监听 localStorage 事件的订阅方用（跨模块只能传字符串，
+ *  别处不许再抄一份 'mingli.offline'，改键名时只动这一行）。 */
+export const OFFLINE_STORAGE_KEY = 'mingli.offline';
+const OFFLINE_KEY = OFFLINE_STORAGE_KEY;
 export function isOfflineMode(): boolean {
   try { return localStorage.getItem(OFFLINE_KEY) === '1'; } catch { return false; }
 }
