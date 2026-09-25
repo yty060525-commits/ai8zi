@@ -179,9 +179,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .channel-notice { font-size: 12px; padding: 2px 8px; background: #eef4ff; border: 1px solid #9bb6e8; color: #1b3f8b; }
 
 /* 本地系统（本机规则引擎）的密钥解锁块：挂在 Qwen 那一格里，靠一条细上边线与云端凭据区分开。 */
-.local-unlock { margin-top: 10px; padding-top: 10px; border-top: 1px dashed #ddd; }
-.local-unlock-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
-.local-unlock-head strong { font-size: 14px; }
+.local-system h2 { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .local-unlock-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .local-unlock-row .checkbox-inline { border-color: #1f7a3d; }
 

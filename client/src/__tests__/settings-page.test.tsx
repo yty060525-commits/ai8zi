@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SettingsPage } from '../features/settings/SettingsPage';
 import { isOfflineMode, resetAiSettingsForTests } from '../data/aiSettings';
-import { isLocalSystemEnabled, isLocalSystemUnlocked, resetLocalSystemForTests, setLocalSystemHidden, unlockLocalSystem } from '../data/localSystem';
+import { isLocalSystemEnabled, isLocalSystemUnlocked, resetLocalSystemForTests, unlockLocalSystem } from '../data/localSystem';
 import { invoke } from '@tauri-apps/api/core';
 import { vi } from 'vitest';
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
@@ -30,12 +30,6 @@ const localKeyInput = () => screen.getByLabelText('本地系统密钥') as HTMLI
 const qwenSave = () => screen.getAllByRole('button', { name: '保存' })[2];
 
 describe('SettingsPage', () => {
-  /** 走一遍暗门：在标题上连点 5 下，让本地系统那块现身。 */
-  const openSecret = () => {
-    const heading = screen.getByRole('heading', { name: '设置' });
-    for (let i = 0; i < 5; i += 1) fireEvent.click(heading);
-  };
-
   it('lists all three model channels at once and never shows secret/limit wording', async () => {
     render(<SettingsPage />);
     expect(screen.getByRole('heading', { name: '设置' })).toBeTruthy();
@@ -43,11 +37,9 @@ describe('SettingsPage', () => {
     expect(screen.getByLabelText('DeepSeek 访问凭据')).toBeTruthy();
     expect(screen.getByLabelText('Kimi 访问凭据')).toBeTruthy();
     expect(screen.getByLabelText('Qwen3.8-Flash 访问凭据')).toBeTruthy();
-    // 「密钥」二字是本地系统解锁块的必然用词（用户 2026-09-25 指定「输入密钥开通」），
-    // 故只放行这一处；其余措辞仍禁止出现在云端三条通道周围。
-    // 「密钥」是本地系统解锁块的用词，但那一块默认藏起来了（要走暗门），
-    // 所以刚进设置页时它一个字都不该出现；其余措辞也仍禁止出现在云端三条通道周围。
-    expect(screen.queryByText(/密钥/)).toBeNull();
+    // 「密钥」二字是本地系统那一格的必然用词（用户 2026-09-25 指定「输入密钥开通」），
+    // 而那一格现在**常驻**，所以只禁掉模型/额度那类措辞。
+    expect(document.body.textContent).not.toContain('API 密钥');
     expect(screen.queryByText(/模型|API|额度|费用/)).toBeNull();
   });
 
@@ -149,36 +141,30 @@ describe('SettingsPage', () => {
     expect(document.body.textContent).not.toContain('sk-second-key');
   });
 
-  it('本地系统的入口默认完全不可见：没走暗门前，页面上没有「本地系统」字样', () => {
+  /* 这一组盯的是用户 2026-09-25 的第二次改口：「不要这个连按五下，多 der 啊，密钥就行了」。
+     前一版把整块 UI 藏在一串连点手势后面，实测结果就是人在设置页里找不到输密钥的地方 ——
+     入口本身不见了，等于功能不存在。所以判据从「藏得干净」翻成「摆得出来」：
+     · 一进来就有自己的密钥框，不需要任何前置手势；
+     · 未开通时绝不给那个能接管「AI 分析」的勾选框；
+     · 撤销开通是唯一的收起手段，撤完整格回到未开通态。 */
+  it('本地系统的密钥框常驻：一进设置页就能看见、能输，不必先敲暗门', () => {
     render(<SettingsPage />);
-    // 这是「藏入口」的核心断言：密钥框、勾选框、整块说明都不该存在
-    expect(screen.queryByLabelText('本地系统密钥')).toBeNull();
-    expect(screen.queryByRole('checkbox', { name: /使用本地系统/ })).toBeNull();
-    expect(document.body.textContent).not.toContain('本地系统');
-  });
-
-  it('暗门：在标题上连点 5 下才放出解锁块，只点 4 下不放出', () => {
-    render(<SettingsPage />);
-    const heading = screen.getByRole('heading', { name: '设置' });
-    for (let i = 0; i < 4; i += 1) fireEvent.click(heading);
-    expect(screen.queryByText('未开通'), '才点 4 下不该现身').toBeNull();
-    fireEvent.click(heading);
+    expect(screen.getByLabelText('本地系统密钥')).toBeTruthy();
     expect(screen.getByText('未开通')).toBeTruthy();
-    // 走完暗门也仍然锁着：没输密钥，就不该出现能直接接管 AI 分析的勾选框
+    // 摆出入口 ≠ 打开功能：没输对密钥之前，那个会接管 AI 分析的勾选框不许出现
     expect(screen.queryByRole('checkbox', { name: /使用本地系统/ })).toBeNull();
   });
 
-  it('暗门不记忆：重新进设置页又藏回去（除非本机已开通）', () => {
-    const first = render(<SettingsPage />);
+  it('点标题不再有任何手势效果：连点 5 下既不开通、也不改变可见性', () => {
+    render(<SettingsPage />);
     const heading = screen.getByRole('heading', { name: '设置' });
     for (let i = 0; i < 5; i += 1) fireEvent.click(heading);
-    expect(screen.getByText('未开通')).toBeTruthy();
-    first.unmount();
-    render(<SettingsPage />);
-    expect(screen.queryByText('未开通')).toBeNull();
+    expect(isLocalSystemUnlocked(), '连点不该顺手开通任何东西').toBe(false);
+    expect(screen.getByLabelText('本地系统密钥'), '常驻的意思是不受手势影响').toBeTruthy();
+    expect(localStorage.getItem('mingli.local.hidden'), '那个持久化的收起标记已经废掉了').toBe(null);
   });
 
-  it('已开通的设备直接显示解锁块：否则开着本地引擎的人既看不到状态也关不掉', async () => {
+  it('已开通的设备直接显示勾选框与撤销：开着本地引擎的人看得见状态、也关得掉', async () => {
     unlockLocalSystem(LOCAL_SYSTEM_KEY);
     render(<SettingsPage />);
     expect(screen.getByText('已开通')).toBeTruthy();
@@ -187,7 +173,6 @@ describe('SettingsPage', () => {
 
   it('填 sk- 开头：按云端凭据保存，绝不当解锁码用', async () => {
     render(<SettingsPage />);
-    openSecret();
     fireEvent.change(qwenInput(), { target: { value: 'sk-qwen-secret' } });
     fireEvent.click(qwenSave());
     await waitFor(() => expect(screen.getByText('已保存')).toBeTruthy(), { timeout: 3000 });
@@ -199,7 +184,6 @@ describe('SettingsPage', () => {
 
   it('解锁码只进自己的框：开通本地系统，且不写云端凭据', async () => {
     render(<SettingsPage />);
-    openSecret();
     fireEvent.change(localKeyInput(), { target: { value: LOCAL_SYSTEM_KEY } });
     fireEvent.click(screen.getByRole('button', { name: '开通' }));
     await waitFor(() => expect(screen.getByText('已开通')).toBeTruthy());
@@ -216,7 +200,6 @@ describe('SettingsPage', () => {
 
   it('密钥输错：如实报错、不开通、也不出现勾选框', async () => {
     render(<SettingsPage />);
-    openSecret();
     fireEvent.change(localKeyInput(), { target: { value: 'not-the-key' } });
     fireEvent.click(screen.getByRole('button', { name: '开通' }));
     await waitFor(() => expect(screen.getByText(/密钥不正确/)).toBeTruthy());
@@ -229,7 +212,6 @@ describe('SettingsPage', () => {
 
   it('撤销开通会连带把本地系统关掉，回去只剩未开通状态', async () => {
     render(<SettingsPage />);
-    openSecret();
     fireEvent.change(localKeyInput(), { target: { value: LOCAL_SYSTEM_KEY } });
     fireEvent.click(screen.getByRole('button', { name: '开通' }));
     await waitFor(() => expect(screen.getByText('已开通')).toBeTruthy());
@@ -246,75 +228,58 @@ describe('SettingsPage', () => {
 
   it('渲染时不泄漏密钥明文', async () => {
     render(<SettingsPage />);
-    openSecret();
     fireEvent.change(localKeyInput(), { target: { value: LOCAL_SYSTEM_KEY } });
     fireEvent.click(screen.getByRole('button', { name: '开通' }));
     await waitFor(() => expect(screen.getByText('已开通')).toBeTruthy());
     expect(document.body.textContent).not.toContain(LOCAL_SYSTEM_KEY);
   });
 
-  it('隐藏按钮：放出来之后再连点 5 下，整块收回、恢复原貌', () => {
+  it('撤销开通就是收起的手段：撤完整格回到未开通，重进也不残留勾选态', async () => {
     render(<SettingsPage />);
-    const heading = screen.getByRole('heading', { name: '设置' });
-    for (let i = 0; i < 5; i += 1) fireEvent.click(heading);
-    expect(screen.getByLabelText('本地系统密钥')).toBeTruthy();
-    for (let i = 0; i < 5; i += 1) fireEvent.click(heading);
-    expect(screen.queryByLabelText('本地系统密钥'), '第二次连点该把整块收回去').toBeNull();
-    expect(document.body.textContent).not.toContain('本地系统');
+    fireEvent.change(localKeyInput(), { target: { value: LOCAL_SYSTEM_KEY } });
+    fireEvent.click(screen.getByRole('button', { name: '开通' }));
+    await waitFor(() => expect(screen.getByText('已开通')).toBeTruthy());
+    fireEvent.click(screen.getByRole('checkbox', { name: /使用本地系统/ }));
+    await waitFor(() => expect(isLocalSystemEnabled()).toBe(true));
+    fireEvent.click(screen.getByRole('button', { name: /撤销开通/ }));
+    await waitFor(() => expect(screen.getByText('未开通')).toBeTruthy());
+    // 收起之后只剩密钥框：勾选框和撤销按钮都不在，也没有「还在跑却没地方关」的底层开关
+    expect(screen.queryByRole('checkbox', { name: /使用本地系统/ })).toBeNull();
+    expect(isOfflineMode(), '撤销必须把底层开关一起关掉').toBe(false);
+    cleanup();
+    render(<SettingsPage />);
+    expect(screen.getByLabelText('本地系统密钥'), '重进设置页仍是常驻的未开通态').toBeTruthy();
+    expect(screen.queryByRole('checkbox', { name: /使用本地系统/ })).toBeNull();
   });
 
-  it('隐藏是持久的：重进设置页仍藏着，而且再连点 5 下能点回来', () => {
-    const first = render(<SettingsPage />);
-    const heading = screen.getByRole('heading', { name: '设置' });
-    for (let i = 0; i < 10; i += 1) fireEvent.click(heading);
-    first.unmount();
+  /* 正例钉子（防止上一条变成恒假）：撤销只清本机标记，同一个码再输一次就该回来。
+     没有这条，"撤销后什么都不显示" 的实现也能骗过上面那组判据 —— 因为它连带会把
+     「输入即永久失效」这类缺陷一起藏掉。 */
+  it('撤销后重新输入密钥还能开通：收起不是把这条路走死', async () => {
     render(<SettingsPage />);
-    expect(screen.queryByText('未开通'), '藏起来后重进不该自己冒出来').toBeNull();
-    const again = screen.getByRole('heading', { name: '设置' });
-    for (let i = 0; i < 5; i += 1) fireEvent.click(again);
-    expect(screen.getByText('未开通'), '再点一次要能恢复可见').toBeTruthy();
-    expect(localStorage.getItem('mingli.local.hidden'), '恢复可见后隐藏标记该清掉').toBe(null);
-  });
-
-  it('已开通的设备若被藏起来也不显示解锁块：否则「恢复原貌」形同虚设', () => {
-    unlockLocalSystem(LOCAL_SYSTEM_KEY);
-    const first = render(<SettingsPage />);
-    // 默认例外规则：已开通就直接显示（让人看得见状态、关得掉）
-    expect(screen.getByLabelText('本地系统')).toBeTruthy();
-    const heading = screen.getByRole('heading', { name: '设置' });
-    for (let i = 0; i < 5; i += 1) fireEvent.click(heading);
-    first.unmount();
-    // unmount 之后必须**重新挂载**再读：testing-library 的 cleanup 只在 afterEach 跑，
-    // 少了这一行就是在断言那棵已经拆掉的旧树——它对任何实现都恒真，是个空断言。
-    render(<SettingsPage />);
-    // 判据要钉在**整块不存在**上。这里曾误用 queryByText('已开通')，结果是个假失败：
-    // Qwen 凭据保存成功后的提示里也含「已开通」三个字，跟这块 UI 毫无关系。
-    expect(screen.queryByLabelText('本地系统'), '显式藏起来之后，已开通也不该顶开这层').toBeNull();
-    expect(document.body.textContent).not.toContain('本地系统');
-  });
-
-  it('已开通又被藏起来的设备：重进后连点 5 下要出得来（曾经是一条死路）', () => {
-    // 浏览器实测撞到的：本机已开通 → 收起(hidden=1) → 刷新 → 再连点 5 下，块永远出不来。
-    // 因为「看得见」的判据只看 revealed，而这块在已开通设备上从来不是靠 revealed 显示的。
-    unlockLocalSystem(LOCAL_SYSTEM_KEY);
-    setLocalSystemHidden(true);
-    render(<SettingsPage />);
-    expect(screen.queryByLabelText('本地系统'), '开局仍该是藏着的').toBeNull();
-    const heading = screen.getByRole('heading', { name: '设置' });
-    for (let i = 0; i < 5; i += 1) fireEvent.click(heading);
-    expect(screen.getByLabelText('本地系统'), '藏着时连点 5 下该把它放回来').toBeTruthy();
-    expect(localStorage.getItem('mingli.local.hidden'), '放回来就该清掉隐藏标记').toBe(null);
-    // 放回来的意义在于关得掉：勾选框要在，本地引擎不至于还在跑却没控件。
+    fireEvent.change(localKeyInput(), { target: { value: LOCAL_SYSTEM_KEY } });
+    fireEvent.click(screen.getByRole('button', { name: '开通' }));
+    await waitFor(() => expect(screen.getByText('已开通')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /撤销开通/ }));
+    await waitFor(() => expect(screen.getByText('未开通')).toBeTruthy());
+    fireEvent.change(localKeyInput(), { target: { value: LOCAL_SYSTEM_KEY } });
+    fireEvent.click(screen.getByRole('button', { name: '开通' }));
+    await waitFor(() => expect(screen.getByText('已开通')).toBeTruthy());
     expect(screen.getByRole('checkbox', { name: /使用本地系统/ })).toBeTruthy();
   });
 
-  it('收回已开通设备的解锁块：第一下连点就该置 hidden（不能靠第二下补救）', () => {
-    unlockLocalSystem(LOCAL_SYSTEM_KEY);
+  /* 入口与功能**分家**后的新代价，钉在这里别被哪天当成 bug 改掉：
+     这一格常驻 = 任何人都看得见它；但看得见不等于用得上，没输对密钥就没有勾选框、
+     `isLocalSystemEnabled()` 也永远为 false。反过来，只要本机存过开通标记（且设备没被
+     重置），这块就会一直摆着 —— 这是"常驻"换来的必然结果，不再另设隐藏开关。 */
+  it('看得见 ≠ 用得上：常驻入口不给未开通的人任何接管 AI 分析的机会', () => {
     render(<SettingsPage />);
-    expect(screen.getByLabelText('本地系统')).toBeTruthy();
-    const heading = screen.getByRole('heading', { name: '设置' });
-    for (let i = 0; i < 5; i += 1) fireEvent.click(heading);
-    expect(screen.queryByLabelText('本地系统')).toBeNull();
-    expect(localStorage.getItem('mingli.local.hidden')).toBe('1');
+    expect(screen.getByLabelText('本地系统密钥'), '入口是公开的').toBeTruthy();
+    expect(screen.queryByRole('checkbox', { name: /使用本地系统/ }), '但没有密钥就没有开关').toBeNull();
+    expect(isLocalSystemEnabled()).toBe(false);
+    // 手改本机标记也不能绕过：开通标记是唯一门槛，界面上的勾选框由它派生
+    localStorage.setItem('mingli.local.on', '1');
+    expect(isLocalSystemEnabled(), '只有 on 标记、没有开通标记时不该接管').toBe(false);
   });
+
 });

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { getServiceStatus, clearServiceCredential, saveServiceCredential, setSelectedService, serviceProvider, serviceOf, PROVIDER_LABEL, type ServiceId } from '../../data/aiSettings';
-import { isLocalSystemEnabled, isLocalSystemHidden, isLocalSystemUnlocked, lockLocalSystem, setLocalSystemEnabled, setLocalSystemHidden, unlockLocalSystem } from '../../data/localSystem';
-import { useSecretTitleTap } from './secretEntrance';
+import { isLocalSystemEnabled, isLocalSystemUnlocked, lockLocalSystem, setLocalSystemEnabled, unlockLocalSystem } from '../../data/localSystem';
 import { compactRecords, getStorageStats, runAiSelfTest, type AiSelfTest } from '../../data/storageInfo';
 import { reloadLocalForSession } from '../../data/clientRepository';
 import { importRecords, parseBackupFile, type ImportMode } from '../../data/sqlImport';
@@ -45,24 +44,11 @@ export function SettingsPage() {
   const [localUnlocked, setLocalUnlocked] = useState<boolean>(() => isLocalSystemUnlocked());
   const [localOn, setLocalOn] = useState<boolean>(() => isLocalSystemEnabled());
 
-  // 解锁块默认**不渲染**：设置页上看不到任何「本地系统」字样，只有走暗门才现身。
-  // 已在用的设备例外——否则开着本地引擎的人既看不到状态、也没法关掉它。
-  // hidden 是压过这条例外的显式标记（就是用户要的「隐藏按钮」，见下面的连点）。
-  const [hidden, setHidden] = useState<boolean>(() => isLocalSystemHidden());
-  const [revealed, setRevealed] = useState<boolean>(false);
-  // 「隐藏按钮」＝同一个连点手势的第二次触发：放出来之后再连点 5 下，整块收回、恢复原貌。
-  // 判据必须取自**渲染表达式同一套值**(showLocalBlock)，不能只读刚排队的 revealed state：
-  // 同步连点(fireEvent / 手速极快)期间 React 还没重渲染，闭包里的 `revealed` 会停在旧值。
-  // 三态各有一条出路，缺一条就是死路（曾在浏览器实测里撞上第三条）。
-  // showLocalBlock 在下方声明：函数体到点击时才执行，TDZ 只在「渲染期就调用」才会炸。
-  const { onClick: onHeadingTap } = useSecretTitleTap(() => {
-    if (showLocalBlock) { setRevealed(false); setHidden(setLocalSystemHidden(true)); return; }
-    if (hidden) setHidden(setLocalSystemHidden(false));
-    setRevealed(true);
-  }, true);
-  // 渲染用的最终可见性：显式藏起来时一律不显示（包括已开通的设备）。
-  // 它同时是上面那个点击处理的判据来源：**页面显示的与处理器认定的必须是同一个表达式**。
-  const showLocalBlock = !hidden && (revealed || localUnlocked);
+  // 「本地系统」那一格**常驻显示**（用户 2026-09-25：「不要这个连按五下，多 der 啊，密钥就行了」）：
+  // 未开通时它是自己的密钥框 + 「开通」按钮，开通后换成勾选框与撤销。
+  // 这里曾叠过一层「标题连点 5 下」的暗门加一个持久化的收起标记 —— 暗门把入口藏起来，
+  // 结果是人在设置页里根本找不到该输密钥的地方，整块 UI 形同没有。
+  // 未开通时那份密钥框由 JSX 现读 \`localUnlocked\`，所以这里不再另存一份可见性判据。
   const [localKey, setLocalKey] = useState('');
   const [localNote, setLocalNote] = useState<string>();
   const flashLocalNote = (text: string) => { setLocalNote(text); setTimeout(() => setLocalNote(undefined), 4000); };
@@ -238,7 +224,7 @@ export function SettingsPage() {
   }
 
   return <main className="settings-page">
-    <header className="page-heading"><p className="eyebrow">LOCAL SETTINGS</p><h1 onClick={onHeadingTap}>设置</h1><p className="page-description">管理内部服务的访问配置。</p></header>
+    <header className="page-heading"><p className="eyebrow">LOCAL SETTINGS</p><h1>设置</h1><p className="page-description">管理内部服务的访问配置。</p></header>
     <section aria-label="AI 通道" aria-labelledby="channels-title"><h2 id="channels-title">AI 通道（三条可同时配置）</h2>
       <p className="page-description">三条通道各自独立保存，互不影响。当前生效的那条会标注「使用中」并优先调用，失败时自动依次回退到已配置的其它通道。</p>
       {/* 「使用中」曾被理解成「这条已经配好了、正在跑」：一条凭据都没填时，页面同时摆出
@@ -248,10 +234,6 @@ export function SettingsPage() {
         const st = statuses[service.id];
         const busy = busyService === service.id;
         const isCurrent = serviceProvider(service.id) === currentProvider;
-        // 本地系统那块挂在 Qwen 一格的位置里（用户指定「跟 qwen 走一个系统」），但它有**自己的密钥框**，
-        // 与上面的云端凭据互不影响 —— 用户 2026-09-25 明确否掉了「一个框按内容分流」：那等于拿解锁码
-        // 去顶替原本存 Qwen 密钥的地方。
-        const isQwen = service.id === 'serviceThree';
         return <div className={isCurrent ? 'channel-block current' : 'channel-block'} key={service.id} aria-label={service.label + ' 通道'}>
           <div className="channel-head">
             <strong>{service.label}</strong>
@@ -267,23 +249,20 @@ export function SettingsPage() {
             <button className="primary-button" type="button" disabled={busy} onClick={() => void saveOne(service.id)}>{busy ? '处理中…' : '保存'}</button>
             <button className="text-button" type="button" disabled={busy} onClick={() => void clearOne(service.id)}>清除</button>
           </div>
-          {isQwen && showLocalBlock && <div className="local-unlock" aria-label="本地系统">
-            <div className="local-unlock-head">
-              <strong>本地系统（本机规则引擎）</strong>
-              <span className={localUnlocked ? 'channel-status ok' : 'channel-status'}>{localUnlocked ? '已开通' : '未开通'}</span>
-              {localNote && <span className="channel-notice" role="status">{localNote}</span>}
-            </div>
-            <p className="copy-help">不联网、不消耗用度：由本机规则引擎就排盘事实直接批断，结果同样写入命盘并随账号同步。需粘贴密钥开通（与上面的云端凭据是两个独立的框，互不影响），开通后再勾选才接管「AI 分析」；仅影响本机，随时可取消勾选切回云端。</p>
-            {!localUnlocked
-              ? <div className="channel-row"><input aria-label="本地系统密钥" type="password" autoComplete="off" placeholder="粘贴密钥以开通本地系统" value={localKey} onChange={(event) => setLocalKey(event.target.value)} />
-                <button className="primary-button" type="button" onClick={doUnlockLocal}>开通</button></div>
-              : <div className="local-unlock-row">
-                <label className="checkbox-inline"><input type="checkbox" checked={localOn} onChange={(event) => toggleLocal(event.target.checked)} />使用本地系统（不联网批断）</label>
-                <button className="text-button" type="button" onClick={doLockLocal}>撤销开通（清除密钥）</button>
-              </div>}
-          </div>}
         </div>;
       })}
+    </section>
+    {/* 「本地系统」是第四条生成方式：不走云端、不用凭据，所以单独一节摆在三条通道之后。
+        它**常驻显示**——这里曾因为整块要先走暗门才出现，用户在设置页里找不到输密钥的地方。
+        与上面 Qwen 那格的凭据框互不相干：用户 2026-09-25 否掉了「一个框按内容分流」。 */}
+    <section className="local-system" aria-label="本地系统"><h2>本地系统（本机规则引擎）<span className={localUnlocked ? 'channel-status ok' : 'channel-status'}>{localUnlocked ? '已开通' : '未开通'}</span>{localNote && <span className="channel-notice" role="status">{localNote}</span>}</h2>
+      <p className="page-description">不联网、不消耗用度：由本机规则引擎就排盘事实直接批断，含本命、未来十年与后天调整。粘贴密钥开通后，再勾选「使用本地系统」才接管「AI 分析」；只影响本机，随时可取消勾选切回云端。</p>      {!localUnlocked
+        ? <div className="channel-row"><input aria-label="本地系统密钥" type="password" autoComplete="off" placeholder="粘贴密钥以开通本地系统" value={localKey} onChange={(event) => setLocalKey(event.target.value)} />
+          <button className="primary-button" type="button" onClick={doUnlockLocal}>开通</button></div>
+        : <div className="local-unlock-row">
+          <label className="checkbox-inline"><input type="checkbox" checked={localOn} onChange={(event) => toggleLocal(event.target.checked)} />使用本地系统（不联网批断）</label>
+          <button className="text-button" type="button" onClick={doLockLocal}>撤销开通（清除密钥）</button>
+        </div>}
     </section>
     <p className="ai-status" role="status">数据库：{storage ? `${storage.records} 条记录 / 缓存 ${storage.cacheEntries === null ? '未知(网页版不统计服务器缓存)' : storage.cacheEntries + ' 条'}${storage.bytes ? ` / ${(storage.bytes / 1024).toFixed(0)} KB` : ''}` : '读取中…'}</p>
     <div className="button-group"><button className="text-button" type="button" disabled={compacting || storage === null || storage.cacheEntries === null} onClick={() => void compress()}>{compacting ? '压缩中…' : '压缩旧记录（缩小数据库）'}</button><button className="text-button" type="button" disabled={testing} onClick={() => void selfTest()}>{testing ? '自检中…' : 'AI 连通自检（微小消耗）'}</button></div>

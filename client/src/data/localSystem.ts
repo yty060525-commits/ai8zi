@@ -1,6 +1,6 @@
 /* ── 本地系统（原「本地离线·第四路」）的密钥解锁层 ─────────────────────────
-   本地规则引擎免密、不联网、不消耗额度，但**默认锁着**：要先在隐藏入口里粘贴解锁码，
-   填对了才出现「使用本地系统」的勾选框，再手动勾选才真的接管「AI 分析」。
+   本地规则引擎免密、不联网、不消耗额度，但**默认锁着**：要在设置页「本地系统」那一格里
+   粘贴解锁码，填对了才出现「使用本地系统」的勾选框，再手动勾选才真的接管「AI 分析」。
    这样它就从「默认生成方式」退回成一个需要授权才开的旁路生成方式。
 
    **源码里不出现解锁码明文。** 用户 2026-09-25 的要求：「不显示本地启动代码，隐藏起来」。
@@ -93,8 +93,8 @@ function notifyLocalChange() {
 }
 try {
   window.addEventListener('storage', (event) => {
-    // 连 HIDDEN_KEY 一起听：撤销开通时那块整块消失，详情页的读数也得跟着重算。
-    if (event.key === null || event.key === UNLOCKED_KEY || event.key === ON_KEY || event.key === OFFLINE_STORAGE_KEY || event.key === HIDDEN_KEY) notifyLocalChange();
+    // 撤销开通时设置页那块整块消失，详情页的读数也得跟着重算。
+    if (event.key === null || event.key === UNLOCKED_KEY || event.key === ON_KEY || event.key === OFFLINE_STORAGE_KEY) notifyLocalChange();
   });
 } catch { /* 非浏览器环境（构建期/Node）没有 window：单进程内不需要跨标签通知 */ }
 
@@ -118,24 +118,8 @@ export function resetLocalSystemForTests(): void {
   try { localStorage.removeItem(UNLOCKED_KEY); localStorage.removeItem(ON_KEY); } catch { /* 忽略 */ }
 }
 
-/* ── 暗门本身的开关 ────────────────────────────────────────────────────────
-   用户 2026-09-25：「要加一个隐藏按钮恢复成原貌」。做法是**再叠一层暗门**而不是摆一个
-   看得见的按钮：在标题上连点 5 下已经放出解锁块之后，**再连点 5 下**就把它整块收回、
-   页面回到从没被开过的样子。这样外人扫一眼设置页看不到任何「关掉隐藏」的线索，
-   而知道节奏的人两下就能收回去。
-
-   `mingli.local.hidden` 一旦置起来就压过一切，包括「已开通就直接显示」那条例外 ——
-   这正是它的用途：开着本地引擎的人也要能彻底藏干净。代价要说清楚：**这台设备界面上
-   就没有能关本地系统的控件了**，`isLocalSystemEnabled()` 仍会返回 true、批断仍走本机。
-   要恢复只需在同一处再连点 5 下（状态不持久化到别处，重进设置页也仍然认这个标记）。 */
-const HIDDEN_KEY = 'mingli.local.hidden';
-
-export function isLocalSystemHidden(): boolean {
-  try { return localStorage.getItem(HIDDEN_KEY) === '1'; } catch { return false; }
-}
-
-/** 切换隐藏态，返回切换后的结果。 */
-export function setLocalSystemHidden(hidden: boolean): boolean {
-  try { if (hidden) localStorage.setItem(HIDDEN_KEY, '1'); else localStorage.removeItem(HIDDEN_KEY); } catch { /* 隐私模式忽略：本会话内仍可切换 */ }
-  return hidden;
-}
+/* 「撤销开通」就是唯一的收起手段：设置页那块跟着 `isLocalSystemUnlocked()` 收放，
+   撤掉之后整块消失、详情页那块也一起没了，不需要额外的可见性标记。
+   （这里曾另有一层「连点标题 5 下」的暗门和一个 `mingli.local.hidden` 标记。
+   用户 2026-09-25 反馈「不要这个连按五下，多 der 啊，密钥就行了」——暗门把入口藏起来，
+   结果是人在设置页里根本找不到该输密钥的地方。旧设备上残留的那个键不再被读，无害。） */

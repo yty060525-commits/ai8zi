@@ -24,16 +24,12 @@ afterEach(() => { cleanup(); resetAiSettingsForTests(); resetLocalSystemForTests
 // 但下面这几条不许删 —— 谁再把解锁码塞回凭据框，这里就会红。
 const credInput = () => screen.getByLabelText('Qwen3.8-Flash 访问凭据') as HTMLInputElement;
 const localInput = () => screen.getByLabelText('本地系统密钥') as HTMLInputElement;
-/** 走一遍暗门：在标题上连点 5 下，让本地系统那块现身。 */
-const openSecret = () => {
-  const heading = screen.getByRole('heading', { name: '设置' });
-  for (let i = 0; i < 5; i += 1) fireEvent.click(heading);
-};
+/** 本地系统那一格现在**常驻**（用户 2026-09-25 否掉了「标题连点 5 下」的暗门），
+ *  所以这里不再需要任何前置手势 —— 直接读那格的密钥框即可。 */
 
 describe('本地系统入口：与 Qwen 凭据彻底分开', () => {
   it('解锁块自带独立密钥框，凭据框不再参与分流', () => {
     render(<SettingsPage />);
-    openSecret();
     expect(localInput()).toBeTruthy();
     // 凭据框的占位与另两格一致，不写「sk- 开头」之类的分流提示
     expect(credInput().placeholder).toBe('粘贴访问凭据');
@@ -54,8 +50,6 @@ describe('本地系统入口：与 Qwen 凭据彻底分开', () => {
 
   it('解锁码只进自己的框；开通后仍要手动勾选才接管', async () => {
     render(<SettingsPage />);
-    const heading = screen.getByRole('heading', { name: '设置' });
-    for (let i = 0; i < 5; i += 1) fireEvent.click(heading);
     fireEvent.change(localInput(), { target: { value: LOCAL_SYSTEM_KEY } });
     fireEvent.click(screen.getByRole('button', { name: '开通' }));
     await waitFor(() => expect(screen.getByText('已开通')).toBeTruthy());

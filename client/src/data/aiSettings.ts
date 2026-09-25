@@ -93,6 +93,7 @@ export function resetAiSettingsForTests(): void {
     localStorage.removeItem(OFFLINE_KEY);
     localStorage.removeItem('mingli.local.unlocked');
     localStorage.removeItem('mingli.local.on');
+    // 旧设备上残留的收起标记也一起清掉：代码已不再读它，但别让测试环境留着脏键。
     localStorage.removeItem('mingli.local.hidden');
     for (const p of ['deepseek', 'kimi', 'qwen'] as AiProvider[]) localStorage.removeItem('mingli.cred.' + p);
   } catch { /* 非浏览器环境忽略 */ }

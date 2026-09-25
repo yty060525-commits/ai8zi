@@ -5,7 +5,7 @@ import { beginAiSession, cancelAiSession } from '../../data/deepseekAdapter';
 import { clearChartCache } from '../../data/storageInfo';
 import { sanitizeAnalysisText } from '../chart/elements';
 import { isServerMode } from '../../data/serverClient';
-import { canBuildLocalAnalysis, isLocalSystemEnabled, isLocalSystemHidden, localSystemUnlocked, subscribeLocalSystem } from '../../data/localSystem';
+import { canBuildLocalAnalysis, isLocalSystemEnabled, localSystemUnlocked, subscribeLocalSystem } from '../../data/localSystem';
 import type { BaziRecord, BaziTaskResult, NonAiChart } from '../../types/domain';
 import { interpersonalZodiac, zodiacOfBranch } from '../../utils/interpersonal';
 
@@ -667,14 +667,14 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
     </div>}
   </section>;
 }
-/** 详情页是否摆出「本地系统」这块：已开通且没被暗门收起。与设置页的可见性判据同源，
-    避免两处各写一份条件而漂开。 */
-const readLocalVisible = () => localSystemUnlocked() && !isLocalSystemHidden();
+/** 详情页是否摆出「本地系统」这块：只看本机有没有开通。与设置页那块的可见性判据同源
+    （两边都是 `isLocalSystemUnlocked()`），避免两处各写一份条件而漂开。 */
+const readLocalVisible = () => localSystemUnlocked();
 /* 本地系统（原「本地离线·第四路」）：不联网、不调大模型、不耗额度，由 localAnalysis 规则引擎
    就上方排盘事实直接批断。结果只存组件 state、绝不写进 record —— record 会同步上行服务器、
    下发别的设备，把本地批断塞进去会污染云端 AI 结果与 aiStatus。每次点击现算，确定性可复现。
    这是**独立于生成方式开关**的预览入口：即使没勾「使用本地系统」也能在这里试跑看看。但整块只在
-   本机已开通第四路、且没被暗门收起时才出现（判据见上面的 readLocalVisible）。 */
+   本机已开通第四路时才出现（判据见上面的 readLocalVisible）。 */
 function LocalAnalysisSection({ record }: { record: BaziRecord }) {
   const [data, setData] = useState<{ lead: string; blocks: Array<{ title: string; text: string }> } | null>(null);
   const [note, setNote] = useState<string>();
@@ -728,10 +728,9 @@ export function PersonDetail({ personId, onBack, refreshKey = 0 }: PersonDetailP
     return () => { active = false; };
   }, [personId, refreshKey]);
 
-  /* 详情页这块「本地系统」跟着设置页那扇暗门一起收放：本机没开通、或已被连点藏起来时就不摆出来。
-     两头各漏一处的后果不一样 —— 从没开过第四路的设备会在命盘里看见一整块用不上的入口；而知道
-     暗门节奏的人把设置页藏干净后，详情页仍留着同一功能的标题和按钮，等于从另一头又把门露出来。
-     读数走同一个订阅源：在设置页里放出/收回暗门，不用重进详情页就该同步改可见性。 */
+  /* 详情页这块「本地系统」跟着设置页那块一起收放：本机没开通（或已撤销开通）时就不摆出来。
+     漏判的后果是从没开过第四路的设备会在命盘里看见一整块用不上的入口。
+     读数走同一个订阅源：在设置页里撤销开通，不用重进详情页这块就该同步消失。 */
   const showLocalSection = useSyncExternalStore(subscribeLocalSystem, readLocalVisible, readLocalVisible);
   // 排盘数据是读取时重算的(存储里已瘦身)，所以首帧先给加载态：直接拿旧数据显示会闪出
   // 「④ 未来大运」下早已走完的大运段，正是这次要修的那个假标题。

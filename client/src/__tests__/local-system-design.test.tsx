@@ -4,7 +4,7 @@ import { PersonDetail } from '../features/person/PersonDetail';
 import { SettingsPage } from '../features/settings/SettingsPage';
 import { getBaziRecord, initializeMockSession, listBaziRecords, resetMockSession, saveBaziRecord } from '../data/clientRepository';
 import { isOfflineMode, resetAiSettingsForTests } from '../data/aiSettings';
-import { isLocalSystemEnabled, isLocalSystemHidden, isLocalSystemUnlocked, lockLocalSystem, resetLocalSystemForTests, setLocalSystemEnabled, setLocalSystemHidden, unlockLocalSystem } from '../data/localSystem';
+import { isLocalSystemEnabled, isLocalSystemUnlocked, lockLocalSystem, resetLocalSystemForTests, setLocalSystemEnabled, unlockLocalSystem } from '../data/localSystem';
 import type { BaziRecord, BaziTaskResult } from '../types/domain';
 import { calculateNonAi } from '../features/chart/nonAiCalculator';
 import '../features/chart/nonAiCalculator'; // 预载引擎(缓存)，让页面内的按需加载立即命中
@@ -123,8 +123,9 @@ describe('详情页 · 生成方式标注与本机开关的一致性', () => {
     expect(isLocalSystemEnabled()).toBe(true);
     render(<SettingsPage />);
     fireEvent.click(screen.getByRole('button', { name: /撤销开通/ }));
-    // 撤销后这块**整块消失**（未开通 + 没走暗门 ⇒ 不渲染），所以不能等「未开通」那句话。
-    await waitFor(() => expect(screen.queryByLabelText('本地系统')).toBeNull());
+    // 撤销后勾选框与撤销按钮一起收回，只剩常驻的密钥框（判据问的是**控件**，不是整节标题）。
+    await waitFor(() => expect(screen.queryByRole('checkbox', { name: /使用本地系统/ })).toBeNull());
+    expect(screen.queryByRole('button', { name: /撤销开通/ })).toBeNull();
     expect(isLocalSystemUnlocked(), '开通标记该清掉').toBe(false);
     expect(isOfflineMode(), '底层开关必须被一起关掉 —— 否则本地引擎还在接管却没地方关').toBe(false);
     expect(isLocalSystemEnabled()).toBe(false);
@@ -135,15 +136,29 @@ describe('详情页 · 生成方式标注与本机开关的一致性', () => {
     expect(screen.queryByText(/当前为本地系统/)).toBeNull();
   });
 
-  it('藏着入口 ≠ 关掉功能：hidden 不影响是否接管（这条记录设计上的代价，防止被误读成权限）', async () => {
+  it('入口常驻 ≠ 打开功能：看得见那一格不代表本地系统在接管', async () => {
     await seed(mk({ aiTasks: { 'task-01': task('task-01', 'local') } }));
-    turnLocalSystemOn();
-    setLocalSystemHidden(true);
-    // 这就是隐藏按钮的已知代价：界面收干净了，引擎仍在接管。钉住它，别哪天当成"隐藏即关闭"来改。
-    expect(isLocalSystemEnabled(), '藏起来不该顺手关掉本地系统').toBe(true);
+    // 未开通 + 没勾选：设置页那一格摆着（它现在无条件常驻），但引擎不该接管。
+    expect(unlockLocalSystem(KEY), '解锁码不对，前提没成立').toBe(true);
+    lockLocalSystem();
+    expect(isLocalSystemUnlocked(), '前提：本机回到未开通').toBe(false);
+    render(<SettingsPage />);
+    // 未开通态判据问**控件**：密钥框在、勾选框不在。整节标题现在无条件常驻，拿它当判据会恒真。
+    expect(screen.getByLabelText('本地系统密钥'), '这一格现在常驻，不必先解锁才看得见').toBeTruthy();
+    expect(screen.queryByRole('checkbox', { name: /使用本地系统/ })).toBeNull();
+    cleanup();
+    // 正例钉子：本机没勾着的时候，详情页不许声称正在用本地系统 —— 即使库里存着上一轮的本机结果。
     render(<PersonDetail personId="p1" onBack={vi.fn()} />);
     await screen.findByRole('heading', { name: '人物详情' });
-    expect((await screen.findByText(/当前为本地系统/)).textContent, '既然还在接管，详情页就必须说出来').toBeTruthy();
+    expect(screen.queryByText(/当前为本地系统/), '入口摆着 ≠ 引擎接管').toBeNull();
+    // 走真实入口开通并勾选（不手搓键名），同一条路径上横幅就该出现。
+    turnLocalSystemOn();
+    cleanup();
+    resetMockSession();
+    await seed(mk({ aiTasks: { 'task-01': task('task-01', 'local') } }));
+    render(<PersonDetail personId="p1" onBack={vi.fn()} />);
+    await screen.findByRole('heading', { name: '人物详情' });
+    expect((await screen.findByText(/当前为本地系统/)).textContent, '既然真的在接管，详情页就必须说出来').toBeTruthy();
   });
 
   /* 这一条盯的是**跨页**的缺口。App 里三个区块是**互斥三元表达式**渲染的（不是路由），
@@ -331,7 +346,7 @@ vi.mock('../data/baziOrchestrator', async (importOriginal) => {
   };
 });
 
-describe('详情页「本地系统」整块的可见性跟着暗门走', () => {
+describe('详情页「本地系统」整块的可见性跟着本机是否开通走', () => {
   /* 走真实导航：记录页是异步加载的，行按钮要等；打开后停在详情页。
      不直接 render(<PersonDetail/>) —— 那会绕过 App 的实例复用，测不出跨页读数。 */
   const openDetail = async () => {
@@ -340,9 +355,8 @@ describe('详情页「本地系统」整块的可见性跟着暗门走', () => {
     await screen.findByRole('heading', { name: '人物详情' });
   };
 
-  /* 设置页那侧早就按 hidden/unlocked 收放了，详情页这块却一直没判：结果是
-     · 从没开过第四路的设备，在命盘里看见一整块用不上的入口；
-     · 知道暗门节奏的人把设置页藏干净，详情页还留着同一功能的标题和按钮 —— 从另一头又把门露出来。
+  /* 设置页那侧按 unlocked 收放，详情页这块必须跟着同一个判据：漏判的后果是
+     从没开过第四路的设备，在命盘里看见一整块用不上的入口。
      判据只问 DOM（那块的唯一标题），不自报状态。 */
   const sectionShown = () => !!screen.queryByText('本地系统（本机规则引擎）');
 
@@ -361,16 +375,16 @@ describe('详情页「本地系统」整块的可见性跟着暗门走', () => {
     expect(sectionShown()).toBe(true);
   });
 
-  it('藏着时也不从详情页露头：那块跟着同一个判据收放', async () => {
+  it('撤销开通后详情页也不再露头：两块共用同一个判据', async () => {
     await seed(mk());
     expect(unlockLocalSystem(KEY), '解锁码不对，前提没成立').toBe(true);
-    setLocalSystemHidden(true);
-    expect(isLocalSystemHidden()).toBe(true);
+    lockLocalSystem();
+    expect(isLocalSystemUnlocked(), '前提：撤销之后本机就是未开通').toBe(false);
     render(<App />);
     await openDetail();
-    expect(sectionShown(), '设置页藏好了，详情页却还摆着同一功能').toBe(false);
-    // 反向钉子：清掉隐藏标记后走同一条路径，它必须回来（证明上面那句不是恒假）。
-    setLocalSystemHidden(false);
+    expect(sectionShown(), '本机已撤销开通，详情页却还摆着同一功能').toBe(false);
+    // 反向钉子：重新开通后走同一条路径，它必须回来（证明上面那句不是恒假）。
+    unlockLocalSystem(KEY);
     cleanup();
     resetMockSession();
     await seed(mk());
