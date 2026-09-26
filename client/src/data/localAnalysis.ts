@@ -18,11 +18,11 @@
 import { STEMS, BRANCHES, ELEMENTS, stemElementIndex, HIDDEN_STEMS } from '../features/chart/elements';
 import { ELEMENT_GUIDES, primaryElement, type ElementKey } from './elementKnowledge';
 import { canBuildLocalAnalysis } from './localSystem';
-import type { BaziAIAnalysis, BaziAnalysisTask, BaziRecord, FortunePeriod, NonAiChart } from '../types/domain';
+import type { BaziAIAnalysis, BaziAnalysisTask, BaziRecord, FortunePeriod, NonAiChart, RelationshipDetail } from '../types/domain';
 
 /* v3：爱情引动判据由「只看本期天干十神」扩成三条途径（天干／地支本气／配偶宫逢冲合），
    「未受特别引动」的覆盖面从约 80% 降到约 39%。只改断语措辞与判据，不改喜忌五行结论。 */
-export const LOCAL_ANALYSIS_ENGINE_VERSION = 'local-rules-v4';
+export const LOCAL_ANALYSIS_ENGINE_VERSION = 'local-rules-v5';
 
 /** 引擎可复算、无需外部输入的最小事实来源；缺排盘数据时上层据此禁用按钮。 */
 /* 判据已搬到 data/localSystem.ts（见那里的 canBuildLocalAnalysis）：调用方在页面加载阶段
@@ -153,11 +153,90 @@ const SHENSHA_NOTE: Record<string, string> = {
 const RELATION_TYPE_CN: Record<string, string> = {
   sanHe: '三合', liuHe: '六合', chong: '六冲', xing: '相刑', hai: '六害', po: '六破', ke: '相克',
 };
+/** 「这类关系一般主什么」的通用含义，只在句尾作补语；主语永远是这一对具体的柱。 */
 const RELATION_NOTE: Record<string, string> = {
   三合: '会成一方气势，其五行之力被显著放大，须辨其为喜为忌', 六合: '两柱相绊、情深而牵连，主结缘合作亦主牵制',
   六冲: '主动荡、迁移、拆合，被冲之宫所主之事易生变', 相刑: '主是非、刑伤、纠缠，所临六亲或事务易起摩擦',
   六害: '主暗损、猜忌、消耗，关系表面尚可内里生隙', 六破: '主破损、反复、中途生变', 相克: '力量相互压制，须分谁旺谁衰而定吉凶',
 };
+/** 本命四柱各自管的宫位(引擎的关系串只给「甲子 与 乙丑」这种柱名，不标宫位)。 */
+const PALACE_WORD = ['祖上与早年之门', '父母兄弟与事业门户', '配偶宫兼自身安身之处', '子女与晚年归宿'] as const;
+
+/* 十干禄支/阳刃支的**本地副本**：判「本期之支是日主的禄地还是刃乡」要用它。
+   ⚠ 不许改成 `import { STEM_LU, YANG_REN } from '../features/chart/nonAiCalculator'` ——
+   nonAiCalculator 顶部要 import lunar-javascript(300KB)，而本模块被 localSystem 那条链拉进
+   首屏；引擎里的真值表在 features/chart/elements 侧另有一份同源实现，改传统取法时两处同改
+   (luRenTable.test 钉的是引擎那份，下面的句子探针钉的是这份)。 */
+const LU_BRANCH: Record<string, string> = { 甲: '寅', 乙: '寅', 丙: '巳', 丁: '巳', 戊: '巳', 己: '巳', 庚: '申', 辛: '申', 壬: '亥', 癸: '亥' };
+const REN_BRANCH: Record<string, string> = { 甲: '卯', 丙: '午', 戊: '午', 庚: '酉', 壬: '子' };
+/** 本期地支相对日主的根气说法：禄、刃、通根、无根四选一。返回值自带「地支X」主语。 */
+function rootNote(dayStem: string, dayElement: string, branch: string): string {
+  if (!branch) return '';
+  if (branch === LU_BRANCH[dayStem]) return `地支${branch}为日主${dayStem}禄地`;
+  if (branch === REN_BRANCH[dayStem]) return `地支${branch}为日主${dayStem}阳刃`;
+  const rooted = (HIDDEN_STEMS[branch] ?? []).filter((s) => isStem(s) && ELEMENTS[stemElementIndex(s)] === dayElement);
+  return rooted.length ? `地支${branch}中藏${rooted.join('、')}，日主${dayElement}于此通根` : `地支${branch}不助日主${dayStem}${dayElement}`;
+}
+
+/* —— 刑冲合害的「逐条批注」：本命与时段共用一套措辞 ——
+   上一版每条只写「六冲：己酉 与 癸卯，主动荡、迁移、拆合…」——通用含义占满全句，
+   换个盘换个年还是这几个字(实测同一句在流年正文里出现 680 次)。现在每句都先报
+   「这一对里哪一柱带了什么」：本期那一柱的十神、被牵动的宫位、会成的那股五行是喜是忌，
+   再由这些事实决定后半句怎么说。缺哪一项就少说哪一项，绝不拿通用话补位。 */
+/** 从引擎的关系明细里认出「哪一柱是时段柱」：三合成局的 targetPillar 是整组支(寅午戌)，
+ *  六合/冲/刑等两侧都是两字柱；sourceLayer 除三合成局外都已被引擎摆成时段在前。 */
+function periodSide(rd: RelationshipDetail, periodGz: string): { side: 'period' | 'natal'; periodPillar: string; natalPillar: string } | null {
+  const isPeriod = (p: string) => p === periodGz;
+  if (isPeriod(rd.sourcePillar)) return { side: 'period', periodPillar: rd.sourcePillar, natalPillar: rd.targetPillar };
+  if (isPeriod(rd.targetPillar)) return { side: 'period', periodPillar: rd.targetPillar, natalPillar: rd.sourcePillar };
+  // 三合成局：一侧是整组支(寅午戌)，另一侧才是真柱。
+  const aTwo = rd.sourcePillar.length === 2 && BRANCHES.includes(rd.sourcePillar[1] ?? '');
+  const bTwo = rd.targetPillar.length === 2 && BRANCHES.includes(rd.targetPillar[1] ?? '');
+  if (aTwo && !bTwo) return { side: 'natal', periodPillar: rd.sourcePillar, natalPillar: rd.targetPillar };
+  if (bTwo && !aTwo) return { side: 'natal', periodPillar: rd.targetPillar, natalPillar: rd.sourcePillar };
+  return null;
+}
+/** 该柱地支落在本命第几宫(年0月1日2时3)；时段柱自己或三合组支返回 -1。 */
+function palaceIndexOf(pillar: string, n: NonAiChart): number {
+  return [n.pillars?.year, n.pillars?.month, n.pillars?.day, n.pillars?.hour].indexOf(pillar);
+}
+/** 引擎 status 字段 → 中文限定语。 */
+const STATUS_CN: Record<string, string> = { 'half-combination': '半合', 'partial-punishment': '刑而不全', binding: '合绊', complete: '' };
+/** 本命内部的关系：两侧都是本命柱，说法改成「谁家的门被谁家的气引动」。 */
+function natalRelationSentence(core: Core, typeCn: string, statusCn: string, house: string, onto: string): string {
+  const godA = house[0] ? stemGodOf(core.dayStem, house[0]) : '';
+  const godB = onto[0] ? stemGodOf(core.dayStem, onto[0]) : '';
+  const elA = branchMainElement(house[1] ?? '');
+  const idxA = palaceIndexOf(house, core.n), idxB = palaceIndexOf(onto, core.n);
+  const side = !elA ? '' : core.useful.includes(elA) ? `${elA}为喜` : core.avoid.includes(elA) ? `${elA}为忌` : '';
+  return `${typeCn}${statusCn ? `（${statusCn}）` : ''}：${house}（${PALACE_WORD[idxA] ?? '本宫'}，主${godA}）引动${onto}（${PALACE_WORD[idxB] ?? '本宫'}，主${godB}），${RELATION_NOTE[typeCn] ?? ''}${side ? '；所关' + side : ''}。`;
+}
+/** 一句关系批注：谁引动谁 + 具体作用 + 该作用在这张盘上落到哪个宫/哪股五行是喜是忌。 */
+function relationSentence(core: Core, typeCn: string, statusCn: string, periodPillar: string, natalPillar: string, palaceIdx: number): string {
+  const head = `${typeCn}${statusCn ? `（${statusCn}）` : ''}`;
+  // 「两字柱」才是真柱；三合成局那侧引擎给的是整组支(如亥卯未)，拿它查藏干/十神全是空话
+  const isPillar = (p: string) => p.length === 2 && BRANCHES.includes(p[1] ?? '');
+  const bEl = branchMainElement(isPillar(periodPillar) ? periodPillar[1] ?? '' : (periodPillar.match(/[子丑寅卯辰巳午未申酉戌亥]/g) ?? []).slice(-1)[0] ?? '');
+  const from = isPillar(periodPillar)
+    ? `${periodPillar}携${bEl || '杂气'}而来`
+    : `${periodPillar}这一组支汇成${bEl || '一方'}之势`;
+  // 本命柱那侧的说法：管的是哪一宫、宫中坐着什么
+  const natalIsPillar = isPillar(natalPillar);
+  const natalGod = natalIsPillar && natalPillar[0] ? stemGodOf(core.dayStem, natalPillar[0]) : '';
+  const houseStem = (HIDDEN_STEMS[natalIsPillar ? natalPillar[1] ?? '' : ''] ?? [])[0] ?? '';
+  const houseGod = houseStem ? stemGodOf(core.dayStem, houseStem) : '';
+  const palaceTxt = palaceIdx >= 0 ? PALACE_WORD[palaceIdx] : '';
+  const onto = palaceIdx === 2 ? `正落在配偶宫${natalPillar[1]}（干${natalGod}、支藏${houseGod}）上`
+    : palaceIdx >= 0 ? `牵动${palaceTxt}的${natalPillar}（干${natalGod}、支藏${houseGod}）`
+      : natalIsPillar ? `牵动${natalPillar}（干${natalGod}、支藏${houseGod}）`
+        : `与本命共成${natalPillar}之局，局中${[...natalPillar].map((b) => `${b}${stemGodOf(core.dayStem, (HIDDEN_STEMS[b] ?? [])[0] ?? '') || '—'}`).join('、')}`;
+  // 收尾按「这股气是喜是忌」定，而不是照抄通用含义
+  const tone = !bEl ? '' : core.useful.includes(bEl)
+    ? `${bEl}属喜用，动中有利可乘`
+    : core.avoid.includes(bEl) ? `${bEl}属忌神，动处须防消耗` : '';
+  const note = RELATION_NOTE[typeCn.split('、')[0]] ?? '';
+  return `${head}：${from}${onto}${note ? '，' + note : ''}${tone ? '；' + tone : ''}。`;
+}
 
 const isStem = (s?: string) => !!s && STEMS.includes(s);
 const isBranch = (b?: string) => !!b && BRANCHES.includes(b);
@@ -446,32 +525,34 @@ export function buildLocalAnalysis(record: BaziRecord, now: Date = new Date()): 
     add('爱情', points);
   }
 
-  // ⑦ 刑冲克害批注（本命四柱之间的关系事实，逐条列出并点出宫位含义）
+  // ⑦ 刑冲克害批注（本命四柱之间的关系，逐条报「哪一宫引动哪一宫、宫中坐什么十神」）
   {
-    const seen = new Set<string>();
-    const points: Array<string | false | null | undefined> = [];
-    for (const rd of n.relationshipDetails ?? []) {
-      if (rd.sourceLayer !== 'natal' || rd.targetLayer !== 'natal') continue;
-      const typeCn = RELATION_TYPE_CN[rd.type]; if (!typeCn) continue;
-      const pair = [rd.sourcePillar, rd.targetPillar].sort().join('|');
-      const key = typeCn + pair; if (seen.has(key)) continue; seen.add(key);
-      const status = rd.status === 'half-combination' ? '半合' : rd.status === 'partial-punishment' ? '刑而不全' : rd.status === 'binding' ? '合绊' : '';
-      points.push(`${typeCn}${status ? '（' + status + '）' : ''}：${rd.sourcePillar} 与 ${rd.targetPillar}，${RELATION_NOTE[typeCn] ?? ''}。`);
-      if (points.length >= 5) break;
-    }
-    add('刑冲克害批注', points);
+    const natalCore: Core = { n, gender: record.gender === 'female' ? 'female' : 'male', dayStem: dayStem ?? '', dayIdx, dayElement, label, useful, avoid, pattern, score };
+    add('刑冲克害批注', natalRelationPoints(natalCore));
   }
 
-  // ⑧ 大运（当前所运 + 未来两步主题）
+  // ⑧ 大运（交运之日 + 当前所运 + 未来两步，各按自己的干支说清顺逆在哪）
   {
     const gfs = n.greatFortunes ?? [];
     if (gfs.length) {
+      const core: Core = { n, gender: record.gender === 'female' ? 'female' : 'male', dayStem: dayStem ?? '', dayIdx, dayElement, label, useful, avoid, pattern, score };
       const cur = gfs.find((g) => g.startYear <= nowYear && nowYear <= g.endYear);
       const upcoming = gfs.filter((g) => g.startYear > nowYear).slice(0, 2);
-      const theme = (g: NonAiChart['greatFortunes'][number]) => `${g.ganZhi}运${g.tenGod ? '行' + g.tenGod + '之令' : ''}（${g.startYear}至${g.endYear}年）`;
+      /** 一步运的说法：干支、十神、喜忌侧别、通根禄刃与流年之冲，全部现读这一柱。 */
+      const theme = (g: NonAiChart['greatFortunes'][number], when: string) => {
+        const v = periodVerdict(g.ganZhi, core);
+        const bEl = branchMainElement(v.branch);
+        const root = rootNote(core.dayStem, core.dayElement, v.branch);
+        const side = v.verdict === '加力' ? `天干${v.stem}${ELEMENTS[stemElementIndex(v.stem)]}，${root}，${bEl}落喜用一侧，此十年可得${bEl || '当期'}之力`
+          : v.verdict === '减力' ? `天干${v.stem}${ELEMENTS[stemElementIndex(v.stem)]}，${root}，${bEl}犯忌一侧，此十年所受牵制在此`
+          : `天干${v.stem}，${root || '地支无根'}，喜忌两侧并至，此十年顺逆交参、随事而分`;
+        return `${when}${g.ganZhi}运（${g.startYear}至${g.endYear}年）行${g.tenGod || '杂气'}之令：${side}。`;
+      };
+      const onsetAge = n.luckStart ? `生后约${cnNum(n.luckStart.years)}岁${n.luckStart.months ? cnNum(n.luckStart.months) + '个月' : ''}、${n.luckOnset || n.luckStart.date}交运` : '起运时刻未记录（重新计算排盘数据可补算）';
       const points = [
-        cur ? `现行${theme(cur)}，${cur.tenGod ? TEN_GOD_SEX[cur.tenGod] ?? '' : ''}` : '当前未落在已排大运区间内，可先重新计算排盘数据再补算',
-        upcoming.length ? '此后运程：' + upcoming.map(theme).join('；') + '，行喜用之运则顺、行忌神之运则宜守。' : '',
+        `${onsetAge}；首运${gfs[0]?.ganZhi ?? '—'}自${gfs[0]?.startYear ?? '—'}年起。`,
+        cur ? theme(cur, '现行') + (cur.tenGod ? TEN_GOD_SEX[cur.tenGod] ?? '' : '') : '当前未落在已排大运区间内，可先重新计算排盘数据再补算',
+        upcoming.length ? upcoming.map((g) => theme(g, '此后')).join('') : '',
       ];
       add('大运提点', points);
     }
@@ -559,24 +640,66 @@ function periodVerdict(gz: string, core: Core): { stem: string; branch: string; 
   return { stem, branch, helpEl, harmEl, verdict };
 }
 
-/** 时段与本命之间的刑冲合害，逐条列出(优先取结构化 relationshipDetails，退取 relationships 串)。 */
-function periodRelationPoints(period: FortunePeriod | NonAiChart['greatFortunes'][number]): string[] {
+/** 本命四柱之间的刑冲合害，逐条批注(宫位与十神都从这张盘现读)。 */
+function natalRelationPoints(core: Core): string[] {
+  const n = core.n;
   const pts: string[] = [];
   const seen = new Set<string>();
+  for (const rd of n.relationshipDetails ?? []) {
+    if (rd.sourceLayer !== 'natal' || rd.targetLayer !== 'natal') continue;
+    const typeCn = RELATION_TYPE_CN[rd.type]; if (!typeCn) continue;
+    const pair = [rd.sourcePillar, rd.targetPillar].sort().join('|');
+    const key = typeCn + pair; if (seen.has(key)) continue; seen.add(key);
+    const status = STATUS_CN[rd.status] ?? '';
+    // 两侧都是本命柱：任取一侧作「被说的那一柱」，另一侧作落点。
+    const idxA = palaceIndexOf(rd.sourcePillar, n), idxB = palaceIndexOf(rd.targetPillar, n);
+    const [house, onto] = idxA >= idxB ? [rd.sourcePillar, rd.targetPillar] : [rd.targetPillar, rd.sourcePillar];
+    pts.push(natalRelationSentence(core, typeCn, status, house, onto));
+    if (pts.length >= 5) break;
+  }
+  return pts;
+}
+
+/** 时段与本命之间的刑冲合害，逐条批注(优先取结构化 relationshipDetails，退取 relationships 串)。 */
+function periodRelationPoints(core: Core, period: FortunePeriod | NonAiChart['greatFortunes'][number]): string[] {
+  const n = core.n;
+  const pts: string[] = [];
+  // 同一宫会被多种关系同时命中（实测己酉一盘：对年支既六破又相克，对月支既六合又相克）。
+  //   这些句子的前半截「本期柱携某气」与后半截「喜忌收尾」逐字相同，只有关系名不同 —— 全端出来
+  //   就是拿重复话占行。故按宫去重，一个宫只留一条，并把该宫命中的关系名并写进这一条里。
+  const byPalace = new Map<string, { types: string[]; status: string; periodPillar: string; natalPillar: string }>();
+  const order: string[] = [];
+  const push = (key: string, tc: string, status: string, periodPillar: string, natalPillar: string) => {
+    const slot = byPalace.get(key);
+    if (slot) { if (!slot.types.includes(tc)) slot.types.push(tc); return; }
+    byPalace.set(key, { types: [tc], status, periodPillar, natalPillar });
+    order.push(key);
+  };
   const details = ((period as FortunePeriod).relationshipDetails ?? []) as NonAiChart['relationshipDetails'];
   for (const rd of details) {
     if (rd.sourceLayer === 'natal' && rd.targetLayer === 'natal') continue;   // 只留「时段↔本命」之交
     const tc = RELATION_TYPE_CN[rd.type]; if (!tc) continue;
-    const pair = [rd.sourcePillar, rd.targetPillar].sort().join('|'); const key = tc + pair; if (seen.has(key)) continue; seen.add(key);
-    const st = rd.status === 'half-combination' ? '半合' : rd.status === 'partial-punishment' ? '刑而不全' : rd.status === 'binding' ? '合绊' : '';
-    pts.push(`${tc}${st ? `（${st}）` : ''}：${rd.sourcePillar} 与 ${rd.targetPillar}，${RELATION_NOTE[tc] ?? ''}。`);
-    if (pts.length >= 5) return pts;
+    const side = periodSide(rd, period.ganZhi ?? ''); if (!side) continue;
+    const idx = palaceIndexOf(side.natalPillar, n);
+    push(idx >= 0 ? `p${idx}` : `x${side.natalPillar}`, tc, STATUS_CN[rd.status] ?? '', side.periodPillar, side.natalPillar);
   }
-  if (!pts.length) {
+  if (!order.length) {
     for (const [k, arr] of Object.entries(period.relationships ?? {})) {
       const tc = RELATION_TYPE_CN[k]; if (!tc) continue;
-      for (const s of (arr ?? [])) { pts.push(`${tc}：${s.replace('与', ' 与 ')}，${RELATION_NOTE[tc] ?? ''}。`); if (pts.length >= 5) return pts; }
+      for (const s of (arr ?? [])) {
+        const i = Math.max(s.indexOf('与'), s.indexOf('克'));
+        const left = i >= 0 ? s.slice(0, i).trim() : s.trim();
+        const right = i >= 0 ? s.slice(i + 1).trim() : '';
+        const hit = [left, right].find((p) => p === period.ganZhi) ?? left;
+        const other = hit === left ? right : left;
+        const idx = palaceIndexOf(other, n);
+        push(idx >= 0 ? `p${idx}` : `x${other}`, tc, '', hit, other);
+      }
     }
+  }
+  for (const key of order.slice(0, 4)) {
+    const g = byPalace.get(key)!;
+    pts.push(relationSentence(core, g.types.join('、'), g.status, g.periodPillar, g.natalPillar, palaceIndexOf(g.natalPillar, n)));
   }
   return pts;
 }
@@ -584,38 +707,156 @@ function periodRelationPoints(period: FortunePeriod | NonAiChart['greatFortunes'
 const VERDICT_WORD: Record<string, string> = { 加力: '加力（顺）', 减力: '减力（逆）', 并见: '喜忌并见（顺逆交参）' };
 const TITLE_TAIL: Record<string, string> = { 加力: '进气', 减力: '当戒', 并见: '顺逆参半' };
 
+/** 本命四柱各自的「宫 + 十神」标签，用于把冲合落到具体人事，而不是只报柱名。 */
+function pillarLabel(core: Core, pillar: string): string {
+  const idx = palaceIndexOf(pillar, core.n);
+  if (idx < 0) return `${pillar}`;
+  return `${PALACE_WORD[idx]}的${pillar}（干${stemGodOf(core.dayStem, pillar[0] ?? '')}、支藏${stemGodOf(core.dayStem, (HIDDEN_STEMS[pillar[1] ?? ''] ?? [])[0] ?? '')}）`;
+}
+/** 本期天干对日主的十神(纯代数，与引擎 tenGodOf 同式)。 */
+const periodStemGod = (core: Core, stem: string) => (isStem(stem) ? stemGodOf(core.dayStem, stem) : '');
+
+/** 本期干支各自在本命盘中的位置（月柱/时柱同名时要说清是哪一柱，别把「丙寅」当成凭空来的字）。 */
+function natalEcho(core: Core, stem: string, branch: string): string {
+  const p = [core.n.pillars?.year, core.n.pillars?.month, core.n.pillars?.day, core.n.pillars?.hour];
+  const at = (ch: string, col: 0 | 1) => ['年', '月', '日', '时'].filter((_, i) => (p[i] ?? '')[col] === ch);
+  const sAt = at(stem, 0), bAt = at(branch, 1);
+  return `天干${stem}${sAt.length ? '又见于本命' + sAt.join('、') + '柱' : '为本命四柱所无'}，地支${branch}${bAt.length ? '与本命' + bAt.join('、') + '柱并见' : '不落本命四柱'}`;
+}
+
+/* ⚠ 以下两句只报**当期这一柱**的事实，绝不查本命四柱的字面。
+   上一版有个 stemPositionNote：拿本期干支去本命里找同名的柱，找到日柱那一格就说
+   「日干即本命X、与日主同字，正印之性不假外求」。实测 1972-04-19 乾造(己卯时)的 2029 己酉流年
+   被它写成「日干即本命己」—— 那是把**时干的字**当成了日主，整句是假话。
+   十神的来源归属只能看它与日主的生克关系(下面 periodStemGod)，不能看字面撞了哪一柱。 */
+/** 本期地支藏干各自的十神（含喜忌侧别），用于说清「这个支里到底坐着什么」。 */
+function branchContents(core: Core, branch: string): string {
+  const hs = HIDDEN_STEMS[branch] ?? [];
+  return hs.map((s, i) => {
+    const el = isStem(s) ? ELEMENTS[stemElementIndex(s)] : '';
+    const side = el && core.useful.includes(el) ? '喜' : el && core.avoid.includes(el) ? '忌' : '闲';
+    return `${['本气', '中气', '余气'][i] ?? '余气'}${s}${stemGodOf(core.dayStem, s)}（${el}${side}）`;
+  }).join('、');
+}
+
 function buildPeriodAnalysis(core: Core, period: FortunePeriod | NonAiChart['greatFortunes'][number] | undefined, scope: 'annual' | 'monthly' | 'decade'): BaziAIAnalysis | null {
   if (!period?.ganZhi) return null;
   const gz = period.ganZhi; const tenGod = period.tenGod ?? '';
-  const { verdict, harmEl, stem: pStem, branch: pBranch } = periodVerdict(gz, core);
+  const { verdict, harmEl, helpEl, stem: pStem, branch: pBranch } = periodVerdict(gz, core);
   const scopeWord = scope === 'annual' ? '流年' : scope === 'monthly' ? '流月' : '大运';
   const weak = core.label === '身弱' || core.label === '中和偏弱';
   const dayPillar = core.n.pillars?.day ?? '';
-  const spouseClash = (period.relationships?.chong ?? []).some((s) => s.includes(dayPillar));
+  // 本期地支冲到的**本命柱**（不是「有没有冲」）：只说「本期逢冲」等于没批——同一张盘里
+  // 冲年支与冲日支是两回事，前者动祖上/门户，后者动配偶宫与自身。
+  const chongPalaces = [...new Set(((period.relationships?.chong ?? []).map((s) => {
+    const i = s.indexOf('与');
+    const parts = (i >= 0 ? [s.slice(0, i), s.slice(i + 1)] : [s]).map((t) => t.trim());
+    return parts.find((p) => p !== gz && [core.n.pillars?.year, core.n.pillars?.month, dayPillar, core.n.pillars?.hour].includes(p));
+  }).filter((x): x is string => !!x)))];
+  const spouseClash = chongPalaces.includes(dayPillar);
   const blocks: Block[] = []; const add = blockAdd(blocks);
 
   const energyNote = verdict === '加力'
-    ? `喜用${core.useful.join('、')}得助，${weak ? '元气得以培补' : '气象愈发流通'}，本期宜顺势而为`
+    ? `喜用${helpEl.join('、')}得此期之力，${weak ? '元气得以培补' : '气象愈发流通'}`
     : verdict === '减力'
-      ? `忌神${harmEl.join('、') || core.avoid.join('、')}当令，${ELEMENT_HEALTH[core.dayElement] ?? '身心'}易受牵制，本期宜守不宜攻`
-      : `喜忌之神并至，吉凶随具体事类而分，须逐事权衡`;
+      ? `忌神${harmEl.join('、') || core.avoid.join('、')}当令，日主${core.dayStem}${core.dayElement}受其牵制`
+      : `喜（${helpEl.join('、')}）与忌（${harmEl.join('、')}）并至，吉凶随具体事类而分`;
   const tenGodSex = TEN_GOD_SEX[tenGod] ?? '';
   const tenGodCareer = TEN_GOD_CAREER[tenGod] ?? '';
 
+  const periodTag = scope === 'annual' ? `${(period as FortunePeriod).year ?? ''}年${gz}`
+    : scope === 'monthly' ? `${(period as FortunePeriod).year ?? ''}年${(period as FortunePeriod).month ?? ''}月${gz}`
+      : `${gz}运（${(period as { startYear?: number }).startYear ?? ''}至${(period as { endYear?: number }).endYear ?? ''}年）`;
+
+  /* 健康第 2 句按「日主所主之脏 vs 本期所犯/所得之气」现推，不再固定一句「作息情绪易出问题」。
+     上一版这一行整张盘、整十年都逐字相同（实测 ×51 重复），读者看到的是模板不是这张盘：
+     同样是喜忌并见，火来克金的盘与土去生金的盘养的、伤的压根不是一个部位。 */
+  const organWord = ELEMENT_HEALTH[core.dayElement] ?? '体质';
+  const dayIdxE = core.dayIdx;
+  /* 忌气对日主的作用方向必须按**十神分组**取，不能拿喜忌数组的下标顺序去猜：
+     avoid = [财, 官杀, 食伤]（身弱）或 [印, 比劫]（身强），而 core.avoid[0] 在两种盘里分别是
+     「我克者」与「生我者」——上一版写 `harmEl.find(e => e === core.avoid[0])` 当作「克我之神」，
+     实测水日主见火(财)被说成「火气克日主水」，方向正好反了（火是耗水的、克水的是土）。
+     GROUP_OFFSET 那张表就在本模块开头，直接用它。 */
+  const elOffset = (e: string) => (['木', '火', '土', '金', '水'] as string[]).indexOf(e);
+  const groupOfEl = (e: string): string => {
+    const d = ((elOffset(e) - dayIdxE) % 5 + 5) % 5;
+    return Object.keys(GROUP_OFFSET).find((k) => GROUP_OFFSET[k] === d) ?? '';
+  };
+  const harmGroup = (e: string) => ({ 官杀: '克', 财: '耗', 食伤: '泄', 印: '生', 比劫: '分夺' }[groupOfEl(e)] ?? '犯');
+  const threatEl = harmEl.find((e) => groupOfEl(e) === '官杀') ?? harmEl.find((e) => !!e && e !== core.dayElement);
+  const nourishEl = helpEl.find((e) => groupOfEl(e) === '印');
+  const harmPhrase = harmEl.filter((e) => !!e).map((e) => `${e}气${harmGroup(e)}`).join('、');
+  /* 第 2 句的落点必须跟着**本期那位十神**走：身弱见官杀年与见财年是两回事，一律写
+     「先见于某脏、睡眠与情志次之」就成了整十年不换字的模板（实测 ×51 逐字相同）。
+     十神→病处的对应只取通行口径里最直白的一条，不铺开讲。 */
+  const godAilOf = (g: string) => ({ 官杀: '压力与作息先乱，肩颈、血压易紧', 财: '饮食与开支一起上来，脾胃首当其冲',
+    食伤: '思虑过度、耗神，睡眠最浅', 印: '人气虽聚而懒于动，湿滞不畅', 比劫: '劳碌争竞，筋骨与情绪两头受磨' }[g] ?? '');
+  /* 引擎的 tenGod 字段在大运存量行/补槽里可能为空（见爱情小节对它的同款兜底），此时按本期天干
+     代数现推。**没有对应病处就说没有**：上一版兜到一句「睡眠与情志次之」，实测印、比两类的盘
+     整十年都吐同一句 —— 那正是本次要消灭的东西，拿它当 fallback 等于原地踏步。 */
+  const periodGod = tenGod || periodStemGod(core, pStem);
+  const godAil = godAilOf(periodGod);
   add('健康', [
-    `本期${scopeWord}${gz}${tenGod ? '行' + tenGod + '之令' : ''}，相对本命为${VERDICT_WORD[verdict]}——${energyNote}。`,
-    verdict === '减力' ? `${ELEMENT_HEALTH[core.dayElement] ?? '体质'}本季易显不足，作息宜规律、避免透支，情绪与睡眠尤须照看。` : `${ELEMENT_HEALTH[core.dayElement] ?? '体质'}得养，可借本期主动调理旧患、巩固根本。`,
+    `${periodTag}${tenGod ? '行' + tenGod + '之令' : ''}，天干${pStem}${isStem(pStem) ? ELEMENTS[stemElementIndex(pStem)] : ''}（于日主${core.dayStem}为${periodStemGod(core, pStem) || '杂气'}）、地支${pBranch}藏${branchContents(core, pBranch)}；${rootNote(core.dayStem, core.dayElement, pBranch)}。相对本命为${VERDICT_WORD[verdict]}——${energyNote}。`,
+    verdict === '减力'
+      ? `${periodTag}忌在${harmEl.join('、') || core.avoid.join('、')}${threatEl ? `，${harmPhrase}日主${core.dayElement}所主的${organWord}` : `，日主${core.dayElement}之气被这期干支耗散`}；${scopeWord === '流月' ? '这个月' : scopeWord === '流年' ? '本年' : '这十年'}${organWord}最先有感觉${godAil ? `，${godAil}` : ''}，早调胜于硬撑。`
+      : verdict === '加力'
+        ? `${periodTag}喜在${helpEl.join('、')}${nourishEl ? `，${nourishEl}气生日主${core.dayElement}，${organWord}得养` : `，助身之气到位，${organWord}根基较前稳固`}；${scopeWord === '流月' ? '这个月' : scopeWord === '流年' ? '本年' : '此运'}宜趁势收拾旧患${godAil ? `，连${periodGod}带来的${godAil.split('，')[0]}也可一并松开` : '，积劳随之减轻'}。`
+        : `${periodTag}喜${helpEl.join('、')}与忌${harmEl.join('、')}各占一半${threatEl ? `，${harmPhrase}日主${core.dayElement}所主的${organWord}，而${helpEl.join('、')}气护它` : `，两头之气同临${organWord}`}；${scopeWord === '流月' ? '本月' : scopeWord === '流年' ? '本年' : '此运'}强弱全看节奏${godAil ? `，${godAil}` : '，过劳与安逸两头都看得见'}。`,
   ]);
   add('事业', [
-    tenGodCareer ? `${tenGod ? tenGod + '临期，' : ''}事业取向偏「${tenGodCareer}」，${tenGodSex}` : `${tenGodSex || '本期事业以守成为主。'}`,
-    verdict === '加力' ? '气势顺遂，宜进取、可承接更重的责任或推进停滞之事。' : verdict === '减力' ? '宜低调守成、防小人口舌，忌冒进扩张或与人硬碰。' : '有可为亦有掣肘，抓稳关键环节、勿全面铺开。',
-    spouseClash || (period.relationships?.chong ?? []).length ? '本期逢冲，主迁移、变动与拆合，凡涉及转岗、搬迁、合作聚散，宜早做预案、以静制动。' : '',
+    tenGodCareer ? `${tenGod || periodStemGod(core, pStem)}临期，取向偏「${tenGodCareer}」：天干${pStem}于日主为${periodStemGod(core, pStem) || '杂气'}，${rootNote(core.dayStem, core.dayElement, pBranch)}；${tenGodSex}` : (tenGodSex || `${gz}于事业无专主之神，${scopeWord === '大运' ? '此十年' : '本期'}以本职为本。`),
+    (() => {
+      const echo = natalEcho(core, pStem, pBranch);
+      /* 「主事/受阻」那半句必须跟着**本期自己那位十神**说，不能沿用本命某柱的十神：
+         上一版这里读 stemGodOf(日主, 本期天干)，与第一行的取向同源，尚可；但收尾三句
+         「可承接更重的责任／宜守既有岗位／抓稳关键环节」在整张盘每一年都逐字相同（实测 ×20 以上），
+         现在把档位、宫位动静(有无冲)、十神三者一起写进去，让同盘相邻两年也说不出同一句话。 */
+      const godWord = stemGodOf(core.dayStem, pStem);
+      const moved = chongPalaces.length ? `且${chongPalaces.map((s) => PALACE_WORD[palaceIndexOf(s, core.n)]).join('、')}已被冲动` : '四宫未受特别冲动';
+      if (verdict === '加力') return `${echo}。得力处在${helpEl.join('、')}，${godWord ? `${godWord}当权、${moved}` : moved}，${tenGodCareer ? `就着「${tenGodCareer.split('、')[0]}」这条线推进最省力` : '宜主动承接更重的责任'}。`;
+      if (verdict === '减力') return `${echo}。掣肘处在${harmEl.join('、') || core.avoid.join('、')}，${godWord ? `${godWord}一类的事务最先受阻，${moved}` : moved}，${tenGodCareer ? `「${tenGodCareer.split('、')[0]}」这条线宜守不宜攻` : '宜守既有岗位、少与人硬碰'}。`;
+      return `${echo}。喜忌并至（喜${helpEl.join('、')}、忌${harmEl.join('、')}）：${godWord ? `${godWord}之事可为而余者生枝节，${moved}` : moved}，${scopeWord === '大运' ? '这十年' : '本期'}抓稳关键环节即可。`;
+    })(),
+    (() => {
+      if (!chongPalaces.length) return '';
+      /* 冲的是哪一宫决定后半句怎么说：门户之冲主迁移转岗，配偶宫之主动家宅婚缘，
+         年支/时支被冲则落在早年根基与晚年归宿上。上一版不分宫位、一律写「转岗搬迁合作聚散」，
+         实测同一张盘冲日支与冲时支的两行只差柱名，读者看不出动的压根不是一回事。 */
+      const ws = chongPalaces.map((s) => PALACE_WORD[palaceIndexOf(s, core.n)]).filter(Boolean);
+      const kind = ws.some((w) => w.includes('配偶宫')) ? '家宅与自身同动，住处、婚缘最易先变'
+        : ws.every((w) => w.includes('门户')) ? '门户之冲，主迁移、转岗与合作聚散'
+          : '所动在早年根基或晚年归宿，多应在家中长辈、去处与长计划的事上';
+      return `${gz}冲${chongPalaces.map((s) => pillarLabel(core, s)).join('、')}，此乃${kind}；${scopeWord === '流月' ? '这一个月' : scopeWord === '流年' ? '本年' : '此十年'}的变动多半应在这一冲上，宜早做预案、以静制动。`;
+    })(),
   ]);
+  /* 财星在本期是「透干／藏支／未现」三种形态之一，第 1 句已经按它分支；第 2 句必须引用同一个
+     事实，否则会出现「财路明动」＋「本期无财可求」这种自相矛盾的相邻两行。 */
+  const wealthGods = ['正财', '偏财'].join('、');
+  const myWealthEls = groupElements(core.dayIdx, '财').filter((e) => e);
+  const hasWealthNow = TEN_GOD_GROUP[tenGod || periodStemGod(core, pStem)] === '财';
+  const hiddenNow = (HIDDEN_STEMS[pBranch] ?? []).some((s) => ['正财', '偏财'].includes(stemGodOf(core.dayStem, s)));
+  const elSide = (e: string) => core.useful.includes(e) ? '喜用' : core.avoid.includes(e) ? '忌神' : '闲神';
   add('财运', [
-    TEN_GOD_GROUP[tenGod] === '财' || TEN_GOD_GROUP[tenGod] === '食伤'
-      ? (verdict === '加力' ? '财星得食伤相生、或财临喜用，本期财源活络，求财可进取，仍忌贪大。' : '财星虽动却犯忌，看似有机会，实则耗多进少，忌投机借贷。')
-      : (verdict === '减力' ? '本期财星不显且忌神当令，以正职稳收为主，严控不必要开支。' : '财运平稳，量入为出、按计划推进即可。'),
-    weak ? '身弱任财本不易，聚财宜借团队与长期置业，不宜单打独斗博快钱。' : '身旺能任财，进可图大利，惟防比劫分夺、账目须清。',
+    (() => {
+      if (hasWealthNow) {
+        const g = tenGod || periodStemGod(core, pStem);
+        return `${g}透干（${pStem}${isStem(pStem) ? ELEMENTS[stemElementIndex(pStem)] : ''}，于${core.dayStem}${core.dayElement}为${elSide(isStem(pStem) ? ELEMENTS[stemElementIndex(pStem)] : '')}一侧），财路明动：${verdict === '加力' ? `本期求财可进取，惟${weak ? '身弱担大财吃力，见好就收' : '防比劫分夺，账目与合作权责要先讲清'}。` : `看似有机会，实则耗多进少，投机与借贷皆忌。`}`;
+      }
+      if (hiddenNow) {
+        const hs = (HIDDEN_STEMS[pBranch] ?? []).filter((s) => ['正财', '偏财'].includes(stemGodOf(core.dayStem, s)));
+        return `财不透干而藏于${pBranch}（${hs.map((s) => `${s}主${stemGodOf(core.dayStem, s)}`).join('、')}），本期财在暗处、靠既有积累与合约兑现，${myWealthEls.map((e) => `${e}气${elSide(e)}`).join('、')}决定其成色。`;
+      }
+      if (TEN_GOD_GROUP[tenGod || periodStemGod(core, pStem)] === '食伤') {
+        return `${tenGod || periodStemGod(core, pStem)}当令，我生之气流通能生${wealthGods}，本期以技艺、内容、口碑换钱较顺；${verdict === '加力' ? `所生${myWealthEls.join('、')}又属${elSide(myWealthEls[0] ?? '')}，财源可期。` : '惟气势未济，收成慢半拍，忌贪大。'}`;
+      }
+      if (verdict === '减力') return `本期无财星亦无食伤引路（${gz}主${tenGod || periodStemGod(core, pStem) || '杂气'}），进项只依正职稳收，开支须先于收入定下额度。`;
+      return `${gz}不涉财与食伤（主${tenGod || periodStemGod(core, pStem) || '杂气'}），财按既有计划走即可，本期不是开源之年月、也不是破败之年月。`;
+    })(),
+    weak
+      ? `本命判${core.label}、助身方${cnNum(core.score?.support ?? 0)}对克泄耗方${cnNum(core.score?.drain ?? 0)}，任财之力本不足；${gz}这期财星${hasWealthNow ? '透见' : hiddenNow ? '藏支' : '未现'}，${scope === 'decade' ? '此十年' : '本期'}${hasWealthNow || hiddenNow ? '进财有门路，但门路要靠合约与团队撑，单打独斗博快钱最易失手' : '进项只依正职稳收，把钱攒在长期置业或储蓄里比追机会稳妥'}。`
+      : `本命判${core.label}、助身方${cnNum(core.score?.support ?? 0)}对克泄耗方${cnNum(core.score?.drain ?? 0)}，身旺能任财；${gz}这期财星${hasWealthNow ? '透见、可主动进取，惟比劫分夺之扰常在，账目与权责要先讲清' : hiddenNow ? '藏支、利在既有合约与积累上加码，不宜另开新摊子' : '未现，宜把精力放在开拓与管理岗位上，财随事业来'}。`,
   ]);
   // 爱情：三条引动途径都要查，缺一条就会把「本期明明动了夫妻宫」写成「未受特别引动」（实测判据偏窄）。
   {
@@ -647,9 +888,20 @@ function buildPeriodAnalysis(core: Core, period: FortunePeriod | NonAiChart['gre
     };
     const palaceTouched = [...(period.relationships?.chong ?? []), ...(period.relationships?.sanHe ?? []), ...(period.relationships?.liuHe ?? [])]
       .some((s) => { const [a, b] = pairBranches(s); return (a === dayBranch || b === dayBranch) && (a === pBranch || b === pBranch); });
+    /* 「相引」不能笼统：六合是合（结缘、贴近），六冲/三合是动（拆合、变局）——同一宫被两种力量
+       引动，读者该看到的话不一样。上一版两种都写「相引」，于是 2034 甲寅与 2035 乙卯两行爱情批断
+       整句逐字相同（同盘相邻时段的实测雷同就出在这一行）。这里取本期地支实际参与的那一对。 */
+    const touchKind = (): '合' | '动' | '' => {
+      const liu = period.relationships?.liuHe ?? [];
+      const isPalacePair = (s: string) => { const [a, b] = pairBranches(s); return (a === dayBranch || b === dayBranch) && (a === pBranch || b === pBranch); };
+      if (liu.some(isPalacePair)) return '合';
+      if ([...(period.relationships?.chong ?? []), ...(period.relationships?.sanHe ?? [])].some(isPalacePair)) return '动';
+      return '';
+    };
+    const touchWord = touchKind() === '合' ? '相合' : '冲动';
     const why = [movedByStem ? `${scopeWord}天干${pStem}为${tenGod || stemGodOf(core.dayStem, pStem)}` : '',
       movedByBranch ? `${scopeWord}地支${pBranch}所藏本气${bMainStem}亦${spouseGroup}之星` : '',
-      palaceTouched ? `更与本命日支${dayBranch}（配偶宫）相引` : ''].filter(Boolean).join('、');
+      palaceTouched ? `更与本命日支${dayBranch}（配偶宫）${touchWord}` : ''].filter(Boolean).join('、');
     // ── 取向判据（v3 第二轮，被实测读数纠正后写下）──────────────────────────────────
     //   第一版直接拿本期整体档位 verdict 定调，两类读数自相矛盾：
     //     · 男命乙木见辛亥年写「妻星…且向喜用」——喜侧那个字是辛(金)，属①路五行兜底认来的财组，
@@ -663,20 +915,40 @@ function buildPeriodAnalysis(core: Core, period: FortunePeriod | NonAiChart['gre
       .filter((e) => !!e && core.useful.includes(e));
     const spouseHarm = [movedByStem ? stemEl : '', movedByBranch ? branchEl : '']
       .filter((e) => !!e && core.avoid.includes(e));
+    // 配偶宫那一柱坐的是什么（本命日支藏干十神）：引动同一宫，坐食神与坐七刃的说法不该一样。
+    const houseStem = (HIDDEN_STEMS[dayBranch] ?? [])[0] ?? '';
+    const houseGod = houseStem ? stemGodOf(core.dayStem, houseStem) : '';
+    const houseSide = houseStem && isStem(houseStem)
+      ? (core.useful.includes(ELEMENTS[stemElementIndex(houseStem)]) ? '属喜用' : core.avoid.includes(ELEMENTS[stemElementIndex(houseStem)]) ? '属忌神' : '为闲神')
+      : '';
+    const palaceNote = `本命${dayPillar}一柱为配偶宫，宫中${houseStem}${houseGod}${houseSide}`;
+    /* 「（配偶宫）」这五个字是判据的一部分，不许当成冗余括号删掉：
+       local-love-period.test 拿「更与本命日支X（配偶宫）…」整串当**逐对判据**的锚点 ——
+       它要区分「本期地支 ↔ 本命日支」这一对(真动了配偶宫)与「别柱自己含日支那个字」(假引动)。
+       去掉标注后两种写法在正文里一模一样，那条杀手用例立刻转红(实测踩过)。
+       ⚠ 括号后面的动词按引动方式分「相合／冲动」（六合是合、冲与三合是动），不再统一写「相引」——
+       测试只钉到「（配偶宫）」为止，动词可换；换它是为了打掉相邻两年整行逐字相同。 */
+    const whyTxt = why;
+    // ⚠ 「向喜用 / 临忌 / 喜忌同临 / 星本身未现 / 感情宫位未受特别引动」这几个短语是测试与检索
+    //   认句式的锚点(local-love-period.test 按它们统计四类取向是否可达)，改写措辞时必须原样保留。
+    //   ⚠ 未引动那句**不许带全角括号**：测 216 行拿「含（）」当「已写出依据」的判据，
+    //   一旦这句里出现括号，互斥断言就把它当成引动句而恒红(实测踩过)。配偶宫的信息放破折号之后。
     const loveLine = (movedByStem || movedByBranch || palaceTouched)
       ? (spouseHelp.length > 0 && spouseHarm.length === 0
-        ? `本期${spouseLabel}被引动（${why}）且向喜用，感情机会增多、利婚恋推进，单身者宜主动把握。`
+        ? `${periodTag}${spouseLabel}被引动（${whyTxt}）且向喜用（所临${spouseHelp.join('、')}），${palaceNote}——感情机会在此${scopeWord === '流月' ? '月' : scopeWord === '流年' ? '年' : '运'}增多、利婚恋推进，单身者宜主动把握。`
         : spouseHarm.length > 0 && spouseHelp.length === 0
-          ? `${spouseLabel}临忌被引动（${why}），感情易生波折，沟通须柔、忌逞强硬碰。`
+          ? `${spouseLabel}临忌被引动（${whyTxt}，忌在${spouseHarm.join('、')}），${palaceNote}——感情易生波折，沟通须柔、忌逞强硬碰。`
           : spouseHelp.length > 0
-            ? `${spouseLabel}逢引动（${why}），喜忌同临于妻夫之宫，进退随具体事而分——主动沟通则顺，逞强争执则滞。`
+            ? `${spouseLabel}逢引动（${whyTxt}），喜忌同临于妻夫之宫（喜${spouseHelp.join('、')}、忌${spouseHarm.join('、')}），${palaceNote}——进退随具体事而分，主动沟通则顺，逞强争执则滞。`
             : palaceTouched
-              ? `${spouseLabel}逢引动（${why}），本期夫妻宫被牵动而星本身未现，感情易起变化，多沟通、少揣测即可。`
-              : `${spouseLabel}逢引动（${why}），本期气势${VERDICT_WORD[verdict]}，星与宫之吉凶须就事论之，主动沟通则顺。`)
-      : spouseClash ? '配偶宫逢冲，感情聚少离多或起变化，多包容体谅则无大碍。' : '感情宫位未受特别引动，以平常心维持既有关系即可。';
+              ? `${spouseLabel}逢引动（${whyTxt}），本期夫妻宫被牵动而星本身未现，${palaceNote}——${scopeWord === '流月' ? '本月' : scopeWord === '流年' ? '本年' : '此运'}感情易起变化，${touchKind() === '合' ? '既已贴身相合，多见面、把话说开便有进展' : '既是冲动而非合，聚散随外境而动，先稳住各自节奏再谈取舍'}。`
+              : `${spouseLabel}逢引动（${whyTxt}），本期气势${VERDICT_WORD[verdict]}，${palaceNote}——星与宫之吉凶须就事论之，主动沟通则顺。`)
+      : spouseClash
+        ? `本期不动财官而直冲${dayPillar}，${palaceNote}——配偶宫逢冲，感情聚少离多或起变化，多包容体谅则无大碍。`
+        : `感情宫位未受特别引动——${spouseLabel}即${groupElements(core.dayIdx, spouseGroup).join('、')}之气，未现于${gz}干支，本命${dayPillar}亦未被其冲合；${palaceNote}，${scopeWord === '流月' ? '本月' : scopeWord === '流年' ? '本年' : '此运'}以平常心维持既有关系即可。`;
     add('爱情', [loveLine]);
   }
-  add('刑冲克害批注', periodRelationPoints(period));
+  add('刑冲克害批注', periodRelationPoints(core, period));
 
   return {
     pattern: core.pattern?.name ?? '—',
@@ -740,7 +1012,7 @@ function buildOverview(core: Core, now: Date): BaziAIAnalysis | null {
       const advice = v === '减力'
         ? `宜低调守成、避高风险投资与跳槽远行，多亲近${core.useful.join('、')}以化${core.avoid.join('、')}之扰。`
         : `进气虽可进取，惟逢冲刑主变动，成事同时防人际与健康之消耗，宜有预案。`;
-      nodePoints.push(`${a.year}年（${a.ganZhi}）：${why}${clash ? '，并与本命构成冲刑、根基受动' : ''}，属${tag}。建议：${advice}`);
+      nodePoints.push(`${a.year}年（${a.ganZhi}）：${clash ? '，并与本命构成冲刑、根基受动' : ''}，属${tag}。建议：${advice}`);
     } else if (v === '加力') {
       nodePoints.push(`${a.year}年（${a.ganZhi}）：喜用进气、${a.tenGod ? a.tenGod + '得力，' : ''}宜把握机会窗口，进取求成、拓展人脉与平台。建议：借${core.useful.join('、')}之方乘势推进。`);
     }

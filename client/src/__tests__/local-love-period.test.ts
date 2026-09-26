@@ -62,13 +62,13 @@ describe('时段批断爱情小节的配偶星引动', () => {
      `expect(LOCAL_ANALYSIS_ENGINE_VERSION).toBe('local-rules-v3')` 是同义反复——改判据却忘了升版本时
      它照样绿（常量与被断言的值是同一个来源）。这里断的是源文件里那一行写的是什么。 */
   const SRC_FILE = 'C:/Users/yty06/Documents/ai/bbazi/ai 8zi/ai 8zi/ai 8zi/client/src/data/localAnalysis.ts';
-  it('改了爱情判据就必须升引擎版本：源文件里那行写的是 v4（M7 变异体在此转红）', () => {
+  it('改了爱情判据就必须升引擎版本：源文件里那行写的是 v5（M7 变异体在此转红）', () => {
     const raw = readFileSync(SRC_FILE, 'utf8').replace(/\r\n/g, '\n');
     const m = /^export const LOCAL_ANALYSIS_ENGINE_VERSION = '([^']+)';$/m.exec(raw);
     // 前提钉子：这一行必须存在且唯一，否则下面的断言是空的
     expect(m).not.toBeNull();
     expect(raw.match(/LOCAL_ANALYSIS_ENGINE_VERSION = '/g)).toHaveLength(1);
-    expect(m![1]).toBe('local-rules-v4');
+    expect(m![1]).toBe('local-rules-v5');
     // 交叉核对：源文件那行与模块导出的常量同源（防止有人另抄一份字面量）
     expect(LOCAL_ANALYSIS_ENGINE_VERSION).toBe(m![1]);
   });
@@ -92,7 +92,9 @@ describe('时段批断爱情小节的配偶星引动', () => {
   it('配偶宫被引动要说清是哪一个本命柱与之相引，别柱自己的冲合不许算到配偶宫头上', () => {
     // 2027 丁未：未与日支卯半合木局(亥卯未同组) → 途径③；同时未本气己土也是妻星 → 途径②也在
     const line = loveOf(MALE, 'task-03');
-    expect(line).toContain('更与本命日支卯（配偶宫）相引');
+    // v5：动词按引动方式分「相合／冲动」（六合是合、冲与三合是动），锚点只钉到「（配偶宫）」——
+    // 那五个字才是逐对判据的凭据，动词可变。整串「（配偶宫）(?:相合|冲动)」仍不许松写法命中。
+    expect(line).toMatch(/更与本命日支卯（配偶宫）(?:相合|冲动)/);
     // 反例前提：本命月柱辛卯自己就含「卯」字，若按整串 includes 判，任何与月柱相冲的年份
     // 都会被误报成动了配偶宫。2035 乙卯…逐年里 2029 己酉冲卯两处都有，须逐对核到本期干支。
     const other = loveOf(MALE, 'task-05');
@@ -117,7 +119,7 @@ describe('时段批断爱情小节的配偶星引动', () => {
     let palaceClaims = 0;
     for (const id of ['task-02', 'task-03', 'task-04', 'task-05', 'task-06', 'task-07', 'task-08', 'task-09', 'task-10', 'task-11']) {
       const line = loveOf(MALE, id);
-      const claims = line.includes('（配偶宫）相引');
+      const claims = /（配偶宫）(?:相合|冲动)/.test(line);
       const gz = annualGz(id);
       // 独立核对：本期地支与日支卯之间是否真有 冲(酉)/六合(戌)/三合组(亥卯未 %4 同余)
       const BRANCHES = '子丑寅卯辰巳午未申酉戌亥';
@@ -128,7 +130,7 @@ describe('时段批断爱情小节的配偶星引动', () => {
     }
     // 反例存在性：窗口里既有「动了配偶宫」的年份，也有没动却被松写法误报的年份（甲寅/丙午…）
     expect(palaceClaims).toBeGreaterThan(0);
-    expect(loveOf(MALE, 'task-10')).not.toContain('配偶宫）相引');
+    expect(/配偶宫）(?:相合|冲动)/.test(loveOf(MALE, 'task-10'))).toBe(false);
   });
 
   /* ── 爱情句的吉凶取向必须按「配偶星自己落在哪一侧」写，而不是照抄本期整体档位 ─────────
@@ -242,7 +244,7 @@ describe('时段批断爱情小节的配偶星引动', () => {
         if (key === '临忌' || key === '向喜用') {
           expect(line, `${rec.id} ${row.ganZhi} 取向句没给出配偶星依据`).toMatch(/天干|本气/);
         }
-        if (key === '星本身未现') expect(line, `${rec.id} ${row.ganZhi}`).toContain('配偶宫）相引');
+        if (key === '星本身未现') expect(line, `${rec.id} ${row.ganZhi}`).toMatch(/配偶宫）(?:相合|冲动)/);
       }
     }
     for (const k of Object.keys(seen)) expect(seen[k], `句式「${k}」在两盘全流年里一次都没出现`).toBeGreaterThan(0);
@@ -358,7 +360,7 @@ describe('时段批断爱情小节的配偶星引动', () => {
     for (const row of n.annualFortunes ?? []) {
       const b = row.ganZhi[1];
       const vsDay = touched(b, n.pillars.day[1]);
-      const claims = loveOf(MALE, taskIdForYear(MALE, row.year)).includes('（配偶宫）相引');
+      const claims = /（配偶宫）(?:相合|冲动)/.test(loveOf(MALE, taskIdForYear(MALE, row.year)));
       // 与日支无冲合却声称动了配偶宫 = 松写法的形态；正确实现下恒不成立。
       expect(claims, `${row.year} ${row.ganZhi} 与日支${n.pillars.day[1]}无冲合却报配偶宫`).toBe(vsDay);
       if (!vsDay) found++;
