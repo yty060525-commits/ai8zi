@@ -6,6 +6,7 @@ import { clearChartCache } from '../../data/storageInfo';
 import { sanitizeAnalysisText } from '../chart/elements';
 import { isServerMode } from '../../data/serverClient';
 import { canBuildLocalAnalysis, ensureLocalChartComplete, isLocalSystemEnabled, localSystemUnlocked, subscribeLocalSystem } from '../../data/localSystem';
+import { deleteScopeNote, getScopeNote, NOTE_MAX_LEN, saveScopeNote } from '../../data/scopeNotes';
 import type { BaziRecord, BaziTaskResult, NonAiChart } from '../../types/domain';
 import { interpersonalZodiac, zodiacOfBranch } from '../../utils/interpersonal';
 
@@ -81,6 +82,39 @@ const fortuneMeta = (result: BaziTaskResult, record: BaziRecord): string => {
   }
   return [ganZhi, age].filter(Boolean).join(' · ');
 };
+/* ---------------- 逐条「点评」留言（本机私有，不进 record） ----------------
+   挂在每一条已完成的批断旁边：点开写、保存后收起并显示在该条下方。
+   为什么单独一个组件而不是把 textarea 直接铺在 summary 里 —— <summary> 是点击展开的开关，
+   里面任何输入框一聚焦就会连带折叠，手机上根本没法打字。所以整块放在 </details> 之后。
+   存储见 data/scopeNotes.ts：键带 recordId + taskId，绝不写进 record（那会同步上行、
+   还会被「复制全部」当成正文带走）。 */
+function NoteBox({ recordId, item, record }: { recordId: string; item: BaziTaskResult; record: BaziRecord }) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [error, setError] = useState<string>();
+  /* 每次渲染现读：点评写在 localStorage 里，不跟着 record 的 state 走；重开详情页也要能立刻看见。 */
+  const note = getScopeNote(recordId, item.task.taskId);
+  const scope = describeScope(item, record);
+  const start = () => { setDraft(note?.text ?? ''); setError(undefined); setOpen(true); };
+  const save = () => {
+    if (!saveScopeNote(recordId, item.task.taskId, draft)) { setError('这台设备存不下（存储空间满或浏览器隐私模式），文字没被保存。'); return; }
+    setOpen(false); setDraft('');
+  };
+  const remove = () => { deleteScopeNote(recordId, item.task.taskId); setOpen(false); setDraft(''); };
+  if (open) {
+    return <div className="note-editor">
+      <label className="note-label" htmlFor={'note-' + recordId + '-' + item.task.taskId}>给「{scope}」记一句点评（只存在这台设备上，不上传、不参与复制正文）</label>
+      <textarea id={'note-' + recordId + '-' + item.task.taskId} className="note-input" rows={3} maxLength={NOTE_MAX_LEN} value={draft} onChange={(e) => setDraft(e.target.value)} />
+      <p className="note-tools"><button type="button" className="text-button tiny note-save" onClick={save}>保存</button><button type="button" className="text-button tiny" onClick={() => setOpen(false)}>取消</button>{note && <button type="button" className="text-button tiny" onClick={remove}>删除这条点评</button>}<span className="note-count">{draft.length}/{NOTE_MAX_LEN}</span></p>
+      {error && <p className="form-error" role="alert">{error}</p>}
+    </div>;
+  }
+  return <p className="note-line">
+    {note ? <>我的点评：{sanitizeAnalysisText(note.text)}<button type="button" className="text-button tiny" onClick={start}>编辑</button></> : null}
+    <button type="button" className="text-button tiny note-open" onClick={start}>{note ? '改点评' : '点评'}</button>
+  </p>;
+}
+
 const describeScope = (result: BaziTaskResult, record: BaziRecord): string => {
   const task = result.task;
   if (task.type === 'decade') return decadeHeading(result, record);
@@ -659,9 +693,11 @@ function AIAnalysis({ record, showLocalSection, onUpdated }: { record: BaziRecor
           {items.map((item, idx) => {
             const analysis = item.analysis;
             const lead = analysis && (analysis.pattern || analysis.strength) ? <p className="scope-lead">格局：{sanitizeAnalysisText(analysis.pattern || '') || '—'} · 强弱：{sanitizeAnalysisText(analysis.strength || '') || '—'}　喜：{(analysis.usefulElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}　忌：{(analysis.avoidElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}</p> : null;
-            return <details key={group.key + '-' + idx} className="scope-item" open={group.key === 'baseline' && item.status === 'completed'}>
+            return <details key={group.key + '-' + idx} className="scope-item" open={item.task.taskId === 'task-01' || (group.key === 'baseline' && item.status === 'completed')}>
               <summary>{describeScope(item, record)}{item.source === 'local' ? <span className="local-dot" title="上次由本机规则引擎批断，可随时用云端重算覆盖" aria-label="本机批断" /> : null}<span className="scope-status">　{statusText[item.status === 'completed' ? 'completed' : item.status === 'failed' ? 'failed' : 'not_configured']}</span></summary>
               {item.status === 'completed' && analysis ? <div className="scope-body">{analysis.title ? <p className="scope-title"><strong>{sanitizeAnalysisText(analysis.title)}</strong></p> : null}{lead}<PointsView text={analysis.explanation} /></div> : item.status === 'failed' ? (busy ? <p className="retry-hint">该任务失败，正在自动重新调用 AI…</p> : <p className="form-error">自动重试多轮后仍失败：{safeAiError(item.error ?? '未知错误')}</p>) : item.status === 'not_configured' ? <p>未配置密钥，本项未生成。<button type="button" className="text-button chat-settings-link" onClick={openSettings}>去设置 ›</button></p> : null}
+              {/* 点评放在 </details> 之前、正文之后：只有真出了正文才值得留一句评价。 */}
+              {item.status === 'completed' && analysis ? <NoteBox recordId={record.id ?? ''} item={item} record={record} /> : null}
             </details>;
           })}
         </section>;
@@ -742,6 +778,7 @@ export function PersonDetail({ personId, onBack, refreshKey = 0 }: PersonDetailP
   if (!record) return <main className="person-detail placeholder-page"><header className="page-heading"><h1>人物详情</h1></header><p role="status">正在读取命盘…</p><button className="text-button" type="button" onClick={onBack}>返回记录</button></main>;
   const loadedRecord = record;
   const recordId = loadedRecord.id;
+  /* 点评的清理由 deleteBaziRecord 那条出口统一做（见 data/clientRepository.ts），这里不再各调一次。 */
   async function remove() { await deleteBaziRecord(recordId); setConfirmDelete(false); onBack(); }
   async function recalculateNonAi() {
     setNotice(undefined);

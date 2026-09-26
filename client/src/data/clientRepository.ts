@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { apiAdmin, apiRecords, getServerSession, isServerMode } from './serverClient';
 import { sqlMirror } from './offlineSql';
 import { ELEMENT_RULE_VERSION, countElements } from '../features/chart/elements';
+import { deleteScopeNotesForRecord } from './scopeNotes';
 import { DECADE_WINDOW_YEARS, analysisHorizon, buildBaziTasks } from './baziOrchestrator';
 import type { BaziTaskResult } from '../types/domain';
 
@@ -562,6 +563,10 @@ export const getBaziRecord = async (id: string): Promise<BaziRecord | undefined>
 };
 export const deleteBaziRecord = async (id: string): Promise<void> => {
   await baziRepository.deleteBaziRecord(id);
+  /* 点评存在本机 localStorage，不在 record 里 ⇒ 仓储那条删除链碰不到它。在这里一并清掉，
+     而不是让每个调用方各自记得调（漏一个就永远留下孤儿数据；记录页/详情页两处删除路径
+     将来还会再多，放在这条唯一的出口上才兜得住）。 */
+  deleteScopeNotesForRecord(id);
   if (serverActive() || (isTauri && isServerMode())) { try { await apiRecords.remove(id); } catch { /* 离线删除只影响本机 */ } }
 };
 

@@ -128,6 +128,14 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .copy-help { font-size: 12px; color: #777; margin: 6px 0 0; line-height: 1.5; }
 .copy-empty-hint { color: #999; font-size: 12px; line-height: 28px; }
 
+/* 逐条「点评」留言：纯白底 + 一条细线，与正文区分但不抢视觉。 */
+.note-line { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; margin: 6px 0 0; padding-top: 6px; border-top: 1px dashed #ddd; font-size: 13px; color: #444; }
+.note-editor { margin: 6px 0 0; padding-top: 6px; border-top: 1px dashed #ddd; }
+.note-label { display: block; font-size: 12px; color: #777; margin-bottom: 4px; }
+.note-input { width: 100%; box-sizing: border-box; border: 1px solid #999; background: #fff; color: #171717; font: inherit; font-size: 14px; padding: 8px; resize: vertical; }
+.note-tools { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin: 6px 0 0; }
+.note-count { font-size: 12px; color: #999; margin-left: auto; }
+
 
 
 /* ---- 记录小方格：勾选 + 打开按钮（导出批量） ---- */
