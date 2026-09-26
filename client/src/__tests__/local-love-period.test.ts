@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import type { BaziRecord } from '../types/domain';
+import { STEMS, ELEMENTS, HIDDEN_STEMS } from '../features/chart/elements';
 import { calculateNonAi, computePillarsFromDate } from '../features/chart/nonAiCalculator';
-import { buildLocalTaskAnalysis, LOCAL_ANALYSIS_ENGINE_VERSION } from '../data/localAnalysis';
+import { buildLocalAnalysis, buildLocalTaskAnalysis, LOCAL_ANALYSIS_ENGINE_VERSION } from '../data/localAnalysis';
 import { buildBaziTasks } from '../data/baziOrchestrator';
 
 const NOW = new Date('2026-09-26T06:00:00Z');
+/* jsdom 里 import.meta.url 不是 file: 协议，new URL(...) 会抛「URL must be of scheme file」，故用绝对路径。 */
+const PROBE_DIR = 'C:/Users/yty06/Documents/ai/bbazi/ai 8zi/ai 8zi/ai 8zi/client/.scratch/';
 const make = (year: number, month: number, day: number, hour: number, gender: 'male' | 'female'): BaziRecord => {
   const p = computePillarsFromDate({ year, month, day, hour });
   const nonAiResult = calculateNonAi({ birthYear: year, birthMonth: month, birthDay: day, ...p }, gender, NOW.toISOString());
@@ -41,6 +44,16 @@ const taskIdForYear = (rec: BaziRecord, year: number): string => {
  * 判据变了 ⇒ 规则引擎版本升到 local-rules-v3（下面 M7 那条钉子读真实文件字节把它钉住）：
  *   aiTasks 里 source==='local' 的存量正文会因此与新读数不一致，须重新生成一轮才更新；
  *   本机预览按钮每次点击现算、不落库，不受影响。
+ *
+ * —— 变异记录（.scratch/mutate-love2.py，11 个变异体，脚本尾行 RESTORED_IDENTICAL=True）——
+ *   杀红：M1 删地支途径 / M2 颠倒配偶组 / M4 只认存量十神字段 / M5 配偶组退成单五行 /
+ *         M6 忽略配偶宫途径 / M7 忘升版本 / M8·M9 把①②两路变量合并（侧别统计被兜底污染）/
+ *         M10 取向退回本期档位 / M11 星未现却写「被引动」。
+ *   存活：M3 松写法（整串 includes(日支)）。此前已用全空间比对证明它与逐对写法在 7920 行上
+ *         读数完全相同（.scratch 记录 pair_diff_count=0），故本套件对它**结构上不可能**变红，
+ *         这是一处已知覆盖盲区，不是「判据冗余可删」的证据。
+ *   M5 曾长期表现为「漏判掩盖」：它只杀掉依赖双元素的那两条用例，说明配偶组必须成对取的两个
+ *     五行里，阴那一侧单独出现的年份要专门钉（见「配偶组含阴阳两个五行」那条）。
  * ========================================================================== */
 // 乙卯日、男命：我克者土为妻星 → 配偶五行 = 戊/己；日支卯为配偶宫。
 const MALE = make(1986, 3, 12, 8, 'male');
@@ -116,6 +129,123 @@ describe('时段批断爱情小节的配偶星引动', () => {
     // 反例存在性：窗口里既有「动了配偶宫」的年份，也有没动却被松写法误报的年份（甲寅/丙午…）
     expect(palaceClaims).toBeGreaterThan(0);
     expect(loveOf(MALE, 'task-10')).not.toContain('配偶宫）相引');
+  });
+
+  /* ── 爱情句的吉凶取向必须按「配偶星自己落在哪一侧」写，而不是照抄本期整体档位 ─────────
+   * v3 首轮把三条途径并起来后一律用 verdict 定调，实测读数里出现两类自相矛盾：
+   *   · [task-07] strength="…喜忌并见（顺逆交参）" :: 妻星临忌被引动（流年天干辛为七杀、更与…相引）
+   *       —— 辛是七杀不是妻星，「临忌」说的是辛，读者却会以为妻星犯忌；
+   *   · [task-11] strength="…减力（逆）" :: 本期妻星被引动（更与…相引）且向喜用 …
+   *       —— 同一行刚说本期减力，这里又说向喜用。
+   * 现在按配偶星自身侧别分四档：偏喜 → 「且向喜用」；偏忌 → 「临忌被引动」；
+   * 同侧并见且本期减力 → 「气势有损、进展偏缓」；其余 → 中性那句。 */
+  const EL_OF = (gan: string) => ELEMENTS[STEMS.indexOf(gan) >> 1];
+  const MAIN_EL = (zhi: string) => {
+    const s = (HIDDEN_STEMS[zhi] ?? [])[0] ?? '';
+    return STEMS.includes(s) ? ELEMENTS[STEMS.indexOf(s) >> 1] : '';
+  };
+  /** 这盘的忌侧：日主乙木、档位中和偏旺 ⇒ 扶抑取比劫(木)与印(水)为忌。label 由下面钉子钉住。 */
+  const avoidOf = (): string[] => {
+    expect(MALE.nonAiResult!.pillars.day[0]).toBe('乙');
+    return ['木', '水'];
+  };
+  /** 独立复算 periodVerdict 的三档读数（同源口径：天干五行 + 地支本气五行）。 */
+  const verdictOf = (gz: string): '加力' | '减力' | '并见' => {
+    const els = [EL_OF(gz[0]), MAIN_EL(gz[1])].filter(Boolean);
+    const help = new Set(els.filter((e) => !avoidOf().includes(e)));
+    const harm = new Set(els.filter((e) => avoidOf().includes(e)));
+    return help.size > harm.size ? '加力' : harm.size > help.size ? '减力' : '并见';
+  };
+  /** 男命乙木：我克者为财。财组占**两个**相邻五行——乙下标0 ⇒ +2=土、+3=金，故妻星为「土、金」。
+   *   ⚠ 这里曾经只写「土」，是我这条复算自己错了（不是产品错）：辛金同属财组，
+   *     「辛亥年妻星被引动」在引擎里是对的，而错误的单元素预期把一条正确读数判成失败，
+   *     差点让我去改本就正确的产品码。十神分组恒为一对相邻五行，缺这一条即漏判。 */
+  const spouseElsOf = (): string[] => {
+    expect(MALE.nonAiResult!.pillars.day[0]).toBe('乙');
+    return ['土', '金'];
+  };
+  it('前提钉子：档位标签与逐年独立复算的加减力读数一致', () => {
+    expect(MALE.nonAiResult!.strengthScore?.label).toBe('中和偏旺');
+    // 忌侧复算与产品自己的 useful/avoid 字段一致（否则下面所有取向断言都建在错的前提上）
+    const a0 = buildLocalAnalysis(MALE, NOW)!;
+    expect([...a0.avoidElements].sort()).toEqual([...avoidOf()].sort());
+    const rows: string[] = [];
+    for (const id of ['task-02', 'task-03', 'task-04', 'task-05', 'task-06', 'task-07', 'task-08', 'task-09', 'task-10', 'task-11']) {
+      const task = buildBaziTasks(MALE, NOW).find((t) => t.taskId === id)!;
+      const row = MALE.nonAiResult!.annualFortunes.find((r) => r.year === task.year)!;
+      const a = buildLocalTaskAnalysis(MALE, task, NOW)!;
+      // 产品自己的读数（strength 字段）必须与我独立复算的一致，否则上面的复算不可信
+      const claimed = /本期(加力|减力|喜忌并见)/.exec(a.strength)?.[1];
+      const v = verdictOf(row.ganZhi);
+      rows.push(`${task.year} ${row.ganZhi} 复算=${v} 产品=${claimed}`);
+      expect(claimed, `${id} 复算与产品读数不一致：${row.ganZhi}`).toBe(v === '并见' ? '喜忌并见' : v);
+    }
+    writeFileSync(PROBE_DIR + 'love-verdict-nails.txt', rows.join('\n'), 'utf8');
+  });
+
+  it('爱情句的取向按配偶星自身侧别写：不许拿本期整体档位当配偶星吉凶', () => {
+    let neutral = 0, positive = 0;
+    const rows = MALE.nonAiResult!.annualFortunes;
+    for (const id of ['task-02', 'task-03', 'task-04', 'task-05', 'task-06', 'task-07', 'task-08', 'task-09', 'task-10', 'task-11']) {
+      const line = loveOf(MALE, id);
+      const year = buildBaziTasks(MALE, NOW).find((t) => t.taskId === id)!.year!;
+      const row = rows.find((r) => r.year === year)!;
+      // 配偶星自己落在哪一侧（独立复算：只看属妻星的那几个字，不看整期）
+      const els = [EL_OF(row.ganZhi[0]), MAIN_EL(row.ganZhi[1])].filter(Boolean);
+      const sHelp = new Set(els.filter((e) => spouseElsOf().includes(e) && !avoidOf().includes(e)));
+      const sHarm = new Set(els.filter((e) => spouseElsOf().includes(e) && avoidOf().includes(e)));
+      if (line.includes('且向喜用')) {
+        expect(sHelp.size, `${id} ${row.ganZhi} 配偶星不在喜侧却写了「向喜用」`).toBeGreaterThan(0);
+        expect(sHarm.size, `${id} ${row.ganZhi} 配偶星也落在忌侧，不许一面倒写成「向喜用」`).toBe(0);
+        positive++;
+      }
+      if (line.includes('临忌被引动')) {
+        expect(sHarm.size, `${id} ${row.ganZhi} 配偶星不在忌侧却写了「临忌」`).toBeGreaterThan(0);
+        expect(sHelp.size, `${id} ${row.ganZhi} 配偶星也落在喜侧，不许一面倒写成「临忌」`).toBe(0);
+        positive++;
+      }
+      if (line.includes('逢引动')) {
+        expect(sHelp.size, `${id} ${row.ganZhi} 配偶星明显在喜侧却走了中性句`).not.toBeGreaterThan(sHarm.size);
+        expect(sHarm.size, `${id} ${row.ganZhi} 配偶星明显在忌侧却走了中性句`).not.toBeGreaterThan(sHelp.size);
+        neutral++;
+      }
+      if (line.includes('喜忌同临')) neutral++;
+      // 引动句与未引动句互斥：写了依据就不许再来一句「未受特别引动」。
+      //   判据取「（」是因为引动句必带依据括号，而 boilerplate 那句没有——别用「引动」二字，
+      //   「未受特别引动」自己就含它（第一版这么写，恒真）。
+      if (line.includes('（')) expect(line, `${id} ${row.ganZhi}`).not.toContain('未受特别引动');
+    }
+    // 各形态都必须真的出现，否则这条测的是空集（恒真断言）
+    expect(positive, '窗口里没有「向喜用」句').toBeGreaterThan(0);
+    expect(neutral, '窗口里没有中性分支句式 ⇒ 侧别相抵/星未现的分支没被覆盖').toBeGreaterThan(0);
+  });
+
+  it('四种取向句式在真实盘上全部可达，且每一句的措辞与其自身依据相符', () => {
+    // 男命十年窗口只出得了「向喜用／宫动星未现／未引动」三种，「临忌」与「喜忌同临」必须换盘才可达
+    // （实测见 .scratch/love-orient.txt）。所以这里枚举两盘×全流年，而不是拿一个窗口硬凑。
+    const FEMALE = make(1990, 6, 15, 10, 'female');   // 辛亥日：克我者火为官杀，身弱
+    const seen: Record<string, number> = { 向喜用: 0, 临忌: 0, 喜忌同临: 0, 星本身未现: 0, 未受特别引动: 0 };
+    for (const rec of [MALE, FEMALE]) {
+      for (const t of buildBaziTasks(rec, NOW)) {
+        if (t.type !== 'annual') continue;
+        const row = rec.nonAiResult!.annualFortunes.find((r) => r.year === t.year)!;
+        const a = buildLocalTaskAnalysis(rec, t, NOW)!;
+        const line = (/【爱情】\n([\s\S]*?)(?:\n【|$)/.exec(a.explanation)?.[1] ?? '').trim();
+        const key = ['向喜用', '临忌', '喜忌同临', '星本身未现', '未受特别引动'].find((k) => line.includes(k));
+        if (!key) continue;
+        seen[key]++;
+        // 措辞与依据相符：偏喜句不许提忌、偏忌句不许提喜、中性句不许一面倒。
+        if (key === '向喜用') expect(line, `${rec.id} ${row.ganZhi}`).not.toContain('波折');
+        if (key === '临忌') expect(line, `${rec.id} ${row.ganZhi}`).not.toContain('机会增多');
+        if (key === '喜忌同临') expect(line, `${rec.id} ${row.ganZhi}`).toContain('进退');
+        // 「临忌／向喜用」两句都必须点出配偶星自己的字；只有纯宫位引动才走「星本身未现」。
+        if (key === '临忌' || key === '向喜用') {
+          expect(line, `${rec.id} ${row.ganZhi} 取向句没给出配偶星依据`).toMatch(/天干|本气/);
+        }
+        if (key === '星本身未现') expect(line, `${rec.id} ${row.ganZhi}`).toContain('配偶宫）相引');
+      }
+    }
+    for (const k of Object.keys(seen)) expect(seen[k], `句式「${k}」在两盘全流年里一次都没出现`).toBeGreaterThan(0);
   });
 
   it('正文零拉丁字母、零半角括号（仓库硬约束，新增句式也要过）', () => {

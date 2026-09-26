@@ -588,10 +588,26 @@ function buildPeriodAnalysis(core: Core, period: FortunePeriod | NonAiChart['gre
     const why = [movedByStem ? `${scopeWord}天干${pStem}为${tenGod || stemGodOf(core.dayStem, pStem)}` : '',
       movedByBranch ? `${scopeWord}地支${pBranch}所藏本气${bMainStem}亦${spouseGroup}之星` : '',
       palaceTouched ? `更与本命日支${dayBranch}（配偶宫）相引` : ''].filter(Boolean).join('、');
+    // ── 取向判据（v3 第二轮，被一条实测读数纠正后写下）────────────────────────────────
+    //   第一版直接拿本期整体档位 verdict 定调，读数是：2031 辛亥年「妻星…且向喜用」，
+    //   而辛亥两个字里辛=金(喜)、亥藏壬=水(忌)，**土这个妻星一个字都没出现**——
+    //   那句吉凶结论压根没有配偶星参与，是凭空的硬断。所以侧别只统计配偶星自己的字。
+    //   ①②两路各有专属变量（stemEl / branchEl），不许合并成一个数组喂给两条判据；
+    //     否则 movedByStem 的五行兜底会经 branchEl 漏进侧别统计（M8 变异体即为此准备）。
+    const spouseHelp = [movedByStem ? stemEl : '', movedByBranch ? branchEl : '']
+      .filter((e) => !!e && core.useful.includes(e));
+    const spouseHarm = [movedByStem ? stemEl : '', movedByBranch ? branchEl : '']
+      .filter((e) => !!e && core.avoid.includes(e));
     const loveLine = (movedByStem || movedByBranch || palaceTouched)
-      ? (verdict === '加力'
+      ? (spouseHelp.length > 0 && spouseHarm.length === 0
         ? `本期${spouseLabel}被引动（${why}）且向喜用，感情机会增多、利婚恋推进，单身者宜主动把握。`
-        : `${spouseLabel}临忌被引动（${why}），感情易生波折，沟通须柔、忌逞强硬碰。`)
+        : spouseHarm.length > 0 && spouseHelp.length === 0
+          ? `${spouseLabel}临忌被引动（${why}），感情易生波折，沟通须柔、忌逞强硬碰。`
+          : spouseHelp.length > 0
+            ? `${spouseLabel}逢引动（${why}），喜忌同临于妻夫之宫，进退随具体事而分——主动沟通则顺，逞强争执则滞。`
+            : palaceTouched
+              ? `${spouseLabel}逢引动（${why}），本期夫妻宫被牵动而星本身未现，感情易起变化，多沟通、少揣测即可。`
+              : `${spouseLabel}逢引动（${why}），本期气势${VERDICT_WORD[verdict]}，星与宫之吉凶须就事论之，主动沟通则顺。`)
       : spouseClash ? '配偶宫逢冲，感情聚少离多或起变化，多包容体谅则无大碍。' : '感情宫位未受特别引动，以平常心维持既有关系即可。';
     add('爱情', [loveLine]);
   }
