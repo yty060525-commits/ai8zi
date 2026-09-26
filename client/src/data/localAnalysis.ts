@@ -285,9 +285,11 @@ export function buildLocalAnalysis(record: BaziRecord, now: Date = new Date()): 
     }
     if (n.tiaohouFacts) {
       const th = summarizeTiaohou(n.tiaohouFacts);
-      /* 严冬而局中无火、盛夏而局中无水时，「调候非急」这句季节通义与本命实际气候相反（全空间枚举
-         120 组里 27 组方向冲突，见 .scratch/sweep-tiaohou-conflict.cjs）。那种盘不端「非急」，
-         改为如实交代两源分歧 + 仍以扶抑为准；喜忌本身一个字都不改（三端提示词通则一致要求扶抑定纲）。 */
+      /* 严冬而局中无火、盛夏而局中无水时，「调候非急」这句季节通义与本命实际气候相反。那种盘不端
+         「非急」，改为如实交代两源分歧 + 仍以扶抑为准；喜忌本身一个字都不改（三端提示词通则一致要求
+         扶抑定纲）。冲突面按档位算（.scratch 枚举脚本，读的是 nonAiCalculator 那两张表本体）：
+         夏冬两季各日主共 60 组，身强档 30 组取向有出入(夏 18/冬 12)、身弱档 45 组(冬 24/夏 21)；
+         其中「所需之气本就是喜用、只有《穷通》辅佐干撞忌神」的占 6/9 组 —— 故措辞不许一律称相反。 */
       const season = seasonOfTiaohou(n.tiaohouFacts);
       const need = climateDeficient(season, n.elementRatio ?? {});
       if (!need || !useful.length) { if (th) points.push(`调候参考：${th}，惟此为辅助判据，须与格局扶抑合参。`); }
