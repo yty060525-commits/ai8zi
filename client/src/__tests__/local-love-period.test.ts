@@ -41,7 +41,7 @@ const taskIdForYear = (rec: BaziRecord, year: number): string => {
  *     ③ 本期地支与本命日支（配偶宫）逢冲/三合/六合：41.8%
  *     并集 60.6%，即旧写法把 40.6% 的引动年一律写成「感情宫位未受特别引动」。
  * 夹具不手拼干支（会抛「该月找不到与这三部命盘对应的日期」），一律 computePillarsFromDate 现排。
- * 判据变了 ⇒ 规则引擎版本升到 local-rules-v3（下面 M7 那条钉子读真实文件字节把它钉住）：
+ * 判据变了 ⇒ 规则引擎版本升到 local-rules-v4（下面 M7 那条钉子读真实文件字节把它钉住）：
  *   aiTasks 里 source==='local' 的存量正文会因此与新读数不一致，须重新生成一轮才更新；
  *   本机预览按钮每次点击现算、不落库，不受影响。
  *
@@ -62,13 +62,13 @@ describe('时段批断爱情小节的配偶星引动', () => {
      `expect(LOCAL_ANALYSIS_ENGINE_VERSION).toBe('local-rules-v3')` 是同义反复——改判据却忘了升版本时
      它照样绿（常量与被断言的值是同一个来源）。这里断的是源文件里那一行写的是什么。 */
   const SRC_FILE = 'C:/Users/yty06/Documents/ai/bbazi/ai 8zi/ai 8zi/ai 8zi/client/src/data/localAnalysis.ts';
-  it('改了爱情判据就必须升引擎版本：源文件里那行写的是 v3（M7 变异体在此转红）', () => {
+  it('改了爱情判据就必须升引擎版本：源文件里那行写的是 v4（M7 变异体在此转红）', () => {
     const raw = readFileSync(SRC_FILE, 'utf8').replace(/\r\n/g, '\n');
     const m = /^export const LOCAL_ANALYSIS_ENGINE_VERSION = '([^']+)';$/m.exec(raw);
     // 前提钉子：这一行必须存在且唯一，否则下面的断言是空的
     expect(m).not.toBeNull();
     expect(raw.match(/LOCAL_ANALYSIS_ENGINE_VERSION = '/g)).toHaveLength(1);
-    expect(m![1]).toBe('local-rules-v3');
+    expect(m![1]).toBe('local-rules-v4');
     // 交叉核对：源文件那行与模块导出的常量同源（防止有人另抄一份字面量）
     expect(LOCAL_ANALYSIS_ENGINE_VERSION).toBe(m![1]);
   });

@@ -66,6 +66,45 @@ describe('本地离线批断引擎(第四路)', () => {
     expect(r.explanation).toContain('【刑冲克害批注】');
   });
 
+  /* 「命局病处在于…（尾巴）」的三条活分支。穷举 2484 盘实测只有这三种形态会出现，
+     其余分支(占比读数)因门槛永不满足已删；下面的日期即探针里取到的真盘，句子逐字照抄。 */
+  describe('病处句的尾巴分支', () => {
+    const tailOf = (input: Parameters<typeof calculateNonAi>[0]) => {
+      const r = buildLocalAnalysis(asRecord(input, 'male'))!;
+      const sent = /净分[^。]*。/.exec(r.explanation)?.[0] ?? '';
+      return { sent, body: /命局病处在于([^。]*)。$/.exec(sent)?.[1] ?? '' };
+    };
+
+    it('同侧只剩病处一组：报「独占此侧X成」而不复述忌神', () => {
+      const { body } = tailOf({ birthYear: 1980, birthMonth: 1, birthDay: 3, yearPillar: '己未', monthPillar: '丙子', dayPillar: '乙亥', hourPillar: '壬午' });
+      expect(body).toBe('食伤太旺泄身过重，兼有财星耗身、任财不易（病处独占此侧一成）');
+    });
+
+    it('病处两组皆忌且另有忌组：定性为忌神之所在并报次之', () => {
+      const { body } = tailOf({ birthYear: 1980, birthMonth: 1, birthDay: 14, yearPillar: '己未', monthPillar: '丁丑', dayPillar: '丙戌', hourPillar: '甲午' });
+      expect(body).toBe('食伤太旺泄身过重，兼有财星耗身、任财不易（此即忌神之所在，官杀次之）');
+    });
+
+    it('正文不出现已删的占比措辞，也不出现自相矛盾的「零…成」', () => {
+      for (const d of [[1980, 1, 3], [1980, 1, 14], [1984, 2, 15], [1992, 7, 9]]) {
+        const { sent } = tailOf({ birthYear: d[0], birthMonth: d[1], birthDay: d[2], yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午' });
+        expect(sent).toBeTruthy();
+        expect(sent).not.toContain('两组合计');
+        expect(sent).not.toMatch(/独占此侧零/);
+      }
+    });
+
+    it('日主不得占掉病处名额：助身方排名含日主时仍按两组定性', () => {
+      /* 1973-1-16 壬子日身强，助身方权重排名是「比劫 > 日主 > 印」。日主虽计在助身方，
+         却不是病处；若让它吃掉一个名额，句中只会剩「比劫结党」一组、印被挤成余组。
+         实测该网格内此类盘有 41 个，故必须专门钉住。 */
+      const { body } = tailOf({ birthYear: 1973, birthMonth: 1, birthDay: 16, yearPillar: '壬子', monthPillar: '癸丑', dayPillar: '壬子', hourPillar: '丙午' });
+      expect(body).toBe('比劫结党、分夺财星，兼有印绶太过、反掩秀气');
+      // 反向钉子：日主本身绝不能被写进病处句。
+      expect(body).not.toContain('日主');
+    });
+  });
+
   it('缺排盘数据时返回空、按钮应禁用(不编造批断)', () => {
     const bare = { ...chart, nonAiResult: undefined } as BaziRecord;
     expect(canBuildLocalAnalysis(bare)).toBe(false);

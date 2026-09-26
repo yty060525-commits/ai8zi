@@ -22,7 +22,7 @@ import type { BaziAIAnalysis, BaziAnalysisTask, BaziRecord, FortunePeriod, NonAi
 
 /* v3：爱情引动判据由「只看本期天干十神」扩成三条途径（天干／地支本气／配偶宫逢冲合），
    「未受特别引动」的覆盖面从约 80% 降到约 39%。只改断语措辞与判据，不改喜忌五行结论。 */
-export const LOCAL_ANALYSIS_ENGINE_VERSION = 'local-rules-v3';
+export const LOCAL_ANALYSIS_ENGINE_VERSION = 'local-rules-v4';
 
 /** 引擎可复算、无需外部输入的最小事实来源；缺排盘数据时上层据此禁用按钮。 */
 /* 判据已搬到 data/localSystem.ts（见那里的 canBuildLocalAnalysis）：调用方在页面加载阶段
@@ -69,6 +69,13 @@ export const groupElements = (dayIdx: number, group: string): string[] => {
 
 /** 数字 → 中文读法(含负号与一位小数)，用于把旺衰评分写成「二十八点八」这类白话。 */
 const CN_DIGITS = '零一二三四五六七八九';
+/** 中文读数 → 数字(支持「八」「十」「八十」「九十点五」)。 */
+export function cnToNum(s: string): number | null {
+  const m = /^([零一二三四五六七八九]?十)?([零一二三四五六七八九])?(?:点([零一二三四五六七八九]))?$/.exec(s);
+  if (!m || (m[1] === undefined && m[2] === undefined)) return null;
+  const tens = m[1] === undefined ? 0 : m[1] === '十' ? 10 : CN_DIGITS.indexOf(m[1][0]) * 10;
+  return tens + (m[2] === undefined ? 0 : CN_DIGITS.indexOf(m[2])) + (m[3] === undefined ? 0 : CN_DIGITS.indexOf(m[3]) / 10);
+}
 function cnNum(value: number): string {
   const neg = value < 0;
   const abs = Math.abs(value);
@@ -242,10 +249,14 @@ function deriveUsefulAvoid(dayIdx: number, label?: string, special?: string): { 
   return { useful: uniq([g('印'), g('比劫')]), avoid: uniq([g('财'), g('官杀'), g('食伤')]) };
 }
 
-/** 命局「病处」：取克泄耗方权重最大的一组十神来定性(身强则取助身方)。 */
-function ailment(score: NonAiChart['strengthScore'], label: string): string {
+/** 命局「病处」：取克泄耗方权重最大的一组十神来定性(身强则取助身方)。
+ *  另回传「入句各组」「同侧其余**有名目且有权重**的组」及该侧力量总和，供上层把主次写成读数。
+ *  「日主」也进 detail 且算在助身方，但它不是病处，故先滤掉无名目的组再取前二；
+ *  sideTotal 仍含它，占比读数才是完整的该侧力量。 */
+function ailment(score: NonAiChart['strengthScore'], label: string): { phrase: string; groups: string[]; namedWeight: number; restGroups: string[]; sideTotal: number } {
   const detail = score?.detail ?? [];
-  if (!detail.length) return label === '身弱' ? '泄耗过重、日主孤弱' : label === '身强' ? '生扶太过、旺而无制' : '攻耗与生扶大致相衡';
+  const empty = { groups: [], namedWeight: 0, restGroups: [], sideTotal: 0 };
+  if (!detail.length) return { ...empty, phrase: label === '身弱' ? '泄耗过重、日主孤弱' : label === '身强' ? '生扶太过、旺而无制' : '攻耗与生扶大致相衡' };
   const wantSide = label === '身强' || label === '中和偏旺' ? 'support' : 'drain';
   const byGroup: Record<string, number> = {};
   for (const d of detail) {
@@ -253,13 +264,32 @@ function ailment(score: NonAiChart['strengthScore'], label: string): string {
     const grp = TEN_GOD_GROUP[d.tenGod] ?? d.tenGod;
     byGroup[grp] = (byGroup[grp] ?? 0) + (d.weight ?? 0);
   }
-  const ranked = Object.entries(byGroup).sort((a, b) => b[1] - a[1]).map(([g]) => g).filter(Boolean);
-  const phrase: Record<string, string> = {
+  // 权重并列时按固定次序取名目，否则 Object.entries 的插入序会随四柱而变，同一盘换台机器就换措辞。
+  const PHRASE_ORDER = ['食伤', '财', '官杀', '比劫', '印'];
+  const cmp = (x: [string, number], y: [string, number]) =>
+    (y[1] !== x[1] ? y[1] - x[1] : PHRASE_ORDER.indexOf(y[0]) - PHRASE_ORDER.indexOf(x[0]));
+  const ranked = Object.entries(byGroup).sort(cmp).map(([g]) => g).filter(Boolean);
+  const phraseMap: Record<string, string> = {
     食伤: '食伤太旺泄身过重', 财: '财星耗身、任财不易', 官杀: '官杀攻身、压力沉重',
     比劫: '比劫结党、分夺财星', 印: '印绶太过、反掩秀气',
   };
-  const parts = ranked.slice(0, 2).map((g) => phrase[g]).filter(Boolean);
-  return parts.length ? parts.join('，兼有') : (label === '身弱' ? '泄耗过重、日主孤弱' : '生扶太过、旺而无制');
+  const w = (g: string) => byGroup[g] ?? 0;
+  const sum = (gs: string[]) => Math.round(gs.reduce((a, g) => a + w(g), 0) * 10) / 10;
+  /* 必须先滤掉无名目的组再取前二：「日主」也计在助身方且权重不低，若让它占掉一个名额，
+     句里只剩一组病处、下一名却仍被报成「次之」，主次读数和占比全跟着错位。 */
+  const namedRanked = ranked.filter((g) => g in phraseMap);
+  const top = namedRanked.slice(0, 2);
+  const parts = top.map((g) => phraseMap[g]).filter(Boolean);
+  if (!parts.length) return { ...empty, phrase: label === '身弱' ? '泄耗过重、日主孤弱' : '生扶太过、旺而无制' };
+  // namedRanked 已按权重降序，故掉出前二的即同侧余组。
+  return {
+    phrase: parts.join('，兼有'), groups: top, namedWeight: sum(top),
+    // 余组只留**有名目且有力量**的：印绶权重为 0 时说「独占此侧一成」才不与之自相矛盾。
+    restGroups: namedRanked.slice(2).filter((g) => w(g) > 0),
+    // 分母取该侧全部力量(含「日主」)，故用 sideTotal 而非具名组之和——namedWeight+restWeight
+    // 会漏掉日主的 6 分，把独占读数抬到 1.0、让「低于一成则不报」的闸门永不触发。
+    sideTotal: sum(ranked),
+  };
 }
 
 /** 主入口：由记录算出本地批断；无排盘数据返回 null。 */
@@ -295,7 +325,36 @@ export function buildLocalAnalysis(record: BaziRecord, now: Date = new Date()): 
     if (score && dayElement) {
       points.push(`日主${dayStem}${dayElement}生于${monthBranch ?? '月令'}月，${score.inSeason ? '得令而当旺' : '不得令'}，${score.monthHasSupport ? '月支藏干见印比通根之助' : '月支藏干中未见印比通根之助'}。`);
       points.push(`助身方（比劫与印）合计${cnNum(score.support)}，克泄耗方（食伤、财与官杀）合计${cnNum(score.drain)}。`);
-      points.push(`净分${cnNum(score.net)}，档位判为${label}；命局病处在于${ailment(score, label)}。`);
+      const ail = ailment(score, label);
+      /* 「某组是否被划为忌」必须比对 deriveUsefulAvoid 写进 avoid 的那个字：它按整组只取
+         rel(dayIdx, GROUP_OFFSET[g]) 的**首字**入表，而一组占两个相邻五行、第二字未必在表里。
+         拿 groupElements 的两个字求交来判会得出相反结论。 */
+      const isAvoidGroup = (g: string) => avoid.includes(rel(dayIdx, GROUP_OFFSET[g]));
+      const restNamed = ail.restGroups.length > 0;   // ailment 已滤掉「日主」这类无名目的组
+      /* cnNum 只到两位数(≥100 会原样吐出阿拉伯数字)，故先把占比折成「几点几成」再转中文。
+         旧版另有一句「两组合计约占该侧力量X成」：病处取该侧权重最大的**两**组，同侧只要还有
+         第三组可报，占比就必低于十成、写出来毫无信息量，实测 2484 盘 cheng 最大 1.0 而门槛是
+         8，从不触发，已删。 */
+      const chengTxt = cnNum(ail.sideTotal > 0 ? Math.round((ail.namedWeight / ail.sideTotal) * 10) / 10 : 0);
+      const tailParts: string[] = [];
+      /* 余组一侧仍逐组判忌。扶抑口径下病处所取的一侧几乎整侧皆忌(身强取印比、身弱取食伤财官杀)，
+         故 filter(isAvoidGroup) 与不过滤在实测里等价——7344 盘枚举下来，唯一一组「avoid 只列一组」的
+         专旺候选盘(1966-10-26 戊午忌木)其同侧余组为空、根本不进这条分支，因此这层过滤目前杀不掉
+         (变异 P1 两端全绿)。它是防御性代码：若将来改喜忌口径使某侧出现非忌余组，去掉它会误报「次之」。 */
+      const restAvoid = ail.restGroups.filter(isAvoidGroup);
+      if (!restNamed) {
+        /* 同侧只剩这一组：说「此即忌神之所在」等于把下一句的「忌X」重讲一遍，改口报独占比重。
+           判据用**渲染出来的读数**而不是另算一个比值：低于一成时中文写成「零点几成」，
+           「病处独占此侧零点二成」自己就反驳了「独占」二字，故宁可不报。真实命局最低 0.8 成。 */
+        if (!chengTxt.startsWith('零')) tailParts.push(`病处独占此侧${chengTxt}成`);
+      } else if (ail.groups.length && ail.groups.every(isAvoidGroup)) {
+        tailParts.push('此即忌神之所在');
+        if (restAvoid.length) tailParts.push(`${restAvoid.join('、')}次之`);
+      } else if (restAvoid.length) {
+        tailParts.push(`${restAvoid.join('、')}次之`);
+      }
+      const tail = tailParts.length ? `（${tailParts.join('，')}）` : '';
+      points.push(`净分${cnNum(score.net)}，档位判为${label}；命局病处在于${ail.phrase}${tail}。`);
     }
     if (dayIdx >= 0 && (useful.length || avoid.length)) {
       const principle = pattern?.special?.startsWith('从格') ? '弃命从其旺势，宜顺势不宜扶身'
