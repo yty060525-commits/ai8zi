@@ -123,10 +123,14 @@ function natalFacts(record: BaziRecord): string[] {
      再乘一次会显示成「2500%」。
    变异验证（P1）：把这句改成**干脆不乘**（直接端出 0.25），现测 25 条用例全绿 —— 因为本盘四柱没有配比恰为 0 的五行，
      「缺 X」那半句两条路径都不出现，其余读数又相同，属**等价形态下的覆盖不足**，不是这行写错了。
-     ⚠ 上面那段注释里「只删 Math.round 能杀掉」的说法是**没验过的推断，而且是错的**：本轮按它重跑 P1
+     ⚠ 上面两段注释里「只删 Math.round 能杀掉」的说法是**没验过的推断，而且是错的**：本轮按它重跑 P1
      （整句去掉 Math.round，0.375 → 显示 37.5%）实测 `Tests 25 passed (25)`、VERDICT_FAILED=0_KILLED=false。
-     ⇒ 缺口比原先记的更宽：`pct()` 这一整句在现有用例下**怎么改都不红**。真要补强判据，得加一条
-     「某五行配比为 1/8 ⇒ 文案必须是 13%」的正例（既钉住乘 100，也钉住取整口径）；这里先如实记下这个盲区。 */
+     ⇒ 当时缺口比原先记的更宽：`pct()` 这一整句在现有用例下**怎么改都不红**。
+  ✅ 2026-09-26 该盲区已闭合：新增 `src/__tests__/local-chat-ratio.test.ts`（夹具 乙卯 丁亥 庚午 壬午，
+     金=1/8、土=0），两种坏形态都实测杀得掉：
+       · 不乘 100 → `五行配比：木 0.25%·火 0.375%·土 0%·金 0.125%…`，`Tests 1 failed | 19 passed (20)`；
+       · 去掉 Math.round → 印 12.5%，`Tests 1 failed | 1 passed (2)`。
+     ⚠ 那条用例的问句换成「泛问/喜用/带年份」就走不到这里（分支钉子见该文件注释），动分支顺序要连它一起看。 */
   const pct = (e: string): number => Math.round((counted.elementRatio?.[e] ?? 0) * 100);
   const ratio = ELEMENT_ORDER.map((e) => e + ' ' + pct(e) + '%').join('·');
   const lacking = ELEMENT_ORDER.filter((e) => pct(e) === 0);
