@@ -41,6 +41,43 @@ export interface LuckStart {
   date: string;
 }
 
+/** 该年 m 月的最后一天(m 为 1~12，跨年由调用方先归一)。 */
+const daysInMonth = (y: number, m: number) => new Date(Date.UTC(y, m, 0)).getUTCDate();
+
+/** 公历日期加减「年/月」：与库 Solar.nextYear/nextMonth 同口径 —— 先落整年、再落整月，
+ *  日号超出**目标月**真长度时钳到月末(不是滚进下月；库对二月还单独按闰年钳 28)。 */
+function shiftYmd(y: number, m: number, d: number, years: number, months: number): [number, number, number] {
+  let yy = y + years;
+  const total = (m - 1) + months;
+  let mm = ((total % 12) + 12) % 12 + 1;
+  yy += Math.floor(total / 12);
+  if (mm === 2 && d > 28 && !((yy % 4 === 0 && yy % 100 !== 0) || yy % 400 === 0)) d = 28;
+  else if (d > daysInMonth(yy, mm)) d = daysInMonth(yy, mm);
+  return [yy, mm, d];
+}
+
+/** 在给定公历日期上加减起运跨度「年/月/日」，得交运日。库的 getStartSolar 就是这几步，
+ *  但**每一步都在整数日历上走**：nextYear → nextMonth(溢出钳到目标月末) → next(startDay)。
+ *  ⚠ 两处踩过坑，都实测过：
+ *   1. 最后加的是跨度里的**天数本身**，不是折成 3 倍 —— 那个余数是时辰差折算的，已按月进过位，
+ *      再乘 3 会偏出两个月。
+ *   2. 钳制必须按目标月真长度。上一版写成「钳回 min(原日号,28)」，只在没溢出时才等价，月末出生全踩：
+ *      生 1957-12-31 男，跨度 7年11月10日 → 加年月落 1965-11-31(溢出)，库钳到 11-30 再加 10 天 = 1965-12-10；
+ *      旧写法钳成 11-28 得 1965-12-08，且条件此时压根不触发。穷举 864 例错 9 例，全是 31 日生。
+ *  跨度本身仍向库取(getStartYear/Month/Day)：它的 dayDiff 走的是「年内序号相减」
+ *  (SolarUtil.getDaysBetween)，跨年的 12-31 与 1-1 会算成相邻、把闰日漏掉，那是库自己的口径，
+ *  我们复现它而不是纠正它 —— 否则交运日与库对不上，用户看到的就不是排盘软件给的那一步运。 */
+function addLuckSpan(y: number, m: number, d: number, years: number, months: number, days: number): Date {
+  const [sy, sm, sd] = shiftYmd(y, m, d, years, months);
+  // 从「出生日 + 跨度年月」这个锚点起，再加跨度里剩的天数(库 Solar.next 的滚月方式)。
+  const out = new Date(Date.UTC(sy, sm - 1, sd));
+  out.setUTCDate(out.getUTCDate() + days);
+  return out;
+}
+
+const pad2 = (n: number) => String(n).padStart(2, '0');
+const formatYmd = (d: Date) => `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+
 /** 起运推算：顺行取出生后下一个节、逆行取出生前上一个节，距离按每 3 天折 1 年、
  *  每 1 天折 4 个月(流派1)。方向由库按性别+年干阴阳自定，故此处不传方向。
  *  失败(极端日期/库异常)返回 null，让调用方走兜底而不是抛错打断排盘。 */
@@ -58,9 +95,7 @@ function computeLuckStart(at: ReturnType<typeof Solar.fromYmdHms>, gender: Gende
   } catch { return null; }
 }
 
-/** 公历日期落在哪一「干支年」：立春(含当天)起算新一年，之前属上一年。
- *  固定按 2/4 判定 —— 实测各年立春只在 2/3~2/5 之间，而起运日期由「出生日 + 折年数」
- *  得到、跨度以年计，±1 天的误差不会改变大运段的十年归属，故无需引入学交节时刻。 */
+/** 公历日期落在哪一「干支年」：立春(含当天)起算新一年，之前属上一年。 */
 function ganzhiYearOf(date: string): number | undefined {
   const m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(date);
   if (!m) return undefined;
@@ -736,14 +771,22 @@ export function calculateNonAi(
     });
   });
 
-  // 大运：月柱序数沿顺逆每次 ±1(十年一柱)，起点＝起运那一年的干支年。
+  // 大运：月柱序数沿顺逆每次 ±1(十年一柱)，起点＝交运那一天所在的公历年。
   // 旧实现把第 0 步对齐到「当前所处的公历十年」，于是干支↔年份的对应随时间漂移，
   // 任何人看到的「丁卯运 2020-2029」都不是这个人的丁卯运。现按经典起运排定。
   const monthIndex = gzIndex(input.monthPillar);
   const step = forward ? 1 : -1;
-  const luckYear = luckStart ? ganzhiYearOf(luckStart.date) : undefined;
+  /* 这里**故意不用** ganzhiYearOf(立春归整)。曾经用过，代价是实测 510 个盘里 49 个(9.6%)
+     的起运年被整年挪到上一年 —— 交运日落在 1 月或 2/4 之前的都被算早一年，区间整体偏移；
+     其中今年所处的那一步运被报错的有 3 例(0.6%，如交运 1977-01-25 者，2026 年实走甲寅运
+     却被报成下一柱)。岁运论的是「哪一年到哪一步运」，公历年边界已经够粗，再往前提一年就纯失真。 */
+  /* 精确交运日 luckOnset：由出生时刻 + 起运跨度(年/月/日)按库的同一口径自算，与库的
+     getStartSolar 互校 510 例逐日相同。分段边界取它的**公历年**：流年数组按立春锚定整年排，
+     若让大运段切在年中就会出现「一年同时属两步运」，大运任务与覆盖年检索各挑一柱而自相矛盾。 */
+  const luckOnset = luckStart ? formatYmd(addLuckSpan(candidate.getYear(), candidate.getMonth(), candidate.getDay(), luckStart.years, luckStart.months, luckStart.days)) : undefined;
+  const luckYear = luckOnset ? Number(/^(\d{4})/.exec(luckOnset)?.[1]) : undefined;
   // 兜底：万一取不到起运(库异常)，退回旧的十年边界锚点，至少不丢时段任务。
-  const firstStartYear = luckYear ?? Math.floor(currentYear / 10) * 10;
+  const firstStartYear = Number.isFinite(luckYear) ? luckYear! : Math.floor(currentYear / 10) * 10;
   const greatFortunes = Array.from({ length: GREAT }, (_, k) => {
     const ganZhi = gzAt(monthIndex + step * (k + 1));
     const startYear = firstStartYear + k * 10;
@@ -783,6 +826,7 @@ export function calculateNonAi(
     tenGodDetails,
     greatFortunes,
     luckStart,
+    luckOnset,
     annualFortunes,
     monthlyFortunes,
     // 十二长生：日主对年/月/日三支。时支不列 —— 传统论「生旺死绝」只看年月日三宫，

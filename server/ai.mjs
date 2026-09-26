@@ -195,7 +195,7 @@ export function natalFactsOf(record) {
     //      位置紧随 strengthScore、先于 luckStart —— 与客户端 natal 同序，否则公共前缀当场分叉。
     tiaohouFacts: nonAi.tiaohouFacts,
     // 起运：大运各柱的年份区间由它定，模型须按此说明「几岁起哪一运」，不得自行估。
-    luckStart: nonAi.luckStart,
+    luckStart: { ...(nonAi.luckStart ?? {}), onsetDate: nonAi.luckOnset ?? '' },
     shenSha: compactShenSha(nonAi.shenSha), relationships: nonAi.relationships,
   };
 }

@@ -155,8 +155,10 @@ describe('non-AI calculator', () => {
         expect(da).toHaveLength(result.greatFortunes.length);
         result.greatFortunes.forEach((row, i) => {
           expect(row.ganZhi).toBe(da[i].getGanZhi());
-          // 库按「起运日期所在公历年」给区间；我们按干支年(立春)归整，最多差 1 年。
-          expect(Math.abs(row.startYear - da[i].getStartYear())).toBeLessThanOrEqual(1);
+          // 段起点＝交运日所在公历年，与库 getDaYun 的口径同源，必须**逐年相等**。
+          // 曾经写成「≤1」：那是给立春归整留的口子，实测 510 例里 49 例(9.6%)被整年挪到上一年、
+          // 其中 3 例把今年所处的那一步运报错；归整已去掉，这条容忍度也就没有存在理由了。
+          expect(row.startYear).toBe(da[i].getStartYear());
         });
         // 相邻两柱必相差整 10 年、且方向沿六十甲子单调顺/逆
         expect(result.greatFortunes.every((g, i) => i === 0 || g.startYear === result.greatFortunes[i - 1].startYear + 10)).toBe(true);
@@ -166,6 +168,26 @@ describe('non-AI calculator', () => {
         expect(step === 1 || step === -1).toBe(true);
       });
     }
+
+    /* 月末出生 + 跨度落在 12/31 的人：自算交运日必须与库逐日相同。
+       旧钳制写法把溢出月钳成「min(原日号,28)」，生 1957-12-31 男(跨度 7年11月10日)
+       库给 1965-12-10、我们给 1966-01-07 —— 首柱起运年整整大了一岁。
+       穷举 1950~2010 每月 1/15/28/31 日 × 男女共 864 例，当时错 9 例、全是 31 日生。 */
+    it('月末出生的精确交运日与库 getStartSolar 逐日一致', async () => {
+      const { Solar } = await import('lunar-javascript');
+      const cases: Array<[number, number, number, 'male' | 'female', number]> = [
+        [1957, 12, 31, 'male', 1], [1950, 3, 31, 'male', 1], [1964, 5, 31, 'female', 0],
+        [1985, 5, 31, 'male', 1], [1992, 7, 31, 'male', 1], [1999, 12, 31, 'female', 0],
+      ];
+      for (const [birthYear, birthMonth, birthDay, gender, yunGender] of cases) {
+        const born = Solar.fromYmdHms(birthYear, birthMonth, birthDay, 12, 30, 0);
+        const ec = born.getLunar().getEightChar();
+        const result = calculateNonAi({ birthYear, birthMonth, yearPillar: ec.getYear(), monthPillar: ec.getMonth(), dayPillar: ec.getDay(), hourPillar: ec.getTime() }, gender, '2026-06-01T04:00:00.000Z');
+        const libDate = String(ec.getYun(yunGender).getStartSolar().toYmd());
+        expect(result.luckOnset, `${birthYear}-${birthMonth}-${birthDay} ${gender}`).toBe(libDate);
+        expect(result.greatFortunes[0].startYear).toBe(Number(/^(\d{4})/.exec(libDate)![1]));
+      }
+    });
   });
 });
 

@@ -178,7 +178,9 @@ export const luckStartText = (result: NonAiChart, nowYear: number): string => {
   if (!start?.date) return '未记录（点下方「重新计算非 AI」可补算）';
   const current = (result.greatFortunes ?? []).find((g) => g.startYear <= nowYear && nowYear <= g.endYear);
   const age = `${start.years}岁${start.months ? start.months + '个月' : ''}`;
-  return `出生后约 ${age}（${start.date} 前后）起运${current ? `；今年正走 ${current.ganZhi} 运（${current.startYear}-${current.endYear}）` : '；当前已出排定的大运区间'}`;
+  /* 交运日优先用引擎自算的 luckOnset(与库逐日一致且口径可控)，老记录没这个字段才退回库值。 */
+  const onset = result.luckOnset || start.date;
+  return `约 ${age}、${onset} 交运${current ? `；今年在${current.ganZhi}运（${current.startYear}-${current.endYear}）` : '；当前已出排定的大运区间'}`;
 };
 const mapText = (value: Record<string, number>) => Object.entries(value).map(([key, count]) => `${key} ${count}`).join(' · ') || '—';
 /** 五行比例按百分比展示(原始值是 0~1 的小数，直接打出来是 0.375 这种看不懂的数)。

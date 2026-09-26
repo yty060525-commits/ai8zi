@@ -62,6 +62,9 @@ export interface NonAiChart {
   decadeSlots?: number;
   /** 起运(出生到起运的跨度与公历日期)：大运各柱的起点由它决定。老记录无此字段。 */
   luckStart?: { years: number; months: number; days: number; date: string } | null;
+  /** 精确交运日 yyyy-mm-dd：由出生时刻 + 起运跨度(3日折1年、1日折4个月)自算，
+   *  与 luckStart.date(库给值，有 ±1 天口径差)互为校核。仅用于展示与判定当前步运。 */
+  luckOnset?: string;
   annualFortunes: FortunePeriod[];
   monthlyFortunes: FortunePeriod[];
   twelveLongevity: string[];
