@@ -563,7 +563,9 @@ function buildPeriodAnalysis(core: Core, period: FortunePeriod | NonAiChart['gre
     const spouseLabel = spouseGroup === '财' ? '妻星' : '夫星';
     const dayBranch = core.n.pillars?.day?.[1] ?? '';
     // ① 本期**天干**是配偶星。优先用引擎给的十神字段；该字段在大运存量行与瘦身补槽里可能缺失，
-    //   此时退回按日主代数推出的配偶组五行（两种读法在真实盘上恒等，见测试文件里的等价性说明）。
+    //   此时退回按日主代数推出的配偶组五行。两种读法**并不恒等**：十神字段只看本期天干，
+    //   而兜底还认财组的另一个五行（实测：男命乙木见辛金，字段读作七杀、兜底认作财）。
+    //   故字段在时以字段为准，缺字段才用兜底——别把这里改成「两者取或」。
     const spouseEls = groupElements(core.dayIdx, spouseGroup);
     const stemEl = isStem(pStem) ? ELEMENTS[stemElementIndex(pStem)] : '';
     const movedByStem = TEN_GOD_GROUP[tenGod] === spouseGroup || (!!stemEl && spouseEls.includes(stemEl));
@@ -588,12 +590,15 @@ function buildPeriodAnalysis(core: Core, period: FortunePeriod | NonAiChart['gre
     const why = [movedByStem ? `${scopeWord}天干${pStem}为${tenGod || stemGodOf(core.dayStem, pStem)}` : '',
       movedByBranch ? `${scopeWord}地支${pBranch}所藏本气${bMainStem}亦${spouseGroup}之星` : '',
       palaceTouched ? `更与本命日支${dayBranch}（配偶宫）相引` : ''].filter(Boolean).join('、');
-    // ── 取向判据（v3 第二轮，被一条实测读数纠正后写下）────────────────────────────────
-    //   第一版直接拿本期整体档位 verdict 定调，读数是：2031 辛亥年「妻星…且向喜用」，
-    //   而辛亥两个字里辛=金(喜)、亥藏壬=水(忌)，**土这个妻星一个字都没出现**——
-    //   那句吉凶结论压根没有配偶星参与，是凭空的硬断。所以侧别只统计配偶星自己的字。
+    // ── 取向判据（v3 第二轮，被实测读数纠正后写下）──────────────────────────────────
+    //   第一版直接拿本期整体档位 verdict 定调，两类读数自相矛盾：
+    //     · 男命乙木见辛亥年写「妻星…且向喜用」——喜侧那个字是辛(金)，属①路五行兜底认来的财组，
+    //       而该句的十神依据是「七杀」；档位本身还是喜忌并见，等于拿整期气势替配偶星下吉凶。
+    //     · 减力年同一行既说气势逆、又说妻星向喜用。
+    //   所以侧别只统计**认出它的那条途径**所对应的字：偏喜才写向喜用，偏忌才写临忌，
+    //   两侧同现走「喜忌同临」，只有宫位被引动而星未现则明说「星本身未现」。
     //   ①②两路各有专属变量（stemEl / branchEl），不许合并成一个数组喂给两条判据；
-    //     否则 movedByStem 的五行兜底会经 branchEl 漏进侧别统计（M8 变异体即为此准备）。
+    //     否则 movedByStem 的五行兜底会经 branchEl 漏进侧别统计（M8/M9 变异体即为此准备）。
     const spouseHelp = [movedByStem ? stemEl : '', movedByBranch ? branchEl : '']
       .filter((e) => !!e && core.useful.includes(e));
     const spouseHarm = [movedByStem ? stemEl : '', movedByBranch ? branchEl : '']
