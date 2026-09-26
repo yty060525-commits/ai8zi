@@ -154,6 +154,59 @@ const blockAdd = (blocks: Block[]) => (head: string, points: Array<string | fals
 };
 
 /** 由旺衰档位与「从格/专旺」特殊格局，按扶抑口径推喜/忌五行(确定性)。 */
+/** 调候方向对应的五行：冬火夏水为古今通义，春秋平和故不判偏枯。 */
+const TIAOHOU_SEASON_ELEMENT: Record<string, string> = { 春: '', 夏: '水', 秋: '', 冬: '火' };
+/** 季节只从引擎那条调候事实的**首段**取（`deriveTiaohou` 以 season + '·' 起头），此处不再立
+ *  第二张月支→季节表 —— 与 [[tiaohouFacts]] 同源于 nonAiCalculator，改表不会两头不一致。 */
+function seasonOfTiaohou(tiaohouFacts: string): string {
+  const head = tiaohouFacts.split('·')[0] ?? '';
+  return head in TIAOHOU_SEASON_ELEMENT ? head : '';
+}
+/** 《穷通宝鉴》按季归并的主/佐用神天干：从引擎原文「…用神参考：癸(佐丙)〔…〕」里现读，不抄第二份表。
+ *  ⚠ 括号必须先剥再取字：`STEMS.includes(c)` 对**任意**天干字符恒真（那是十干数组、不是子串匹配），
+ *   上一版因此把「佐丙」当成主用神读进正文。这里只认全角〔〕与半/全角括号内的内容为辅佐，主用神取其前。 */
+const TIAOHOU_REF_RE = /用神参考：([^〔]*)/;
+const STEMS_IN = (text: string): string[] => [...new Set([...text].filter((c) => STEMS.includes(c)))];
+function tiaohouRefStems(tiaohouFacts: string): { main: string[]; support: string[] } {
+  const body = TIAOHOU_REF_RE.exec(tiaohouFacts)?.[1] ?? '';
+  return {
+    main: STEMS_IN(body.split(/[（(]/)[0] ?? ''),
+    support: STEMS_IN((body.match(/[（(][^）)]*[）)]/g) ?? []).join('')),
+  };
+}
+/** 该盘「气候是否真偏枯」：冬而局中无火、夏而局中无水才算。用五行配比(countElements 口径)判，
+ *  不只看月令季节 —— 冬天满盘火的盘本不需调候，硬从调候会把喜用说反。 */
+function climateDeficient(season: string, ratio: Record<string, number>): string | undefined {
+  const need = TIAOHOU_SEASON_ELEMENT[season];
+  if (!need) return undefined;                       // 春秋：调候非急
+  if ((ratio?.[need] ?? 0) > 0) return undefined;    // 所需之气局中已有
+  return need;
+}
+/** 调候与扶抑**取向有出入**时的说法：仍按扶抑定喜忌(与三端提示词通则一致)，但不再把「调候非急」
+ *  原样端出来 —— 严冬火弱却说「非急」是自相矛盾的话。此处如实交代分歧，并点明何时两全。
+ *  ⚠ 措辞必须分情形，不许一律称「方向相反」：调候急需之气本身可能正是本命喜用(夏需水而水为喜)，
+ *   那时只有《穷通》另取的辅佐干与忌神相撞；所需之气不在喜用里才是真相反。两种坏形态都实测过：
+ *   ① 不剥括号 ⇒ 「所取水为参考」漏列辅佐之干；② 空 clash 仍出「惟其中…」⇒ 句子残缺。 */
+function tiaohouConflictNote(season: string, need: string, tiaohouFacts: string, useful: string[], avoid: string[]): string {
+  const { main, support } = tiaohouRefStems(tiaohouFacts);
+  const el = (stems: string[]) => [...new Set(stems.map((c) => ELEMENTS[stemElementIndex(c)]))];
+  const mainEls = el(main);
+  const supportEls = el(support);
+  const clash = [...mainEls, ...supportEls].filter((e) => avoid.includes(e));
+  const same = useful.includes(need);
+  const opener = '又《穷通宝鉴》于此季取' + (main.join('、') || need) + '为参考'
+    + (support.length ? '、佐以' + support.join('、') : '');
+  const relation = same
+    ? '与调候急需之' + need + '同属本命喜用'
+    : '所取' + (clash.length ? clash.join('、') + '正属本命忌神' : need + '不为喜用') + '，与扶抑取向相反';
+  const caveat = clash.length
+    ? '，惟其中' + clash.join('、') + (same ? '于扶抑为忌' : '即所忌')
+    : '，与扶抑所忌并无冲突';
+  return opener + '，' + relation + caveat
+    + '。此系两源出入，本机仍以扶抑为准、不作唯一结论，两源合参可也；'
+    + '惟行运或岁年逢' + need + '之时，寒暖得济，不必因此改本命喜忌。';
+}
+
 function deriveUsefulAvoid(dayIdx: number, label?: string, special?: string): { useful: string[]; avoid: string[] } {
   const g = (group: string) => rel(dayIdx, GROUP_OFFSET[group]);
   const uniq = (arr: string[]) => [...new Set(arr)];
@@ -231,7 +284,16 @@ export function buildLocalAnalysis(record: BaziRecord, now: Date = new Date()): 
         : '身弱当喜印比生扶、忌再遭克泄耗';
       points.push(`依扶抑通则，${principle}，故喜用定为${useful.join('、')}，忌${avoid.join('、')}。`);
     }
-    if (n.tiaohouFacts) { const th = summarizeTiaohou(n.tiaohouFacts); if (th) points.push(`调候参考：${th}，惟此为辅助判据，须与格局扶抑合参。`); }
+    if (n.tiaohouFacts) {
+      const th = summarizeTiaohou(n.tiaohouFacts);
+      /* 严冬而局中无火、盛夏而局中无水时，「调候非急」这句季节通义与本命实际气候相反（全空间枚举
+         120 组里 27 组方向冲突，见 .scratch/sweep-tiaohou-conflict.cjs）。那种盘不端「非急」，
+         改为如实交代两源分歧 + 仍以扶抑为准；喜忌本身一个字都不改（三端提示词通则一致要求扶抑定纲）。 */
+      const season = seasonOfTiaohou(n.tiaohouFacts);
+      const need = climateDeficient(season, n.elementRatio ?? {});
+      if (!need || !useful.length) { if (th) points.push(`调候参考：${th}，惟此为辅助判据，须与格局扶抑合参。`); }
+      else points.push(tiaohouConflictNote(season, need, n.tiaohouFacts, useful, avoid));
+    }
     add('身强身弱与喜忌', points);
   }
 
