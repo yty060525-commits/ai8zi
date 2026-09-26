@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { BaziRecord } from '../types/domain';
 import { calculateNonAi, computePillarsFromDate } from '../features/chart/nonAiCalculator';
 import { buildLocalTaskAnalysis } from '../data/localAnalysis';
+import { buildBaziTasks } from '../data/baziOrchestrator';
+import { analyzeQuestion } from '../data/chatEngine';
+import { buildLocalChatAnswer } from '../data/localChat';
 
 const NOW = new Date('2026-09-26T06:00:00Z');
 
@@ -100,6 +103,30 @@ describe('调候与扶抑冲突时的本命批断', () => {
     expect(before.text).toContain('调候参考');
     // 该盘仍带季节通义那句，说明没被误伤
     expect(before.text).toMatch(/炎热燥土|调候以水为急/);
+  });
+
+  it('聊天同口径：偏枯盘的调候分歧句必须也能被「喜用五行是什么」取到', () => {
+    /* 缺陷现场（本轮读码发现，非假想）：localChat 的 answerUsefulElements 原先只认
+       `t.startsWith('调候参考')`，而偏枯盘换的那句**开头是「又《穷通宝鉴》」** ⇒ 批断正文里有、
+       聊天答出来那一栏凭空少一条，且 27/120 组盘都中招。修法是让它同时认「此系两源出入」。 */
+    const birth = BIRTH;
+    const nonAiResult = calculateNonAi({ ...birth, ...SUMMER_NO_WATER } as never, 'male', NOW.toISOString());
+    const base = { id: 'r-chat', name: '聊天钉子', gender: 'male', createdAt: NOW.toISOString(), ...birth, ...SUMMER_NO_WATER, nonAiResult, aiStatus: 'completed' } as unknown as BaziRecord;
+    const tasks: Record<string, any> = {};
+    for (const task of buildBaziTasks(base, NOW)) {
+      const analysis = buildLocalTaskAnalysis(base, task, NOW);
+      if (analysis) tasks[task.taskId] = { task, status: 'completed', analysis, source: 'local' };
+    }
+    const rec = { ...base, aiTasks: tasks } as unknown as BaziRecord;
+    const question = '喜用五行是什么';
+    const plan = analyzeQuestion(question, [rec], NOW);
+    // 前提钉子：这句确实走 wantsFiveElements → answerUsefulElements（否则测的不是那条取话判据）
+    expect(plan.year).toBeUndefined();
+    expect(/喜用|用神|忌神|五行/.test(question)).toBe(true);
+    const answer = buildLocalChatAnswer({ record: rec, plan, question, history: [] }, NOW);
+    expect(answer, 'A 层答不出这句，本用例前提不成立').toBeTruthy();
+    expect(answer!.answer).toContain('此系两源出入');
+    expect(answer!.answer).not.toMatch(/[A-Za-z]/);
   });
 
   /* 「春/秋 → 调候非急」这条豁免必须由**真的无火春盘**钉住。变异对照（本轮实测，见下）：

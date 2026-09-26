@@ -197,7 +197,10 @@ function answerUsefulElements(record: BaziRecord): LocalChatAnswer | null {
   const principle = isDone(record, BASELINE_TASK) ? section(bodyOf(record, BASELINE_TASK), '身强身弱与喜忌') : '';
   const why = items(principle).find((t) => t.includes('喜用定为') || t.includes('扶抑'));
   if (why) blocks.push('2. ' + clean(why));
-  const tiaohou = items(principle).find((t) => t.startsWith('调候参考'));
+  /* 调候那一节有两种说法，必须都认：气候不偏枯时是「调候参考：…」，偏枯的盘(严冬无火/盛夏无水)
+     由 localAnalysis 换成如实交代两源分歧的那句，**开头没有「调候参考」四字**。上一版只按前缀取，
+     于是那 27/120 组盘问「喜用五行是什么」时调候一栏凭空消失 —— 批断里有、聊天里没有。 */
+  const tiaohou = items(principle).find((t) => t.startsWith('调候参考') || t.includes('此系两源出入'));
   if (tiaohou) blocks.push('3. ' + clean(tiaohou));
   const direction = adjustment ? items(section(adjustment, '后天调整')).slice(0, 2) : [];
   if (direction.length) blocks.push('4. 方位与调理上：' + direction.map((d) => clean(d)).join('；'));
