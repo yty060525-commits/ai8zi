@@ -153,7 +153,6 @@ const blockAdd = (blocks: Block[]) => (head: string, points: Array<string | fals
   if (ps.length) blocks.push({ head, points: ps });
 };
 
-/** 由旺衰档位与「从格/专旺」特殊格局，按扶抑口径推喜/忌五行(确定性)。 */
 /** 调候方向对应的五行：冬火夏水为古今通义，春秋平和故不判偏枯。 */
 const TIAOHOU_SEASON_ELEMENT: Record<string, string> = { 春: '', 夏: '水', 秋: '', 冬: '火' };
 /** 季节只从引擎那条调候事实的**首段**取（`deriveTiaohou` 以 season + '·' 起头），此处不再立
@@ -163,8 +162,8 @@ function seasonOfTiaohou(tiaohouFacts: string): string {
   return head in TIAOHOU_SEASON_ELEMENT ? head : '';
 }
 /** 《穷通宝鉴》按季归并的主/佐用神天干：从引擎原文「…用神参考：癸(佐丙)〔…〕」里现读，不抄第二份表。
- *  ⚠ 括号必须先剥再取字：`STEMS.includes(c)` 对**任意**天干字符恒真（那是十干数组、不是子串匹配），
- *   上一版因此把「佐丙」当成主用神读进正文。这里只认全角〔〕与半/全角括号内的内容为辅佐，主用神取其前。 */
+ *  ⚠ 主用神取括号**之前**、辅佐干取括号**之内**。上一版写成 `STEMS.includes(c)` 一把抓 —— 那是十干
+ *   数组、对任意天干字符恒真，剥括号的 replace 因此压根没生效，把忌神「佐丙」的丙混进主用神端进正文。 */
 const TIAOHOU_REF_RE = /用神参考：([^〔]*)/;
 const STEMS_IN = (text: string): string[] => [...new Set([...text].filter((c) => STEMS.includes(c)))];
 function tiaohouRefStems(tiaohouFacts: string): { main: string[]; support: string[] } {
@@ -182,11 +181,11 @@ function climateDeficient(season: string, ratio: Record<string, number>): string
   if ((ratio?.[need] ?? 0) > 0) return undefined;    // 所需之气局中已有
   return need;
 }
-/** 调候与扶抑**取向有出入**时的说法：仍按扶抑定喜忌(与三端提示词通则一致)，但不再把「调候非急」
- *  原样端出来 —— 严冬火弱却说「非急」是自相矛盾的话。此处如实交代分歧，并点明何时两全。
- *  ⚠ 措辞必须分情形，不许一律称「方向相反」：调候急需之气本身可能正是本命喜用(夏需水而水为喜)，
- *   那时只有《穷通》另取的辅佐干与忌神相撞；所需之气不在喜用里才是真相反。两种坏形态都实测过：
- *   ① 不剥括号 ⇒ 「所取水为参考」漏列辅佐之干；② 空 clash 仍出「惟其中…」⇒ 句子残缺。 */
+/** 气候真偏枯（见 climateDeficient）时那句「两源合参」的说明。仍按扶抑定喜忌(与三端提示词通则一致)，
+ *  但不再把「调候非急」原样端出来 —— 严冬火弱却说「非急」是自相矛盾的话。
+ *  ⚠ 措辞分情形，不许一律称「取向相反」：调候急需之气本身可能正是本命喜用(夏需水而水为喜)，那时只是
+ *   《穷通》另取的辅佐干撞在忌神上；所需之气不在喜用里才是真相反。season/need 当前只用于取 need 一词，
+ *   故调用处必须传同一 need —— 换它不改文案，用例杀不掉（已实测），别指望这两个参数自洽。 */
 function tiaohouConflictNote(season: string, need: string, tiaohouFacts: string, useful: string[], avoid: string[]): string {
   const { main, support } = tiaohouRefStems(tiaohouFacts);
   const el = (stems: string[]) => [...new Set(stems.map((c) => ELEMENTS[stemElementIndex(c)]))];
