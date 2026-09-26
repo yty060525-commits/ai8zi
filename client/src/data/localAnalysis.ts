@@ -47,7 +47,8 @@ const TEN_GOD_GROUP: Record<string, string> = {
   比肩: '比劫', 劫财: '比劫', 食神: '食伤', 伤官: '食伤', 偏财: '财', 正财: '财',
   七杀: '官杀', 正官: '官杀', 偏印: '印', 正印: '印',
 };
-/** 分组 → 该组占的两个相邻五行下标偏移（财=+2/+3、官杀=+3/+4…）。 */
+/** 分组 → 该组占的两个五行。⚠ 一个组含**一对**十神（正财/偏财、正官/七杀），
+ *  这一对只差阴阳、五行相差一位，故组恒占**两个相邻**五行：财 = +2/+3、官杀 = +3/+4。 */
 const GROUP_FIRST_OFFSET: Record<string, number> = { 比劫: 0, 食伤: 1, 财: 2, 官杀: 3, 印: 4 };
 /** 某柱天干相对日主的十神(纯代数，与引擎 tenGodOf 同一口径)：用于给**地支本气**定十神。 */
 const mod5 = (n: number) => ((n % 5) + 5) % 5;
@@ -61,7 +62,7 @@ function stemGodOf(dayStem: string, otherStem: string): string {
           : (same ? '偏印' : '正印');
 }
 /** 一组十神（财/官杀…）对应的两个五行：由日主下标 + 该组首偏移推出。 */
-const groupElements = (dayIdx: number, group: string): string[] => {
+export const groupElements = (dayIdx: number, group: string): string[] => {
   const first = GROUP_FIRST_OFFSET[group];
   return first === undefined ? [] : [rel(dayIdx, first), rel(dayIdx, first + 1)];
 };
