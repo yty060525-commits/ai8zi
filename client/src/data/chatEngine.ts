@@ -19,6 +19,11 @@ import { isServerMode, serverFetch, ServerError } from './serverClient';
 import { chatDirect, toneInstructionText } from './deepseekAdapter';
 import { getBrowserCredential } from './aiSettings';
 import { countElements, sanitizeChatText } from '../features/chart/elements';
+import { isLocalSystemUnlocked, ensureLocalChartComplete } from './localSystem';
+import { buildLocalChatAnswer, type LocalChatAnswer } from './localChat';
+/* 必须 `import * as` 命名空间 + 经对象取（原因同 baziOrchestrator 里 `self.localChartForTask` 那段注释：
+   ESM live binding 让裸引用永远绑回编译期原函数，vi.spyOn 换不掉 ⇒ 桩零调用、判据恒真）。 */
+import * as self from './chatEngine';
 
 export interface ChatMessage { role: 'user' | 'assistant'; content: string }
 export interface ChatPlan { recordId: string | null; personName: string | null; matchedCount: number; year?: number; month?: number; topics: string[]; question?: string; scan?: boolean; scanFrom?: number; general?: boolean }
@@ -427,6 +432,59 @@ function anyChannelConfigured(): boolean {
   try { return (['deepseek', 'kimi', 'qwen'] as const).some((id) => !!getBrowserCredential(id)); } catch { return false; }
 }
 
+/* ── 对话 A 层：本机规则问答（第四路在聊天侧的对应物）────────────────────────
+   位置在**所有通道之前**：这一路不联网、不调模型、不花额度，也不该被任何通道的失败/超时拖住。
+   只在机主已用解锁码开通的设备上生效；未开通的人连一次补算都不会发生（界面上零痕迹）。 */
+
+/** 走不走本机这一路的判据单独成函数：既是补算成本的闸门，也是用例钉住的那句承诺 ——
+ *  关掉它时五条验收问题一条都不该由本机答出来。别把它读成「装饰性布尔」。 */
+export function shouldUseLocalChat(): boolean {
+  return isLocalSystemUnlocked();
+}
+
+/** 本机规则问答的**独立导出入口**：和批量分析那条 `localChartForTask` 同理 —— 它是这条接线唯一的
+ *  存在证明。留在闭包里直接调 `buildLocalChatAnswer` 的话删掉整路也不会红（正文本来就是从同一批
+ *  已算结果里拼的，云端通道恰好也答得像），所以判据只能从模块对象上读这个函数的调用次数与入参。
+ *  ⚠ 必须真的 `await ensureLocalChartComplete`：本地记录是瘦身版，未补算时流年/流月数组为空。
+ *     但**别把这句读成「不补算这里就答不出」**——实测恰恰相反：机主点过「生成本地批断」之后，
+ *     那条路已经把补算过的时段事实连同批断正文一起落进记录了（见用例 fixture 走编排器那一路），
+ *     所以聊天侧删掉这一次调用（H1 变异）在存量盘上照样全绿。这一句真正保护的是
+ *     **只重算过非 AI、还没生成任何批断**的那类盘，以及结果里没带时段载荷的存量形态；
+ *     「补算有没有真的在跑」由 H2 变异（短路 localSystem 那个函数）钉住，不在这里自证。 */
+export async function localChatAnswerFor(input: { record: BaziRecord; plan: ChatPlan; question: string; history: ChatMessage[] }): Promise<LocalChatAnswer | null> {
+  const chart = await ensureLocalChartComplete(input.record);
+  return buildLocalChatAnswer({ record: chart, plan: input.plan, question: input.question, history: input.history });
+}
+
+/** 把规则答案包成回执。措辞如实交代来源：这是本机规则从已算批断里取的话，不是模型生成的。 */
+function localReply(target: BaziRecord, plan: ChatPlan, data: LocalChatAnswer): ChatReply {
+  const tail = '（本机规则回答：取自' + (data.sources.length ? data.sources.join('、') : '本盘已算数据')
+    + '，不联网、不调模型、不消耗额度' + (data.partial ? '；确有缺的部分已在上面点名' : '') + '。）';
+  return { status: 'completed', answer: sanitizeChatText(data.answer + '\n\n' + tail), evidence: { recordId: target.id, personName: target.name, plan } };
+}
+
+/** 定人：与 askChatLocal 同口径（本轮点名的 > 检索计划的 > 唯一一条）。多盘且没点名字时返回 undefined，
+ *  让上层照旧给出「请告诉我问的是谁」的选择列表 —— 本机这一路不许自己猜命主。 */
+async function pickTarget(input: AskChatInput, records: BaziRecord[]): Promise<{ target: BaziRecord; plan: ChatPlan } | null> {
+  const plan = applyFollowUp(analyzeQuestion(input.question, records), Array.isArray(input.history) ? input.history : [], records);
+  let target = input.recordId ? records.find((r) => r.id === input.recordId) : undefined;
+  if (!target && plan.recordId) target = records.find((r) => r.id === plan.recordId);
+  if (!target && records.length === 1) target = records[0];
+  return target ? { target, plan } : null;
+}
+
+/** 已开通就先试本机；组不出话（返回 null）才落到原有三通道。 */
+async function tryLocalChat(input: AskChatInput): Promise<ChatReply | null> {
+  if (!self.shouldUseLocalChat()) return null;
+  const records = await listBaziRecords().catch(() => [] as BaziRecord[]);
+  if (!records.length) return null;                       // 一条盘都没有：交回原路径报「还没有命盘」
+  const picked = await pickTarget(input, records);
+  if (!picked) return null;                                // 多盘没点名字：交回原路径出选择列表
+  const data = await self.localChatAnswerFor({ record: picked.target, plan: picked.plan, question: input.question, history: Array.isArray(input.history) ? input.history : [] });
+  if (!data) return null;
+  return localReply(picked.target, picked.plan, data);
+}
+
 /** 「谁都没配」这句话该指向哪儿：连着服务器时密钥在服务器那边，界面却写着「去设置」，
  *  用户点开的是本机凭据框 —— 填了也不会让服务器那条通道动起来。
  *  入口方位按实际位置写「右上角」：「设置」按钮靠行尾对齐，窄屏同样靠右。 */
@@ -443,6 +501,11 @@ export async function askChat(input: AskChatInput): Promise<ChatReply> {
   if (question.length > 500) return { status: 'failed', error: '问题过长，请控制在 500 字以内' };
   const history = Array.isArray(input.history) ? input.history : [];
   const tone = Number.isFinite(input.tone as number) ? Math.max(0, Math.min(100, Math.round(Number(input.tone)))) : 80;
+
+  /* 已开通本地系统的设备：先让本机规则答一次，不触网、不耗额度。
+     未开通的人这里恒为 null（`shouldUseLocalChat` 挡住，连补算都不做），下面三条通道一字不改地照跑。 */
+  const localAnswer = await tryLocalChat({ ...input, question, history });
+  if (localAnswer) return localAnswer;
 
   /* 服务器报错的原因：本机通道接着答时不必带；本机也失败时用它替掉重复的报错。 */
   let serverReason = '';
