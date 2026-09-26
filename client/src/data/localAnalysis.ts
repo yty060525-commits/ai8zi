@@ -20,7 +20,9 @@ import { ELEMENT_GUIDES, primaryElement, type ElementKey } from './elementKnowle
 import { canBuildLocalAnalysis } from './localSystem';
 import type { BaziAIAnalysis, BaziAnalysisTask, BaziRecord, FortunePeriod, NonAiChart } from '../types/domain';
 
-export const LOCAL_ANALYSIS_ENGINE_VERSION = 'local-rules-v2';
+/* v3：爱情引动判据由「只看本期天干十神」扩成三条途径（天干／地支本气／配偶宫逢冲合），
+   「未受特别引动」的覆盖面从约 80% 降到约 39%。只改断语措辞与判据，不改喜忌五行结论。 */
+export const LOCAL_ANALYSIS_ENGINE_VERSION = 'local-rules-v3';
 
 /** 引擎可复算、无需外部输入的最小事实来源；缺排盘数据时上层据此禁用按钮。 */
 /* 判据已搬到 data/localSystem.ts（见那里的 canBuildLocalAnalysis）：调用方在页面加载阶段
@@ -44,6 +46,24 @@ const GROUP_OFFSET: Record<string, number> = { 比劫: 0, 食伤: 1, 财: 2, 官
 const TEN_GOD_GROUP: Record<string, string> = {
   比肩: '比劫', 劫财: '比劫', 食神: '食伤', 伤官: '食伤', 偏财: '财', 正财: '财',
   七杀: '官杀', 正官: '官杀', 偏印: '印', 正印: '印',
+};
+/** 分组 → 该组占的两个相邻五行下标偏移（财=+2/+3、官杀=+3/+4…）。 */
+const GROUP_FIRST_OFFSET: Record<string, number> = { 比劫: 0, 食伤: 1, 财: 2, 官杀: 3, 印: 4 };
+/** 某柱天干相对日主的十神(纯代数，与引擎 tenGodOf 同一口径)：用于给**地支本气**定十神。 */
+const mod5 = (n: number) => ((n % 5) + 5) % 5;
+function stemGodOf(dayStem: string, otherStem: string): string {
+  const d = mod5(((STEMS.indexOf(otherStem) / 2) | 0) - ((STEMS.indexOf(dayStem) / 2) | 0));
+  const same = (STEMS.indexOf(dayStem) % 2) === (STEMS.indexOf(otherStem) % 2);
+  return d === 0 ? (same ? '比肩' : '劫财')
+    : d === 1 ? (same ? '食神' : '伤官')
+      : d === 2 ? (same ? '偏财' : '正财')
+        : d === 3 ? (same ? '七杀' : '正官')
+          : (same ? '偏印' : '正印');
+}
+/** 一组十神（财/官杀…）对应的两个五行：由日主下标 + 该组首偏移推出。 */
+const groupElements = (dayIdx: number, group: string): string[] => {
+  const first = GROUP_FIRST_OFFSET[group];
+  return first === undefined ? [] : [rel(dayIdx, first), rel(dayIdx, first + 1)];
 };
 
 /** 数字 → 中文读法(含负号与一位小数)，用于把旺衰评分写成「二十八点八」这类白话。 */
@@ -507,7 +527,7 @@ const TITLE_TAIL: Record<string, string> = { 加力: '进气', 减力: '当戒',
 function buildPeriodAnalysis(core: Core, period: FortunePeriod | NonAiChart['greatFortunes'][number] | undefined, scope: 'annual' | 'monthly' | 'decade'): BaziAIAnalysis | null {
   if (!period?.ganZhi) return null;
   const gz = period.ganZhi; const tenGod = period.tenGod ?? '';
-  const { verdict, harmEl } = periodVerdict(gz, core);
+  const { verdict, harmEl, stem: pStem, branch: pBranch } = periodVerdict(gz, core);
   const scopeWord = scope === 'annual' ? '流年' : scope === 'monthly' ? '流月' : '大运';
   const weak = core.label === '身弱' || core.label === '中和偏弱';
   const dayPillar = core.n.pillars?.day ?? '';
@@ -537,13 +557,41 @@ function buildPeriodAnalysis(core: Core, period: FortunePeriod | NonAiChart['gre
       : (verdict === '减力' ? '本期财星不显且忌神当令，以正职稳收为主，严控不必要开支。' : '财运平稳，量入为出、按计划推进即可。'),
     weak ? '身弱任财本不易，聚财宜借团队与长期置业，不宜单打独斗博快钱。' : '身旺能任财，进可图大利，惟防比劫分夺、账目须清。',
   ]);
-  // 爱情：按「配偶星是否被本期引动」与「配偶宫(日支)是否逢冲」定性。
+  // 爱情：三条引动途径都要查，缺一条就会把「本期明明动了夫妻宫」写成「未受特别引动」（实测判据偏窄）。
   {
     const spouseGroup = core.gender === 'female' ? '官杀' : '财';
     const spouseLabel = spouseGroup === '财' ? '妻星' : '夫星';
-    const movedByPeriod = TEN_GOD_GROUP[tenGod] === spouseGroup;
-    const loveLine = movedByPeriod
-      ? (verdict === '加力' ? `本期${spouseLabel}被引动且向喜用，感情机会增多、利婚恋推进，单身者宜主动把握。` : `${spouseLabel}临忌被引动，感情易生波折，沟通须柔、忌逞强硬碰。`)
+    const dayBranch = core.n.pillars?.day?.[1] ?? '';
+    // ① 本期**天干**是配偶星。优先用引擎给的十神字段；该字段在大运存量行与瘦身补槽里可能缺失，
+    //   此时退回按日主代数推出的配偶组五行（两种读法在真实盘上恒等，见测试文件里的等价性说明）。
+    const spouseEls = groupElements(core.dayIdx, spouseGroup);
+    const stemEl = isStem(pStem) ? ELEMENTS[stemElementIndex(pStem)] : '';
+    const movedByStem = TEN_GOD_GROUP[tenGod] === spouseGroup || (!!stemEl && spouseEls.includes(stemEl));
+    // ② 本期**地支本气**是配偶星（旧写法只看天干，而地支之力在通行口径里不比天干轻）。
+    //   ⚠ 这里必须独立判、不许写成「同 ①」：两条途径各自覆盖的年份并不重合，合并即漏判。
+    const bMainStem = (HIDDEN_STEMS[pBranch] ?? [])[0] ?? '';
+    const branchEl = isStem(bMainStem) ? ELEMENTS[stemElementIndex(bMainStem)] : '';
+    const movedByBranch = !!branchEl && spouseEls.includes(branchEl);
+    // ③ 本期地支与本命日支（配偶宫）逢冲、或成三合/六合之局——宫位被引动，与「星被引动」是两回事。
+    //   ⚠ 必须逐对看「这一对里两个柱各自的地支」，不能拿整串 includes(日支)：引擎的关系串形如
+    //     「甲子与乙丑」，本命别柱（如月柱辛卯）自己就含日支那个字，会把别柱与本期之间的命中
+    //     误记到配偶宫头上（实测过这种假引动）。
+    const pairBranches = (s: string): [string, string] => {
+      const t = String(s);
+      const i = Math.max(t.indexOf('与'), t.indexOf('克'));
+      const left = i >= 0 ? t.slice(0, i) : t;
+      const right = i >= 0 ? t.slice(i + 1) : '';
+      return [left[1] ?? '', right[1] ?? ''];
+    };
+    const palaceTouched = [...(period.relationships?.chong ?? []), ...(period.relationships?.sanHe ?? []), ...(period.relationships?.liuHe ?? [])]
+      .some((s) => { const [a, b] = pairBranches(s); return (a === dayBranch || b === dayBranch) && (a === pBranch || b === pBranch); });
+    const why = [movedByStem ? `${scopeWord}天干${pStem}为${tenGod || stemGodOf(core.dayStem, pStem)}` : '',
+      movedByBranch ? `${scopeWord}地支${pBranch}所藏本气${bMainStem}亦${spouseGroup}之星` : '',
+      palaceTouched ? `更与本命日支${dayBranch}（配偶宫）相引` : ''].filter(Boolean).join('、');
+    const loveLine = (movedByStem || movedByBranch || palaceTouched)
+      ? (verdict === '加力'
+        ? `本期${spouseLabel}被引动（${why}）且向喜用，感情机会增多、利婚恋推进，单身者宜主动把握。`
+        : `${spouseLabel}临忌被引动（${why}），感情易生波折，沟通须柔、忌逞强硬碰。`)
       : spouseClash ? '配偶宫逢冲，感情聚少离多或起变化，多包容体谅则无大碍。' : '感情宫位未受特别引动，以平常心维持既有关系即可。';
     add('爱情', [loveLine]);
   }
