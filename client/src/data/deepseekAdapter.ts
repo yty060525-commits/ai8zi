@@ -342,7 +342,7 @@ function assembleUserContent(record: BaziRecord, task?: BaziAnalysisTask, tone?:
     // 调候：引擎按日主与月令季节算定的中文字符串(辅助判据)。与服务器 natal 同序：
     //      紧随 strengthScore、先于 luckStart，否则跨通道公共前缀分叉(见 prompt-parity)。
     tiaohouFacts: nonAi?.tiaohouFacts,
-    luckStart: nonAi?.luckStart,
+    luckStart: { ...(nonAi?.luckStart ?? {}), onsetDate: nonAi?.luckOnset ?? '' },
     shenSha: compactShenSha(nonAi?.shenSha), relationships: nonAi?.relationships,
   };
   // 存储是瘦身过的(流年/流月/大运数组落库即清空)，因此必须优先采用任务自带的内联行，

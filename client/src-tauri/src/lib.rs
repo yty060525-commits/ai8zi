@@ -462,6 +462,7 @@ pub(crate) fn final_ai_status(errors: &[String]) -> (&'static str, Option<String
 pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Result<Value, String> {
     let parsed: Value = record.non_ai_result.as_deref().map(serde_json::from_str).transpose().map_err(|e| e.to_string())?.unwrap_or(Value::Null);
     let val = |key: &str| parsed.get(key).cloned().unwrap_or(Value::Null);
+    let ls = parsed.get("luckStart").cloned().unwrap_or(Value::Null);
     let natal = serde_json::json!({
         "gender": record.gender,
         "birthYear": record.birth_year,
@@ -475,7 +476,8 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
         "patternFacts": val("patternFacts"), "strengthScore": val("strengthScore"),
         // 调候参考：引擎按日主与月令季节算定的中文字符串(辅助判据)。与另两端 natal 同序：紧随 strengthScore、先于 luckStart。
         "tiaohouFacts": val("tiaohouFacts"),
-        "luckStart": val("luckStart"),
+        // luckStart.date 有 ±1 天口径差，故把自算的精确交运日并入 onsetDate 一起发给模型(与另两端同形)。
+        "luckStart": { "years": ls.get("years").cloned().unwrap_or(Value::from(0)), "months": ls.get("months").cloned().unwrap_or(Value::from(0)), "days": ls.get("days").cloned().unwrap_or(Value::from(0)), "date": ls.get("date").cloned().unwrap_or_else(|| Value::String(String::new())), "onsetDate": val("luckOnset") },
         "shenSha": compact_shen_sha(&val("shenSha")), "relationships": val("relationships"),
     });
     // 行动改变与职业适配(喜用五行知识库)：附加 baseline 摘要与 guide 资料
