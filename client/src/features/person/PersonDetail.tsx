@@ -50,15 +50,18 @@ export const findDecade = (record: BaziRecord, task: { year?: number; decade?: {
   return list.reduce((best, item) => Math.abs(item.startYear - y) < Math.abs(best.startYear - y) ? item : best, list[0]);
 };
 
-/** 大运展示段：标题叫「大运段」，就该是这一运本来的十年。旧记录里同一运的 endYear 可能少一两年，
- *  按起点补满十年；与「未来十年」窗口取交集会把还没轮到的运截成单一年份，渲染出
- *  「丙戌 大运段(2035-2035)」这种假十年，所以不截。 */
+/** 大运展示段：标题叫「大运段」，起止只显这一运与「未来十年」窗口的交集。
+ *  例：窗口 2026-2035、戊申本运 2033-2042 → 显示 2033-2035（还没轮到的后七年不占这段）。
+ *  整段在窗口之外(存量记录里还留着已走完的运)退回它的真实整段 —— 两端都往窗口内抬会渲染出
+ *  「丙戌 大运段(2035-2035)」这种把一运截成单一年份的假十年。 */
 export const decadeSegment = (task: { year?: number; decade?: { ganZhi: string; startYear: number; endYear: number } }, record: BaziRecord): { start: number; end: number } => {
   const horizon = horizonOf(record);
   const decade = findDecade(record, task);
   const rawStart = decade?.startYear ?? task.year ?? horizon.from;
-  const rawEnd = decade?.endYear ?? horizon.to;
-  return { start: rawStart, end: Math.max(rawEnd, rawStart + 9) };
+  const rawEnd = Math.max(decade?.endYear ?? horizon.to, rawStart + 9);   // 旧记录同一运可能少两年，先补满十年再裁
+  const intersects = rawStart <= horizon.to && rawEnd >= horizon.from;
+  if (!intersects) return { start: rawStart, end: rawEnd };
+  return { start: Math.max(rawStart, horizon.from), end: Math.min(rawEnd, horizon.to) };
 };
 
 /** 大运标题：只保留干支+时段（如“庚子 大运段(2020-2029)”）。不显示年龄推算。 */

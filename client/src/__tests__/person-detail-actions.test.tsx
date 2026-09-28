@@ -78,8 +78,8 @@ describe('大运标题去掉“起”前缀', () => {
     );
     render(<PersonDetail personId="copy-person" onBack={vi.fn()} />);
     await screen.findByRole('heading', { name: '人物详情' });
-    await waitFor(() => expect(document.body.textContent).toContain('庚子 大运段(2020-2029)'));
-    // 区间不再被窗口截剩尾巴，标题就是这一运本来的十年
+    await waitFor(() => expect(document.body.textContent).toContain('庚子 大运段(2026-2029)'));
+    // 起止只显示「未来十年」窗口内的范围：本运 2020-2029 与窗口 [2026,2035] 的交集是 2026-2029。
     expect(document.body.textContent).not.toMatch(/大运：2020|2020 起|2020年起|起（约十年）/);
   });
 });

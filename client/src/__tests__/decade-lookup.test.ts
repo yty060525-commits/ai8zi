@@ -37,23 +37,33 @@ describe('大运段查找(兼容旧记录的起运年龄式 startYear)', () => {
   });
 });
 
-describe('大运标题区间(按本运真实十年显示，不截窗口、不出假十年)', () => {
+describe('大运标题区间(起止只显未来十年窗口的交集，跨出窗口的年份不显示)', () => {
   const year = new Date().getFullYear();
   const at = (createdAt: string, extra: Partial<BaziRecord> = {}) => ({ createdAt, ...extra } as BaziRecord);
+  // 窗口 = [year, year+9]（analysisHorizon 从今天算）。下面每条都同时钉"裁到哪"和"没裁过头"。
 
-  it('本运跨越今天：显示整段十年，而不是被窗口截剩的尾巴', () => {
+  it('本运跨越窗口起点(交运在十年前)：起点裁到窗口，终点整段保留', () => {
     const r = at(new Date(Date.UTC(year - 1, 5, 1)).toISOString());
-    expect(decadeSegment({ year, decade: { ganZhi: '乙酉', startYear: year - 3, endYear: year + 6 } }, r)).toEqual({ start: year - 3, end: year + 6 });
+    expect(decadeSegment({ year, decade: { ganZhi: '乙酉', startYear: year - 3, endYear: year + 6 } }, r)).toEqual({ start: year, end: year + 6 });
   });
 
-  it('旧记录同一运少了两年：按起点补满十年，标题仍是完整一运', () => {
+  it('旧记录同一运少了两年：先按起点补满十年，再裁窗口 —— 不能裁出短于十年的假段', () => {
     const r = at(new Date(Date.UTC(year - 1, 5, 1)).toISOString());
-    expect(decadeSegment({ year, decade: { ganZhi: '甲申', startYear: year - 8, endYear: year - 1 } }, r)).toEqual({ start: year - 8, end: year + 1 });
+    // rawStart=year-8 → 补满十年到 year+1；与窗口 [year, year+9] 的交集是 year..year+1。
+    expect(decadeSegment({ year, decade: { ganZhi: '甲申', startYear: year - 8, endYear: year - 1 } }, r)).toEqual({ start: year, end: year + 1 });
   });
 
-  it('下一运要多年后才起：照原区间显示，不渲染出「2035-2035」这种假十年', () => {
+  it('下一运多年后才起、又越过窗口末尾：裁成窗口内的真实交集(如 2033-2042 显 2033-2035)', () => {
     const r = at(new Date(Date.UTC(year - 1, 5, 1)).toISOString(), { nonAiResult: { greatFortunes: [{ ganZhi: '乙酉', startYear: year - 10, endYear: year - 1 }, { ganZhi: '丙戌', startYear: year + 9, endYear: year + 18 }] } } as never);
+    // 上一运整段都在窗口之前：交集为空 → 退回整段，不渲染出「(year-year)」这种假一年。
     expect(decadeSegment({ year: year - 10 }, r)).toEqual({ start: year - 10, end: year - 1 });
-    expect(decadeSegment({ year: year + 9, decade: { ganZhi: '丙戌', startYear: year + 9, endYear: year + 9 } }, r)).toEqual({ start: year + 9, end: year + 18 });
+    // 下一运起点正好压在窗口末尾 year+9：交集只剩那一年，这就是「未来十年所包含」的真实范围。
+    expect(decadeSegment({ year: year + 9, decade: { ganZhi: '丙戌', startYear: year + 9, endYear: year + 9 } }, r)).toEqual({ start: year + 9, end: year + 9 });
+  });
+
+  it('正例钉子：戊申本运 2033-2042，窗口 2026-2035 → 只显示 2033-2035', () => {
+    // 建盘时间设在 2026 年内，analysisHorizon 才会落在 2026(否则跟随今天)。
+    const r = at(new Date(Date.UTC(2026, 5, 1)).toISOString(), { nonAiResult: { greatFortunes: [{ ganZhi: '戊申', startYear: 2033, endYear: 2042 }] } } as never);
+    expect(decadeSegment({ year: 2033, decade: { ganZhi: '戊申', startYear: 2033, endYear: 2042 } }, r)).toEqual({ start: 2033, end: 2035 });
   });
 });

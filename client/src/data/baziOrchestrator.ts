@@ -219,7 +219,20 @@ export function collectFindings(record: BaziRecord, aiTasks: Record<string, Bazi
   const headingOf = (task: BaziAnalysisTask): string => {
     if (task.type === 'decade') {
       const gf = task.decade ?? (record.nonAiResult?.greatFortunes ?? []).find((row) => task.year !== undefined && task.year >= row.startYear && task.year <= row.endYear);
-      return (gf?.ganZhi ? gf.ganZhi + ' ' : '') + '大运段(' + (gf?.startYear ?? task.year ?? '') + '-' + (gf?.endYear ?? '') + ')';
+      // 与详情页 decadeSegment 同口径：只显这一运与「未来十年」窗口的交集，整段在窗口之外退回整段。
+      const rawStart = gf?.startYear ?? task.year;
+      // 「补满十年」只在起点已进窗口时才做(旧记录同一运 endYear 可能少两年)；
+      // 起点还在窗口之前的运不补 —— 一补就把已过完的年份也算进相交区间。
+      const paddedEnd = typeof rawStart === 'number' && rawStart >= horizon.from
+        ? Math.max(gf?.endYear ?? rawStart, rawStart + 9)
+        : (gf?.endYear ?? rawStart);
+      const rawEnd = paddedEnd ?? horizon.to;
+      const hasSpan = typeof rawStart === 'number' && typeof rawEnd === 'number';
+      const intersects = hasSpan && (rawStart as number) <= horizon.to && (rawEnd as number) >= horizon.from;
+      const start = intersects ? Math.max(rawStart as number, horizon.from) : rawStart;
+      const end = intersects ? Math.min(rawEnd as number, horizon.to) : rawEnd;
+      const range = intersects && typeof start === 'number' && typeof end === 'number' ? `${start}-${end}` : `${gf?.startYear ?? task.year ?? ''}-${gf?.endYear ?? ''}`;
+      return (gf?.ganZhi ? gf.ganZhi + ' ' : '') + '大运段(' + range + ')';
     }
     if (task.type === 'monthly') return task.year + '年' + task.month + '月' + (task.monthly?.ganZhi ? '(' + task.monthly.ganZhi + ')' : '');
     return (task.year ?? '') + '年' + (task.annual?.ganZhi ? '(' + task.annual.ganZhi + ')' : '');
