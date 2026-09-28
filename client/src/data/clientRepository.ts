@@ -253,7 +253,7 @@ async function hydrateRecords(records: BaziRecord[]): Promise<BaziRecord[]> {
     if (!needs.includes(record)) return undefined;
     try {
       const now = new Date();
-      const input = { birthYear: Number(record.birthYear), birthMonth: Number(record.birthMonth), yearPillar: record.yearPillar, monthPillar: record.monthPillar, dayPillar: record.dayPillar, hourPillar: record.hourPillar };
+      const input = { birthYear: Number(record.birthYear), birthMonth: Number(record.birthMonth), birthDay: record.nonAiResult?.birthDay, yearPillar: record.yearPillar, monthPillar: record.monthPillar, dayPillar: record.dayPillar, hourPillar: record.hourPillar };
       // 引擎按传入时刻排「十年流年 + 每年十二流月」，锚点必须与 buildBaziTasks 同源(analysisHorizon)：
       // 传 createdAt 就等于把窗口钉在建盘那一年，跨年之后任务列表最后一年的流年查不到干支
       // (实测 2025 年建的盘，今年界面上「2035 年流年」整行空掉)。

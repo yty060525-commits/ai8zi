@@ -40,6 +40,10 @@ export interface NonAiChart {
   pillars: { year: string; month: string; day: string; hour: string };
   lunarDate: string;
   solarDate: string;
+  /** 真实出生的公历「日」(1–31)。按生日自动排盘时写入：配合「早子时换日」——23 点后日柱进一日，
+   *  但命主实际仍生在当日，故重算/换设备时用这个真实日把公历/农历与起运锚回当天，不被进一后的日柱带偏。
+   *  手录四柱路径无此栏(undefined)：由四柱反查定位日期，口径同旧。 */
+  birthDay?: number;
   zodiac: string;
   elements: Record<string, number>;
   elementRatio: Record<string, number>;

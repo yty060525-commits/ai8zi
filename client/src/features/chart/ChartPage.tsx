@@ -19,15 +19,18 @@ export function ChartPage({ onRecordCreated }: ChartPageProps) {
   // 真太阳时选点：省→市→区(区县)。整表 ~92KB，进首屏不加载，挂载后惰性取一次填入下拉。
   const [provinces, setProvinces] = useState<SolarProvince[]>([]);
   const [tsProvince, setTsProvince] = useState('off'); const [tsCity, setTsCity] = useState(''); const [tsDistrict, setTsDistrict] = useState(''); const [tsLng, setTsLng] = useState('');
+  // 早子时换日：23 点后出生的日柱按次日进一(时柱随之用次日日干起遁)，命主真实生日仍记当日。默认开。
+  const [ziShift, setZiShift] = useState(true);
   useEffect(() => { let on = true; void loadTrueSolarProvinces().then((p) => { if (on) setProvinces(p); }); return () => { on = false; }; }, []);
-  /** 拿到四柱后统一走这条：定位出生日期、算非 AI 事实、存库、跳转。手动/自动两条录入路径共用。 */
-  async function savePillars(pillars: Pillars, year: number, month: number) {
+  /** 拿到四柱后统一走这条：定位出生日期、算非 AI 事实、存库、跳转。手动/自动两条录入路径共用。
+   *  birthDay=真实出生日(自动排盘传入，用于早子时换日后仍把公历/农历/起运锚在当天)；手录路径不传(undefined)。 */
+  async function savePillars(pillars: Pillars, year: number, month: number, birthDay?: number) {
     const createdAt = new Date().toISOString();
     let nonAiResult;
     try {
       // 历法引擎按需加载(动态分包)，不占首屏
       const { calculateNonAi } = await import('./nonAiCalculator');
-      nonAiResult = calculateNonAi({ birthYear: year, birthMonth: month, ...pillars }, gender, createdAt);
+      nonAiResult = calculateNonAi({ birthYear: year, birthMonth: month, birthDay, ...pillars }, gender, createdAt);
     }
     catch (cause) { setError(cause instanceof Error ? cause.message : '四柱无法计算'); return; }
     const record: Omit<BaziRecord, 'id' | 'aiStatus'> = { name: name.trim(), gender, birthYear: year, birthMonth: month, createdAt, ...pillars, nonAiResult };
@@ -91,10 +94,11 @@ export function ChartPage({ onRecordCreated }: ChartPageProps) {
     let pillars: Pillars;
     try {
       const { computePillarsFromDate } = await import('./nonAiCalculator');
-      pillars = computePillarsFromDate(dt);
+      pillars = computePillarsFromDate(dt, { ziShiftDay: ziShift });
     }
     catch (cause) { setError(cause instanceof Error ? cause.message : '四柱无法计算'); return; }
-    await savePillars(pillars, dt.year, dt.month);
+    // 传真实出生日(修正后的 dt.day)：换日时日柱已是次日，但生日仍记当日，重算据此锚回。
+    await savePillars(pillars, dt.year, dt.month, dt.day);
   }
   const numField = (label: string, value: string, set: (v: string) => void, extra: Record<string, string | number> = {}) =>
     <label>{label}<input type="number" step={1} value={value} onChange={(e) => { setError(''); set(e.target.value); }} {...extra} /></label>;
@@ -126,7 +130,8 @@ export function ChartPage({ onRecordCreated }: ChartPageProps) {
           {selectedCity?.districts?.map((d) => <option value={d.name} key={d.name}>{d.name}</option>)}
         </select>
       </label>}{tsProvince === 'custom' && numField('出生地经度(°E)', tsLng, setTsLng, { min: -180, max: 180, step: 0.1, placeholder: '如 87.6' })}</div>}
-      {mode === 'auto' && <p className="field-hint">{calendar === 'lunar' ? '农历按夏历输入，闰月出生请勾选「闰月」；' : ''}命盘年柱以立春为界，时辰按十二时辰、23 点后归当日子时(与命盘校验同口径)。真太阳时按所选地经度做「北京时 +（经度−120）×4 分」的东加西减修正，与主流排盘一致(不计均时差)。</p>}
+      {mode === 'auto' && <label className="checkbox-inline"><input type="checkbox" checked={ziShift} onChange={(e) => { setError(''); setZiShift(e.target.checked); }} />早子时换日（23 点后日柱进一）</label>}
+      {mode === 'auto' && <p className="field-hint">{calendar === 'lunar' ? '农历按夏历输入，闰月出生请勾选「闰月」；' : ''}命盘年柱以立春为界，时辰按十二时辰。{ziShift ? '已启用「早子时换日」：出生时辰在 23 点后则日柱进一日、时柱改按次日日干起时，但公历生日仍记当出生那天(不随之改动)。' : '23 点后归当日子时(晚子时不换日)。'}真太阳时按所选地经度做「北京时 +（经度−120）×4 分」的东加西减修正，与主流排盘一致(不计均时差)。</p>}
     </section>
     {error && <p className="form-error" role="alert">{error}</p>}
     {mode === 'auto'
