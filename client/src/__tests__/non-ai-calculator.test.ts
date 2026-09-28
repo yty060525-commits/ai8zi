@@ -221,6 +221,24 @@ describe('non-AI calculator', () => {
       expect(text).toContain('今年在乙丑运');
       expect(text).not.toContain('今年在丙寅运');
     });
+
+    /* findCurrentFortune：大运表高亮「今年所在」那一柱所用的共享判据。它必须与 luckStartText
+       同口径(周年优先、无 onsetDate 退回整数年)，否则表里点亮的柱和文案说的柱会各说各话。 */
+    it('findCurrentFortune 按周年区间命中当前柱，年末交运日边界不越界', async () => {
+      const { findCurrentFortune } = await import('../features/person/PersonDetail');
+      const { Solar } = await import('lunar-javascript');
+      const born = Solar.fromYmdHms(1979, 5, 28, 12, 30, 0);
+      const ec = born.getLunar().getEightChar();
+      const result = calculateNonAi({ birthYear: 1979, birthMonth: 5, birthDay: 28, yearPillar: ec.getYear(), monthPillar: ec.getMonth(), dayPillar: ec.getDay(), hourPillar: ec.getTime() }, 'male', '2026-09-28T00:00:00Z');
+      // 乙丑第4柱 onsetDate=2016-10-08 endDate=2026-10-07；下一步甲子从 2026-10-08 起
+      expect(findCurrentFortune(result, 2026, '2026-09-28')?.ganZhi).toBe('乙丑');   // 末日之内
+      expect(findCurrentFortune(result, 2026, '2026-10-07')?.ganZhi).toBe('乙丑');   // 恰是末日
+      expect(findCurrentFortune(result, 2026, '2026-10-08')?.ganZhi).toBe('甲子');   // 次日进下一柱
+      // 老记录（无 onsetDate）退回整数年区间：2026 落进甲子[2026-2035]，
+      // 这正是整数年口径与周年口径的差异所在（周年要等到 10-08 才交甲子）。
+      const legacy = { ...result, greatFortunes: result.greatFortunes.map((g) => ({ ...g, onsetDate: undefined, endDate: undefined })) };
+      expect(findCurrentFortune(legacy, 2026, '2026-09-28')?.ganZhi).toBe('甲子');
+    });
   });
 });
 

@@ -136,6 +136,15 @@ function BasicInfo({ record }: { record: BaziRecord }) {
   </section>;
 }
 const listText = (value: string[] | string[][]) => value.map((item) => Array.isArray(item) ? item.join('、') : item).join(' · ') || '—';
+/** 今天(或指定时刻)落在哪一步大运：优先按精确交运周年区间 onsetDate~endDate 裁决，
+ *  老记录无该字段才退回整数年 startYear≤今≤endYear。抽成一处，起运文案与大运表共用，
+ *  避免两处各写一份判据而漂移。 */
+export const findCurrentFortune = (result: NonAiChart, nowYear: number, todayYmd: string): NonAiChart['greatFortunes'][number] | undefined => {
+  const list = result.greatFortunes ?? [];
+  if (list.some((g) => g.onsetDate && g.endDate)) return list.find((g) => g.onsetDate && g.endDate && g.onsetDate <= todayYmd && todayYmd <= g.endDate);
+  return list.find((g) => g.startYear <= nowYear && nowYear <= g.endYear);
+};
+
 /** 起运文案：几岁起运 + 当前正走哪一运。老记录没算过起运时如实说「未记录」，
  *  引导去点「重新计算非 AI」，而不是悄悄沿用旧的十年边界对齐结果。 */
 export const luckStartText = (result: NonAiChart, nowYear: number): string => {
@@ -146,10 +155,7 @@ export const luckStartText = (result: NonAiChart, nowYear: number): string => {
      用「startYear ≤ 今 ≤ endYear」判当前运会让整条段相对真太阳历前漂近一年(实测约 4% 的人
      报错一柱)。老记录无 onsetDate 时退回整数年区间，至少不丢这一句。 */
   const today = new Date(); const todayYmd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-  const hasOnset = (result.greatFortunes ?? []).some((g) => g.onsetDate && g.endDate);
-  const current = hasOnset
-    ? (result.greatFortunes ?? []).find((g) => g.onsetDate && g.endDate && g.onsetDate <= todayYmd && todayYmd <= g.endDate)
-    : (result.greatFortunes ?? []).find((g) => g.startYear <= nowYear && nowYear <= g.endYear);
+  const current = findCurrentFortune(result, nowYear, todayYmd);
   const age = `${start.years}岁${start.months ? start.months + '个月' : ''}`;
   /* 交运日优先用引擎自算的 luckOnset(与库逐日一致且口径可控)，老记录没这个字段才退回库值。 */
   const onset = result.luckOnset || start.date;
@@ -178,10 +184,16 @@ function NonAiAnalysis({ result, record }: { result?: NonAiChart; record: BaziRe
   ];
   const columns: [string, string][] = [['四柱', fields[0][1]], ['藏干', listText(result.hiddenStems)], ['藏干十神', result.tenGodDetails.hidden.map((items) => items.map((item) => `${item.stem}:${item.tenGod}`).join('、')).join(' · ') || '—'], ['十神', listText(result.tenGods)], ['纳音', listText(result.naYin)]];
   const relationLabels: Array<[keyof NonAiChart['relationships'], string]> = [['sanHe', '三合'], ['liuHe', '六合'], ['xing', '刑'], ['chong', '冲'], ['po', '破'], ['hai', '害'], ['ke', '克']];
+  /* 完整大运表：把九步运的干支、十年区间、精确交运日全部列出，并高亮「今年所在」那一柱。
+     AI 分析区的「④未来大运」只排起运晚于今年的运(避免整轮重算)，于是眼前正在走的那步运在
+     那里看不到——这张表补的就是这一格，且它读的是本地排盘数据、不触发任何 AI 请求。 */
+  const today0 = new Date(); const todayYmd0 = `${today0.getFullYear()}-${String(today0.getMonth() + 1).padStart(2, '0')}-${String(today0.getDate()).padStart(2, '0')}`;
+  const currentGz = findCurrentFortune(result, today0.getFullYear(), todayYmd0)?.ganZhi;
+  const luckRows = result.greatFortunes ?? [];
   const yb = record.yearPillar?.[1] ?? '';
   const zs = yb && '子丑寅卯辰巳午未申酉戌亥'.includes(yb) ? interpersonalZodiac(yb) : null;
   const selfZodiac = yb ? zodiacOfBranch(yb) : '';
-  return <section className="detail-section" aria-label="基础排盘数据"><div className="section-heading"><div><p className="eyebrow">02 / CHART DATA</p><h2>基础排盘数据</h2></div></div><dl className="info-grid chart-data-grid">{fields.slice(1).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl><div className="chart-columns">{columns.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</div><section className="subsection" aria-label="生肖关系"><h3>生肖关系</h3><p>本命生肖：{zodiacOfBranch(record.yearPillar?.[1] ?? '')}（年支 {record.yearPillar[1]}）</p>
+  return <section className="detail-section" aria-label="基础排盘数据"><div className="section-heading"><div><p className="eyebrow">02 / CHART DATA</p><h2>基础排盘数据</h2></div></div><dl className="info-grid chart-data-grid">{fields.slice(1).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl><div className="chart-columns">{columns.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</div><section className="subsection" aria-label="大运"><h3>大运</h3><table className="luck-table"><thead><tr><th>大运</th><th>起运年</th><th>区间</th><th>交运日</th></tr></thead><tbody>{luckRows.map((g) => <tr key={g.ganZhi + g.startYear} className={g.ganZhi === currentGz ? 'luck-current' : undefined}><td>{g.ganZhi}{g.ganZhi === currentGz ? ' ·今' : ''}</td><td>{g.startYear}</td><td>{g.startYear}-{g.endYear}</td><td>{g.onsetDate && g.endDate ? `${g.onsetDate} ~ ${g.endDate}` : '—'}</td></tr>)}</tbody></table></section><section className="subsection" aria-label="生肖关系"><h3>生肖关系</h3><p>本命生肖：{zodiacOfBranch(record.yearPillar?.[1] ?? '')}（年支 {record.yearPillar[1]}）</p>
       {zs && <p>人际适配：我属{selfZodiac} → 三合 {zs.sanHe.join('、')} · 六合 {zs.liuHe.join('、')} · 六冲 {zs.chong.join('、')} · 六害 {zs.hai.join('、')}（生肖人际参考，非决断）</p>}<ul>{relationLabels.map(([key, label]) => <li key={key}><strong>{label}</strong>：{result.relationships[key].join('、') || '—'}</li>)}</ul></section></section>;
 }
 const safeAiError = (error: string) => error
