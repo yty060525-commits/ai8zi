@@ -188,6 +188,39 @@ describe('non-AI calculator', () => {
         expect(result.greatFortunes[0].startYear).toBe(Number(/^(\d{4})/.exec(libDate)![1]));
       }
     });
+
+    /* 大运段仍按整数公历年展示(与库 getDaYun 同源)，但「今年在哪步运」必须按真实交运日周年裁决。
+       交运日几乎不在 1/1：如生 1979-05-28 男，交运 1986-10-08，则首步戊辰的真实区间是
+       1986-10-08 ~ 1996-10-07；到 2026-09-28 这天，乙丑运(2016-10-08~2026-10-07)尚未走完，
+       下一步丙寅要到 10-08 才交。用整数年区间(startYear≤今≤endYear)会把这近一年错配到相邻柱。
+       onsetDate/endDate 就是为这一句准备的周年边界，luckStartText 据此挑当前运。 */
+    it('每步大运带精确周年交运区间(onsetDate/endDate = 首步交运日 + 10k 年)', async () => {
+      const { Solar } = await import('lunar-javascript');
+      const born = Solar.fromYmdHms(1979, 5, 28, 12, 30, 0);
+      const ec = born.getLunar().getEightChar();
+      const result = calculateNonAi({ birthYear: 1979, birthMonth: 5, birthDay: 28, yearPillar: ec.getYear(), monthPillar: ec.getMonth(), dayPillar: ec.getDay(), hourPillar: ec.getTime() }, 'male', '2026-09-28T00:00:00Z');
+      // 首步 onsetDate == 库交运日；后续每步 = 上一步 +10 年的同一月日；末日 = 下一步前一天
+      expect(result.luckOnset).toBe(String(ec.getYun(1).getStartSolar().toYmd()));
+      expect(result.greatFortunes[0].onsetDate).toBe('1986-10-08');
+      expect(result.greatFortunes[0].endDate).toBe('1996-10-07');
+      expect(result.greatFortunes[1].onsetDate).toBe('1996-10-08');
+      expect(result.greatFortunes[3].onsetDate).toBe('2016-10-08');
+      expect(result.greatFortunes[3].endDate).toBe('2026-10-07');
+      // 整数年展示不变：首步起运年仍等于库 da[1] 的起运年
+      expect(result.greatFortunes[0].startYear).toBe(ec.getYun(1).getDaYun(2)[1].getStartYear());
+    });
+
+    it('「今年在哪步运」按周年而非整数年裁决（年末交运盘不错配相邻柱）', async () => {
+      const { luckStartText } = await import('../features/person/PersonDetail');
+      const { Solar } = await import('lunar-javascript');
+      const born = Solar.fromYmdHms(1979, 5, 28, 12, 30, 0);
+      const ec = born.getLunar().getEightChar();
+      const result = calculateNonAi({ birthYear: 1979, birthMonth: 5, birthDay: 28, yearPillar: ec.getYear(), monthPillar: ec.getMonth(), dayPillar: ec.getDay(), hourPillar: ec.getTime() }, 'male', '2026-09-28T00:00:00Z');
+      // 2026-09-28 < 2026-10-08：仍在乙丑运(第4柱)。整数年会误判成下一柱丙寅。
+      const text = luckStartText(result, 2026);
+      expect(text).toContain('今年在乙丑运');
+      expect(text).not.toContain('今年在丙寅运');
+    });
   });
 });
 

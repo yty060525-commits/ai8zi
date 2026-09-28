@@ -78,6 +78,29 @@ function addLuckSpan(y: number, m: number, d: number, years: number, months: num
 const pad2 = (n: number) => String(n).padStart(2, '0');
 const formatYmd = (d: Date) => `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
 
+/** 第 k 步大运的精确交运日 = 首步交运日 + 10k 周年的同一月日。
+ *  用途只有一个：判「今天落在哪一步运」。大运段仍按 startYear(交运当年公历年)整十年展示、
+ *  与库 getDaYun 同源不动；但交运日几乎不在 1/1，用整数年区间判当前运会让整条段相对真太阳历
+ *  前漂近一年(实测约 4% 的人「今年所处大运」被报错一柱)。这里按周年边界裁决该句即可，
+ *  不改变干支↔年份的十年对应。闰日(2/29)在平年回退到 2/28，与 addLuckSpan 的钳制同口径。 */
+function luckOnsetAt(onsetYmd: string, k: number): string {
+  const m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(onsetYmd);
+  if (!m) return '';
+  const y = Number(m[1]) + 10 * k, mo = Number(m[2]), d = Number(m[3]);
+  const dim = new Date(Date.UTC(y, mo, 0)).getUTCDate();   // 目标年该月真长度
+  const dd = Math.min(d, dim);
+  return `${y}-${pad2(mo)}-${pad2(dd)}`;
+}
+
+/** yyyy-mm-dd 的前一天(UTC，避开时区漂移)。用于把「下一步交运日」转成「本步末日」。 */
+function prevDayYmd(ymd: string): string {
+  const m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(ymd);
+  if (!m) return '';
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  d.setUTCDate(d.getUTCDate() - 1);
+  return formatYmd(d);
+}
+
 /** 起运推算：顺行取出生后下一个节、逆行取出生前上一个节，距离按每 3 天折 1 年、
  *  每 1 天折 4 个月(流派1)。方向由库按性别+年干阴阳自定，故此处不传方向。
  *  失败(极端日期/库异常)返回 null，让调用方走兜底而不是抛错打断排盘。 */
@@ -791,7 +814,13 @@ export function calculateNonAi(
     const ganZhi = gzAt(monthIndex + step * (k + 1));
     const startYear = firstStartYear + k * 10;
     const participants = [...natalItems, { value: ganZhi, layer: 'great-fortune' as const, name: String(startYear) }];
-    return { ganZhi, startYear, endYear: startYear + 9, tenGod: tenGodOf(day, ganZhi[0]), relationships: fortuneFacts(ganZhi, pillars), relationshipDetails: pairHits(participants) };
+    /* onsetDate/endDate：该步运真实的周年交运区间(首步交运日 + 10k 年，末日为下一步交运日前一天)，
+       仅用于「今年在哪步运」的精确判定；startYear/endYear 的十年展示仍与库 getDaYun 同源不动。
+       交运日几乎不在 1/1，用整数年区间判当前运会让整条段相对真太阳历前漂近一年(实测约 4% 报错一柱)。
+       无起运(兜底锚点)时留空，调用方退回整数年区间。 */
+    const onsetDate = luckOnset ? luckOnsetAt(luckOnset, k) : '';
+    const endDate = luckOnset ? prevDayYmd(luckOnsetAt(luckOnset, k + 1)) : '';
+    return { ganZhi, startYear, endYear: startYear + 9, onsetDate, endDate, tenGod: tenGodOf(day, ganZhi[0]), relationships: fortuneFacts(ganZhi, pillars), relationshipDetails: pairHits(participants) };
   });
 
   // 旺衰评分只算一次，供 patternFacts 与返回对象共用

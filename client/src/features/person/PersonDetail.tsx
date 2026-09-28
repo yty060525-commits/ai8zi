@@ -141,7 +141,15 @@ const listText = (value: string[] | string[][]) => value.map((item) => Array.isA
 export const luckStartText = (result: NonAiChart, nowYear: number): string => {
   const start = result.luckStart;
   if (!start?.date) return '未记录（点下方「重新计算非 AI」可补算）';
-  const current = (result.greatFortunes ?? []).find((g) => g.startYear <= nowYear && nowYear <= g.endYear);
+  /* 「今年在哪步运」按真实交运日(onsetDate，首步交运日 + 10k 周年)裁决，而不是整数年区间。
+     大运段的十年展示(startYear/endYear)仍与库 getDaYun 同源不动；但交运日几乎不在 1/1，
+     用「startYear ≤ 今 ≤ endYear」判当前运会让整条段相对真太阳历前漂近一年(实测约 4% 的人
+     报错一柱)。老记录无 onsetDate 时退回整数年区间，至少不丢这一句。 */
+  const today = new Date(); const todayYmd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const hasOnset = (result.greatFortunes ?? []).some((g) => g.onsetDate && g.endDate);
+  const current = hasOnset
+    ? (result.greatFortunes ?? []).find((g) => g.onsetDate && g.endDate && g.onsetDate <= todayYmd && todayYmd <= g.endDate)
+    : (result.greatFortunes ?? []).find((g) => g.startYear <= nowYear && nowYear <= g.endYear);
   const age = `${start.years}岁${start.months ? start.months + '个月' : ''}`;
   /* 交运日优先用引擎自算的 luckOnset(与库逐日一致且口径可控)，老记录没这个字段才退回库值。 */
   const onset = result.luckOnset || start.date;
