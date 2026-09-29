@@ -32,16 +32,26 @@ const missing = files.filter(f => !shas.has(f.rel)).map(f => f.rel);
 console.log('missing:', missing.length ? missing.join(', ') : '(none)');
 if (shas.size !== files.length) process.exit(1);
 const flat = [...shas].map(([p, sha]) => ({ path: p, mode: '100644', type: 'blob', sha }));
-// 保留历史带哈希 chunk：已加载的旧页面会动态 import 它当初那版的 chunk 文件名，
-// 一旦从分支上删掉，旧页面就会 404(截图事故)。不带哈希的入口文件仍然只留最新一份。
+// 保留上一版部署里的带哈希 chunk：已加载但没刷新的旧页面会动态 import 它当初那版的文件名，
+// 删光就 404(截图事故)。只留**上一版**、且每个基名最多 KEEP_PER_BASE 份——全量累积曾把
+// 6 个模块堆成 206 个文件 / 41 MB。不带哈希的入口文件仍只留最新一份。
 const HASHED = /-[A-Za-z0-9_-]{8,}\.(?:js|css)$/;
+const KEEP_PER_BASE = 3;
 const current = new Set(flat.map((e) => e.path));
-const kept = (treeInfo.data?.tree || []).filter((e) => e.type === 'blob' && HASHED.test(e.path) && !current.has(e.path));
-if (kept.length) console.log('retaining', kept.length, 'old hashed chunk(s):', kept.map((e) => e.path).join(', '));
+const prevKept = (treeInfo.data?.tree || []).filter((e) => e.type === 'blob' && HASHED.test(e.path) && !current.has(e.path));
+const byBase = new Map();
+for (const e of prevKept) {
+  const base = e.path.split('/').pop().replace(/-[A-Za-z0-9_-]{8,}\.(?:js|css)$/, '');
+  if (!byBase.has(base)) byBase.set(base, []);
+  byBase.get(base).push(e);
+}
+const kept = [...byBase.values()].flatMap((list) => list.slice(-KEEP_PER_BASE));
+if (kept.length) console.log('retaining', kept.length, 'of', prevKept.length, 'old hashed chunk(s)');
 const tree = await gh('POST', '/repos/' + REPO + '/git/trees', {
   tree: [...flat, ...kept.map((e) => ({ path: e.path, mode: '100644', type: 'blob', sha: e.sha }))],
 });
-const main = await gh('GET', '/repos/' + REPO + '/git/refs/heads/main');
-const c = await gh('POST', '/repos/' + REPO + '/git/commits', { message: 'deploy: full PWA build (retain old hashed chunks)', tree: tree.data.sha, parents: [main.data.object.sha] });
+// parent 必须是 gh-pages 自己的上一个提交：写成 main 会让分支祖先链断成源码快照，
+// 既无法按历史判龄，也让每次部署看起来是「第一次引入」。
+const c = await gh('POST', '/repos/' + REPO + '/git/commits', { message: 'deploy: PWA build (retain previous-version chunks)', tree: tree.data.sha, parents: [ref.data.object.sha] });
 await gh('PATCH', '/repos/' + REPO + '/git/refs/heads/gh-pages', { sha: c.data.sha, force: true });
-console.log('gh-pages force-updated:', c.data.sha, 'new blobs', flat.length, 'retained', kept.length, 'total', flat.length + kept.length);
+console.log('gh-pages updated:', c.data.sha, 'new blobs', flat.length, 'retained', kept.length, 'total', flat.length + kept.length);
