@@ -15,12 +15,30 @@ const grabJs = (src: string, name: string) => {
   for (const ln of src.slice(s).split('\n')) { acc += (acc ? '\n' : '') + ln; if (ln.endsWith(';')) break; }
   return [...acc.matchAll(/'((?:[^'\\]|\\.)*)'/g)].map((m) => m[1]).join('').replace(/\\n/g, '\n').replace(/\\'/g, "'");
 };
+/** 取 Rust `const X: &str = concat!( ... );` 里的文本：逐行扫描，只认「整行是一个字符串字面量」的行。
+ *  不能用一条正则扫全文 —— 字面量内部的 \" 会让正则在转义引号处提前收尾，把后面的中文当成垃圾丢掉，
+ *  于是把完好无损的桌面端规则读成「被删短了」。标识符行(TONE_TAIL)与注释行同样跳过。 */
 const grabRust = (src: string, name: string) => {
   const head = `const ${name}: &str = concat!(`;
   const s = src.indexOf(head);
   if (s < 0) throw new Error('missing rust ' + name);
   const body = src.slice(s + head.length, src.indexOf('\n);', s));
-  return [...body.matchAll(/^\s*"((?:[^"\\]|\\.)*)"/gm)].map((m) => m[1]).join('').replace(/\\n/g, '\n').replace(/\\"/g, '"');
+  let out = '';
+  for (const ln of body.split('\n')) {
+    const t = ln.trim();
+    if (!t.startsWith('"')) continue;
+    let i = 1;
+    while (i < t.length) { if (t[i] === '\\') { i += 2; continue; } if (t[i] === '"') break; i += 1; }
+    if (i >= t.length) continue; // 找不到收尾引号：不是字面量行
+    out += t.slice(1, i).replace(/\\n/g, '\n').replace(/\\"/g, '"');
+  }
+  return out;
+};
+/** Rust 的普通字符串常量(非 concat!)：lib.rs 里 TONE_TAIL 这类单行 const 用这个取。 */
+const grabRustStr = (src: string, name: string) => {
+  const m = new RegExp(`^const ${name}: &str = "((?:[^"\\\\]|\\\\.)*)";`, 'm').exec(src);
+  if (!m) throw new Error('missing rust str ' + name);
+  return m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
 };
 
 describe('三通道提示词一致性', () => {
@@ -39,6 +57,25 @@ describe('三通道提示词一致性', () => {
   });
   it('全盘总结前缀服务器与浏览器一致', () => {
     expect(grabJs(adapter, 'OVERVIEW_PREFIX')).toBe(grabJs(server, 'OVERVIEW_PROMPT'));
+  });
+  it('输出硬性要求三处逐字节相同(含「正文只许中文」「禁止引用出处」两条)', () => {
+    // 「限制死只能中文、不留出处引用」写在规则第 5、6 条里。Rust 端把它存成 OUTPUT_RULES_HEAD
+    // (标题 + 规则 + 语气标题)，两端切法不同，这里各自还原成同一段文本再比。
+    const s = grabJs(server, 'OUTPUT_RULES_TEXT');
+    const a = grabJs(adapter, 'OUTPUT_RULES_TEXT');
+    // Rust 把「标题 + 规则 + 语气标题」存成一个 OUTPUT_RULES_HEAD，语气标题在 concat! 里是
+    // 标识符行(TONE_TAIL)而非字面量，grabRust 只收字面量行，所以这里得到的就是「标题 + 规则」。
+    const head = grabRust(rust, 'OUTPUT_RULES_HEAD');
+    const rulesHeadMark = '\n\n# 输出硬性要求(违反即整篇作废重写)\n';
+    expect(head.startsWith(rulesHeadMark)).toBe(true);
+    const r = head.slice(rulesHeadMark.length);
+    expect(a).toBe(s);
+    expect(r).toBe(s);
+    // 钉子：删掉这两条规则(或改字)必须当场红 —— 闸门只兜得住漏网的，口径靠提示词。
+    expect(s).toContain('【正文只许中文】');
+    expect(s).toContain('【禁止引用出处】');
+    expect(s).toContain('不得出现阿拉伯数字');
+    expect(head).toContain(rulesHeadMark);
   });
   it('后天调整前缀服务器与浏览器一致', () => {
     expect(grabJs(adapter, 'ADJUST_PREFIX')).toBe(grabJs(server, 'ADJUST_PREFIX'));

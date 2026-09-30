@@ -185,8 +185,10 @@ describe('simplified chart application flow', () => {
     expect(screen.getByText('状态：已完成')).toBeTruthy();
     // 全盘总结：有提要入口，正文与标题各只出现一次(不重复渲染)
     expect(await screen.findByText(/全盘总结已完成/)).toBeTruthy();
-    expect(screen.getAllByText('丙午得禄·乘风可上')).toHaveLength(1);
-    expect(screen.getByText('1. 2029年(乙巳)：机会窗口，宜主动争取。')).toBeTruthy();
+    // 全盘总结：有提要入口，正文与标题各只出现一次(不重复渲染)。
+    // 期望值取闸门清洗后的形态：中点「·」与括号都不在纯中文白名单里，编号翻成中文序号。
+    expect(screen.getAllByText('丙午得禄乘风可上')).toHaveLength(1);
+    expect(screen.getByText('一、二零二九年乙巳：机会窗口，宜主动争取。')).toBeTruthy();
   });
 
   it('重新计算非 AI：只换排盘数据，不动已生成的 AI 结果，也不调用 AI', async () => {

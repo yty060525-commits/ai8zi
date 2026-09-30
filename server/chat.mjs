@@ -17,6 +17,8 @@
 import { createHash } from 'node:crypto';
 import { listRecordSummaries, getRecordById, readCache, writeCache } from './db.mjs';
 import { natalFactsOf, providerOrder, providerKey, clampTone, toneInstruction, cacheKey, callProvider, PROVIDERS } from './ai.mjs';
+/* 正文中文闸门：与浏览器端共用的唯一一份实现(features/chart/elements.ts 再导出同一模块)。 */
+import { FIELD_NAME_ZH, isChineseOnly, nonChineseKinds, enforceChinese, sanitizeChatText } from '../client/src/shared/chineseGate.ts';
 
 /* ---------- 提问理解(检索计划) ---------- */
 /** 主题规则：命中即作为检索的节标签/证据范围。顺序即展示优先级。 */
@@ -303,7 +305,7 @@ export const CHAT_SYSTEM = '你是一位资深子平命理师，正在与用户�
   + '【时机提问】用户问"什么时候/大约何时/多久/哪一年"这类不指定年份的应期问题时，'
   + '证据里会给出一个连续年份的【逐年批断(用于判断应期)】；'
   + '要逐个年份比对其中与该主题相关的小节，挑出最有利的一到两个年份作为应期作答，'
-  + '并说明是该年哪一条批断支持这个判断；'
+  + '并把支持这个判断的命理作用直接讲出来(只讲作用本身，不标注它出自哪条批断)；'
   + '证据里若点名了"尚未生成流年批断"的年份，只能在该范围之外给应期，绝不能给这批空缺年份下任何结论。'
   + '【缺口处理】只有当证据覆盖不了用户所问的时段与主题时(摘录为空，或只有【数据缺口提示】)，'
   + '才明确说出"数据库里还没有计算过这批数据"，逐条列出缺了什么，'
@@ -317,35 +319,20 @@ export const CHAT_SYSTEM = '你是一位资深子平命理师，正在与用户�
   + '禁止用命理常识、通书、经验、类比或"一般来说""通常""可能会"来补足缺失数据；'
   + '禁止在证据之外新增任何未给出的结论。'
   + '已有事实优先，格局与旺衰一律以命盘事实里「格局事实」「旺衰评分」两项为准，不得重判、不得改口径。'
-  + '【说重点】先说结论，再给依据，只讲与该问题直接相关的话，不铺垫、不寒暄、不重复问题、不写无关主题。'
-  + '【禁止英文】正文一律用中文表述，不得出现任何英文单词、英文缩写或拼音；'
-  + '尤其禁止把证据 JSON 里的英文字段名、变量名、代码标识符原样抄进正文，要说的内容一律翻译成中文说法。'
-  + '输出为简体中文纯文本：不要 JSON、不要代码块/注释/围栏标记；总长 150~350 字；'
-  + '分点(1. 2. 3.)作答，有证据时每点都注明依据的批断小节，无证据时直接说明缺数据并给出补算建议；全篇不得出现繁体字。';
+  + '【说重点】先给结论，再把命理作用本身讲清楚，只讲与该问题直接相关的话，不铺垫、不寒暄、不重复问题、不写无关主题。'
+  + '【正文只许中文】输出限死为纯中文：不得出现任何英文单词、英文缩写或拼音；'
+  + '不得出现任何数字(要表达数量或年份一律写成中文，如「二零二七年」「三十岁」)；'
+  + '不得出现括号、引号、书名号、连字符、下划线、百分号等任何半角或全角符号，只用汉字与顿号、逗号、冒号、句号、问号；'
+  + '尤其禁止把证据里的英文字段名、变量名、代码标识符原样抄进正文，要说的内容一律翻译成中文说法。'
+  + '【禁止引用出处】不要标注答案来自哪条批断、哪个小节、哪份数据或哪个字段，也不要写「依据」「根据」「引用」「见」之类出处说明；'
+  + '直接给结论和理由本身，全篇不留任何参考与引用的痕迹。'
+  + '输出为简体中文纯文本：不要 JSON、不要代码块/注释/围栏标记；总长一百五十字到三百五十字；'
+  + '分点作答，每点单独一行、行首用中文顿号式序号(一、二、三)，无证据时直接说明缺数据并给出补算建议；全篇不得出现繁体字。';
 
-/** 聊天正文去英文(与客户端 features/chart/elements.ts 的 sanitizeChatText 同口径)。
- *  实测(deepseek + reasoning_effort=high)模型会把证据 JSON 里的英文字段名原样抄进正文，
- *  提示词只是软约束，故在此做确定性清洗兜底。 */
-export const FIELD_NAME_ZH = {
-  patternFacts: '格局事实', strengthScore: '旺衰评分', tiaohouFacts: '调候参考', dayMaster: '日主', elementRatio: '五行比例',
-  elements: '五行', hiddenStems: '藏干', tenGods: '十神', naYin: '纳音', twelveLongevity: '十二长生',
-  shenSha: '神煞', relationships: '刑冲合害', solarDate: '公历日期', lunarDate: '农历日期',
-  zodiac: '生肖', gender: '性别', birthYear: '出生年', pillars: '四柱', natal: '命盘事实',
-  periodFacts: '时段运势', analyses: '已算批断', missing: '数据缺口', plan: '检索计划',
-  verdict: '判定', favorites: '喜用', favorable: '喜用', unfavorable: '忌神', score: '分值',
-};
-
-export function sanitizeChatText(text) {
-  let out = String(text ?? '');
-  // 整段几乎纯英文(无中文且连续英文词 ≥4) → 视为跑偏，交回调用方按失败处理
-  const cjk = (out.match(/[\u4e00-\u9fff]/g) ?? []).length;
-  const latinWords = out.match(/[A-Za-z]{2,}/g) ?? [];
-  if (cjk === 0 && latinWords.length >= 4) return '';
-  out = out.replace(/[A-Za-z_][A-Za-z0-9_]{1,}/g, (word) => FIELD_NAME_ZH[word] ?? word);
-  out = out.replace(/(?<=[\u4e00-\u9fff\s、，。；：（）「」])[A-Za-z_][A-Za-z0-9_]{2,}/g, '');
-  out = out.replace(/\bAI\b/g, 'AI').replace(/\s{2,}/g, ' ').replace(/ +([，。、；：）])/g, '$1');
-  return out.trim();
-}
+/* ── 正文中文闸门：唯一实现在 shared/chineseGate.ts，浏览器端经 features/chart/elements.ts 再导出。
+ *    服务器直接 import 同一份 —— 两端曾各抄一遍，改一处忘另一处会让同一命盘在不同通道
+ *    给出干净度不同的正文(一边漏括号、一边整段拦掉)。Node ≥22.6 可原生载入 .ts。 ── */
+export { FIELD_NAME_ZH, isChineseOnly, nonChineseKinds, enforceChinese, sanitizeChatText } from '../client/src/shared/chineseGate.ts';
 
 /** 证据摘要压成一段稳定前缀(同盘同题逐字节一致，吃上游前缀缓存)，可变尾巴只有问题本身。 */
 export function buildChatMessages({ question, history = [], evidence, tone = 80 }) {
@@ -382,7 +369,9 @@ export function chatCacheKey(record, question, model, tone) {
   //        (v2 那次是为「年份解错→证据是另一年的批断」，同属"检索口径变了旧答案必须作废"。)
   // chatv4：本命事实 natal 新增「调候参考」(natal.tiaohouFacts)，本命/喜忌类问答的作答口径随之变化，
   //        旧缓存里那套未含调候的答案一并作废重答。
-  return ['chatv4', model, record.gender, record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar, 'chat', qhash, record.birthYear, toneBucket].join('|');
+  // chatv5：系统提示词改为「正文限死纯中文 + 禁止引用出处」，并加了确定性中文闸门(清洗不过即拦下)。
+  //        旧缓存答案普遍带英文字段名、阿拉伯数字或「依据某小节」的出处说明，按新口径一律作废重写。
+  return ['chatv5', model, record.gender, record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar, 'chat', qhash, record.birthYear, toneBucket].join('|');
 }
 
 /** 本轮问题自带的人名要能覆盖上一轮命主。返回 {personName, recordId}；解不出则 null。 */

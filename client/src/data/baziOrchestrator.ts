@@ -128,8 +128,19 @@ export function stripMarkers(value: string): string {
   }
 }
 
+/** 闸门放行的字符集：汉字、空白、中文句读，外加唯一保留的结构标记 【】
+ *  (小节括号由 chineseGate.normalizeStructure 专门留下，供检索/切段/缺段重写判据使用)。
+ *  空串也通过这个式子(trim 后 length 0)，所以能区分「原文本就为空」与「被闸门拦下」。 */
+const GATE_ALLOWED = /^[一-鿿 \n、。，：；？！【】]*$/;
+
 export function sanitizeAnalysis(raw: BaziAIAnalysis | undefined): BaziAIAnalysis {
-  const asString = (v: unknown) => (typeof v === 'string' ? sanitizeAnalysisText(stripMarkers(v)) : '');
+  // 「洗成空串」有两种成因：原文含英文/符号(该按缺字段丢弃)，或原文本就为空(必须保持为空，
+  // 否则下游会把占位符 '—' 当成本命结论注入时段任务)。用闸门口径把两者分开。
+  const asString = (v: unknown) => {
+    if (typeof v !== 'string') return '';
+    const stripped = sanitizeAnalysisText(stripMarkers(v));
+    return stripped || GATE_ALLOWED.test(stripMarkers(v).trim()) ? stripped : '';
+  };
   const asStringArray = (v: unknown) => Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
   const optional = (key: 'overall' | 'health' | 'career' | 'wealth' | 'love' | 'notice' | 'title') => (raw && asString(raw[key])) ? { [key]: asString(raw[key]) } : {};
   return {
@@ -370,6 +381,8 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
   if (baselineResult.status === 'completed' && analysis) {
     baselineSummaryText = '格局：' + (analysis.pattern || '—') + ' · 强弱：' + (analysis.strength || '—')
       + '　喜：' + (analysis.usefulElements ?? []).join('、') + '　忌：' + (analysis.avoidElements ?? []).join('、');
+    // 这段摘要会作为「事实锚点」拼进下游时段任务的提示词，不是给用户看的正文，
+    // 因此不走闸门(闸门会吃掉干支括号与间隔点)，但字段值本身已在 sanitizeAnalysis 洗过。
     for (const task of tasks) {
       if (task.type === 'annual' || task.type === 'monthly' || task.type === 'decade') task.baseline = { summary: baselineSummaryText } as never;
     }

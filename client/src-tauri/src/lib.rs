@@ -312,7 +312,9 @@ pub(crate) fn cache_key(record: &BaziRecord, task: &AiTaskInput, model: &str) ->
     // v6: 本命事实新增引擎算定的 patternFacts/strengthScore，提示词改为「沿用不重判」；
     //      旧缓存是模型自行判断的产物，口径不同，必须整体作废重算一次。
     // v8: 本命事实再增「调候参考」(tiaohouFacts)，通则第 5 条改为按此判喜忌；旧缓存里的结论未含调候口径，作废重算。
-    format!("v8|{model}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", record.gender,
+    // v9: 输出硬性要求改写为「正文限死纯中文 + 禁止引用出处」(通则 5/6)，并与另两端合并为同一份常量；
+    //     旧缓存正文里带着英文字段名、阿拉伯数字与出处说明，不符合新展示口径，整体作废重写。
+    format!("v9|{model}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", record.gender,
         record.year_pillar, record.month_pillar, record.day_pillar, record.hour_pillar,
         task.task_type, task.year.unwrap_or(0), task.month.unwrap_or(0), record.birth_year, tone_bucket(task.tone))
 }
@@ -436,6 +438,28 @@ fn pick_decade(rows: &Value, year: i32) -> Value {
 }
 
 const OVERVIEW_PROMPT: &str = "你是资深子平命理师，现在做「全盘总结」。下面给出的是【已经算好的结论】：本命喜忌、以及未来十年的大运/流年/流月逐段批断要点。你的任务不是重新推算，也不是复述每一段，而是横向比较这些结论，挑出真正值得当事人注意的时间节点并说明理由。严格依据给定材料作答，禁止自行补充材料里没有的干支或事件；禁止输出注释或代码块/围栏标记，只给最终正文。用 JSON(仅 JSON)返回，schema：{\"title\":\"古风四字或对仗标题(可选)\",\"explanation\":长文}。explanation 必须依次各出现一次【核心结论】【值得关注的时间节点】【行动建议】，顺序一致，不得合并、省略或改名。其中【值得关注的时间节点】是本文重点，要求：1. 按重要程度排序，每条单独一行、行首用 1. 2. 3. 编号；2. 每条写成「年份(或大运段) + 干支 + 为什么值得关注(引材料中的刑冲克害/喜忌依据) + 一句话怎么办」；3. 至少区分「机会窗口」与「风险窗口」两类，各自点明；4. 材料里若某年标注了六冲/三刑/六害等重大作用，必须纳入；5. 只写材料支持得起的结论，宁少勿滥，不要逐年流水账。【核心结论】用 2-4 条概括命局主线与该十年大势；【行动建议】用 2-4 条给出跨年份可执行的通用做法(贴合喜用五行，不重复时间节点里的原话)。全篇简体中文，每个主题内部一条一句，禁止整段连排。";
+
+/// 输出硬性要求的完整一段(标题 + 六条规则 + 语气段标题)，任务路与全盘总结路共用同一份常量：
+/// 桌面端曾各写一份且已分叉(总结有「禁止围栏」那条、任务路没有)，同一命盘在不同通道会拿到
+/// 不同口径的正文。文本与 server/ai.mjs、deepseekAdapter.ts 的 OUTPUT_RULES_TEXT 逐字节一致，
+/// 由 client/src/__tests__/prompt-parity.test.ts 比对；改这里必须同步另两端并升缓存键。
+const TONE_TAIL: &str = "\n\n# 语气要求\n";
+const OUTPUT_RULES_HEAD: &str = concat!(
+    "\n\n# 输出硬性要求(违反即整篇作废重写)\n",
+    "1. 全篇一律使用简体中文(UTF-8)，禁止任何繁体字、异体字混入。\n",
+    "2. explanation 的【】小节必须按本任务规定逐段出现、各只出现一次，顺序一致，不得合并、省略或改名。\n",
+    "3. 每个小节至少 1 条编号要点；每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。\n",
+    "4. 禁止输出注释、代码块或任何围栏标记，只给最终正文。\n",
+    "5. 【正文只许中文】限死为纯中文：不得出现任何英文单词、英文字母缩写、拼音；不得出现阿拉伯数字(年份与数量一律写成中文，如「二零二七年」「三十岁」)；",
+    "不得出现括号、引号、书名号、连字符、下划线、百分号等半角或全角符号，只用汉字与顿号、逗号、冒号、句号、问号。",
+    "事实数据里凡是形如拉丁字母连写的键名，都只是数据结构的内部代号，你要做的是把它对应的「数值与含义」用中文讲出来，绝不可把这个代号本身抄进正文。",
+    "凡是描述「是否得令」「月支藏干有无印比」「助身方得分」「克泄耗方得分」「净分」「档位」这类结论，一律用中文词组直接表述：",
+    "得令与否写成「月支是/不是日主禄刃之地，得令/不得令」；月支藏干有无印比写成「月支藏干中见/未见印比，有/无通根之助」；",
+    "不能用英文词加上括号注音，也不能在中文后面缀上英文取值。\n",
+    "6. 【禁止引用出处】正文不得标注某句话来自哪条批断、哪个小节、哪份数据或哪个字段，也不得写「依据」「根据」「引用」「材料显示」之类出处说明；",
+    "直接给结论和理由本身，全篇不留任何参考与引用的痕迹。",
+    TONE_TAIL,
+);
 
 /// 失败原因分类：把上游 HTTP 状态码 + 响应体文案翻译成可读原因(与服务器端口径一致)。
 pub(crate) fn classify_failure(status: u16, body: &str) -> String {
@@ -583,7 +607,8 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
             })
             .unwrap_or_else(|| "（暂无本命结论）".into());
         let findings_text = task.findings.as_ref().map(|v| serde_json::to_string(v).unwrap_or_default()).unwrap_or_else(|| "{}".into());
-        let output_rules_ov = "\n\n# 输出硬性要求(违反即整篇作废重写)\n1. 全篇一律使用简体中文(UTF-8)，禁止任何繁体字、异体字混入。\n2. explanation 的【】小节必须按本任务规定逐段出现、各只出现一次，顺序一致，不得合并、省略或改名。\n3. 每个小节至少 1 条编号要点；每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。\n4. 禁止输出注释、代码块或任何围栏标记，只给最终正文。\n5. 正文只写中文，不得出现任何英文单词、英文字母缩写、拼音或英文字段代号；拉丁字母一个都不许有，数字也一律用中文数字表述。事实数据里凡是形如拉丁字母连写的键名，都只是数据结构的内部代号，你要做的是把它对应的「数值与含义」用中文讲出来，绝不可把这个代号本身抄进正文。凡是描述「是否得令」「月支藏干有无印比」「助身方得分」「克泄耗方得分」「净分」「档位」这类结论，一律用中文词组直接表述：得令与否写成「月支是/不是日主禄刃之地，得令/不得令」；月支藏干有无印比写成「月支藏干中见/未见印比，有/无通根之助」；不能用英文词加上括号注音，也不能在中文后面缀上英文取值。";
+        // 与 OUTPUT_RULES_HEAD(任务路)逐字节同一份规则：全盘总结不得有第二套口径。
+        let output_rules_ov = String::from(&OUTPUT_RULES_HEAD[..OUTPUT_RULES_HEAD.len() - TONE_TAIL.len()]);
         let content = format!("# 本命事实数据(JSON，只依据此数据)\n{}\n{}{}\n\n# 语气要求\n{}\n\n# 各时段分析要点(JSON)\n{}\n\n# 当前分析目标\n全盘总结：未来十年中值得关注的节点",
             natal_text, OVERVIEW_PROMPT, output_rules_ov, tone_instruction(clamp_tone(task.tone)), findings_text);
         return Ok(serde_json::json!({
@@ -621,7 +646,7 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
         task.baseline.as_ref().and_then(|b| b.get("summary")).and_then(|s| s.as_str())
             .map(|s| format!("\n\n# 本命结论(引擎已定，必须沿用，不得推翻或重算)\n{s}\n")).unwrap_or_default()
     } else { String::new() };
-    let output_rules = "\n\n# 输出硬性要求(违反即整篇作废重写)\n1. 全篇一律使用简体中文(UTF-8)，禁止任何繁体字、异体字混入。\n2. explanation 的【】小节必须按本任务规定逐段出现、各只出现一次，顺序一致，不得合并、省略或改名。\n3. 每个小节至少 1 条编号要点；每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。\n4. 正文只写中文，不得出现任何英文单词、英文字母缩写、拼音或英文字段代号；拉丁字母一个都不许有，数字也一律用中文数字表述。事实数据里凡是形如拉丁字母连写的键名，都只是数据结构的内部代号，你要做的是把它对应的「数值与含义」用中文讲出来，绝不可把这个代号本身抄进正文。凡是描述「是否得令」「月支藏干有无印比」「助身方得分」「克泄耗方得分」「净分」「档位」这类结论，一律用中文词组直接表述：得令与否写成「月支是/不是日主禄刃之地，得令/不得令」；月支藏干有无印比写成「月支藏干中见/未见印比，有/无通根之助」；不能用英文词加上括号注音，也不能在中文后面缀上英文取值。\n\n# 语气要求\n";
+    let output_rules: &str = OUTPUT_RULES_HEAD;
     let natal_block = format!("\n\n# 本命事实数据(JSON，只依据此数据)\n{natal_text}");
     let content = if is_scope {
         {
@@ -766,9 +791,11 @@ pub(crate) fn fnv1a(text: &str) -> u64 {
 }
 
 /// 聊天缓存键：第 2..6 段与任务键同位(性别+四柱)，chart_sig 索引自动覆盖。
+/// chatv5 与服务端同名键对齐(桌面端曾停在 chatv1，提示词早已分叉)：系统提示词现为
+/// 「正文限死纯中文 + 禁止引用出处」，旧答案带英文字段名/数字/出处说明，一律作废重写。
 pub(crate) fn chat_cache_key(chat: &ChatRequest, model: &str) -> String {
     let qhash = fnv1a(chat.question.trim());
-    format!("chatv1|{}|{}|{}|{}|{}|{}|chat|{:016x}|{}|{}", model, chat.gender,
+    format!("chatv5|{}|{}|{}|{}|{}|{}|chat|{:016x}|{}|{}", model, chat.gender,
         chat.year_pillar, chat.month_pillar, chat.day_pillar, chat.hour_pillar,
         qhash, chat.birth_year, tone_bucket(chat.tone))
 }

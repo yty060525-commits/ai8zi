@@ -376,7 +376,7 @@ export const CHAT_SYSTEM = '你是一位资深子平命理师，正在与用户�
   + '【时机提问】用户问"什么时候/大约何时/多久/哪一年"这类不指定年份的应期问题时，'
   + '证据里会给出一个连续年份的【逐年批断(用于判断应期)】；'
   + '要逐个年份比对其中与该主题相关的小节，挑出最有利的一到两个年份作为应期作答，'
-  + '并说明是该年哪一条批断支持这个判断；'
+  + '并把支持这个判断的命理作用直接讲出来(只讲作用本身，不标注它出自哪条批断)；'
   + '证据里若点名了"尚未生成流年批断"的年份，只能在该范围之外给应期，绝不能给这批空缺年份下任何结论。'
   + '【缺口处理】只有当证据覆盖不了用户所问的时段与主题时(摘录为空，或只有【数据缺口提示】)，'
   + '才明确说出"数据库里还没有计算过这批数据"，逐条列出缺了什么，'
@@ -390,11 +390,15 @@ export const CHAT_SYSTEM = '你是一位资深子平命理师，正在与用户�
   + '禁止用命理常识、通书、经验、类比或"一般来说""通常""可能会"来补足缺失数据；'
   + '禁止在证据之外新增任何未给出的结论。'
   + '已有事实优先，格局与旺衰一律以命盘事实里「格局事实」「旺衰评分」两项为准，不得重判、不得改口径。'
-  + '【说重点】先说结论，再给依据，只讲与该问题直接相关的话，不铺垫、不寒暄、不重复问题、不写无关主题。'
-  + '【禁止英文】正文一律用中文表述，不得出现任何英文单词、英文缩写或拼音；'
-  + '尤其禁止把证据 JSON 里的英文字段名、变量名、代码标识符原样抄进正文，要说的内容一律翻译成中文说法。'
-  + '输出为简体中文纯文本：不要 JSON、不要代码块/注释/围栏标记；总长 150~350 字；'
-  + '分点(1. 2. 3.)作答，有证据时每点都注明依据的批断小节，无证据时直接说明缺数据并给出补算建议；全篇不得出现繁体字。';
+  + '【说重点】先给结论，再把命理作用本身讲清楚，只讲与该问题直接相关的话，不铺垫、不寒暄、不重复问题、不写无关主题。'
+  + '【正文只许中文】输出限死为纯中文：不得出现任何英文单词、英文缩写或拼音；'
+  + '不得出现任何数字(要表达数量或年份一律写成中文，如「二零二七年」「三十岁」)；'
+  + '不得出现括号、引号、书名号、连字符、下划线、百分号等任何半角或全角符号，只用汉字与顿号、逗号、冒号、句号、问号；'
+  + '尤其禁止把证据里的英文字段名、变量名、代码标识符原样抄进正文，要说的内容一律翻译成中文说法。'
+  + '【禁止引用出处】不要标注答案来自哪条批断、哪个小节、哪份数据或哪个字段，也不要写「依据」「根据」「引用」「见」之类出处说明；'
+  + '直接给结论和理由本身，全篇不留任何参考与引用的痕迹。'
+  + '输出为简体中文纯文本：不要 JSON、不要代码块/注释/围栏标记；总长一百五十字到三百五十字；'
+  + '分点作答，每点单独一行、行首用中文顿号式序号(一、二、三)，无证据时直接说明缺数据并给出补算建议；全篇不得出现繁体字。';
 
 export function buildChatMessages(input: { question: string; history: ChatMessage[]; evidence: ChatEvidence; tone: number }): Array<{ role: string; content: string }> {
   const { question, history, evidence, tone } = input;
@@ -482,7 +486,14 @@ export async function askChat(input: AskChatInput): Promise<ChatReply> {
             : '本机这些盘都已同步到服务器，却仍查不到你的命盘：可能是当前登录账号与建盘时的账号不同(数据按账号隔离)。请在「设置 → 服务器通道」确认已连接的账号。' };
         }
       }
-      return { ...data, answer: data?.status === 'not_configured' && data.error ? serverOnlyReason(data.error) : answer, evidence: data?.evidence };
+      // 闸门拦住了(清洗后仍非纯中文)：这条不能当答案，落到本机通道重答；
+      // 本机也没配凭据时至少给出人话，而不是把一屏英文摆给用户。
+      if (data?.status === 'completed' && !answer) {
+        serverReason = '服务器返回的正文不是纯中文';
+        if (!anyChannelConfigured()) return { status: 'failed', error: 'AI 返回的正文不是纯中文，已拦下未展示。' };
+      } else {
+        return { ...data, answer: data?.status === 'not_configured' && data.error ? serverOnlyReason(data.error) : answer, evidence: data?.evidence };
+      }
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return { status: 'failed', error: '已取消' };
       const offline = error instanceof ServerError && error.status === 0;
@@ -531,12 +542,16 @@ async function askChatLocal(input: { question: string; history: ChatMessage[]; t
         },
         messages,
       });
-      return { status: result.status as ChatReply['status'], answer: result.answer ? sanitizeChatText(result.answer) : result.answer, error: result.error, cached: result.cached, evidence: meta };
+      const clean = result.answer ? sanitizeChatText(result.answer) : result.answer;
+      if (result.status === 'completed' && !clean) return { status: 'failed', error: 'AI 返回的正文不是纯中文，已拦下未展示。', evidence: meta };
+      return { status: result.status as ChatReply['status'], answer: clean, error: result.error, cached: result.cached, evidence: meta };
     } catch (error) {
       return { status: 'failed', error: error instanceof Error ? error.message : '本机 AI 请求失败', evidence: meta };
     }
   }
   const result = await chatDirect(messages, { signal: input.signal });
   const direct = (result as { answer?: string }).answer;
-  return { status: result.status as ChatReply['status'], answer: direct ? sanitizeChatText(direct) : direct, error: (result as { error?: string }).error, evidence: meta };
+  const clean = direct ? sanitizeChatText(direct) : direct;
+  if (result.status === 'completed' && !clean) return { status: 'failed', error: 'AI 返回的正文不是纯中文，已拦下未展示。', evidence: meta };
+  return { status: result.status as ChatReply['status'], answer: clean, error: (result as { error?: string }).error, evidence: meta };
 }

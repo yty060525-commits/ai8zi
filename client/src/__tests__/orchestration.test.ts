@@ -8,7 +8,18 @@ const record = { id: 'r1', name: '测试', gender: 'male', birthYear: 1984, birt
 // 真实 explanation 是带【小节】的简体中文长文；用纯 ASCII 占位会被 sanitizeAnalysis 的
 // 去英文规则清空，导致「复用已完成结果」的判定失效，故这里用贴近真实的中文正文。
 // 小节必须覆盖 REQUIRED_SECTIONS 的全部维度(含时段任务的「刑冲克害批注」)，否则会触发结构重试。
+// 闸门会把「1.」翻成中文序号「一、」，并在小节名前后各补一个空行(标题独立成段)，
+// 因此期望值取清洗后的形态，而不是模型原文。
 const okText = [
+  '【身强身弱与喜忌】', '', '一、日主得令，身强。', '',
+  '【健康】', '', '一、注意作息。', '',
+  '【事业】', '', '一、宜进取。', '',
+  '【财运】', '', '一、稳中求进。', '',
+  '【爱情】', '', '一、多沟通。', '',
+  '【刑冲克害批注】', '', '一、本月无明显冲克。',
+].join('\n');
+// 模型原文形态(小节名紧贴编号)：闸门读时把它翻成上面那个形态，断言里两者都要出现。
+const RAW_TEXT = [
   '【身强身弱与喜忌】1. 日主得令，身强。',
   '【健康】1. 注意作息。',
   '【事业】1. 宜进取。',
@@ -22,7 +33,7 @@ const OVERVIEW_TEXT_FULL = [
   '【值得关注的时间节点】1. 2027年(丙午)：官星得力，是机会窗口。',
   '【行动建议】1. 抓住上半年。',
 ].join('\n');
-const okAnalysis = { pattern: 'x', strength: '强', usefulElements: [], avoidElements: [], explanation: okText };
+const okAnalysis = { pattern: '从财格', strength: '强', usefulElements: [], avoidElements: [], explanation: okText };
 
 describe('task layout: 本命 + 未来十年 + 滚动12个月(+大运) + 末条全盘总结', () => {
   it('builds 23 tasks without great fortunes', () => {
@@ -78,7 +89,7 @@ describe('task layout: 本命 + 未来十年 + 滚动12个月(+大运) + 末条�
   it('runs baseline → years/months → decades and persists everything', async () => {
     const calls: string[] = [];
     const withDecades: BaziRecord = { ...record, nonAiResult: { forecastRange: Array.from({ length: 10 }, (_, i) => 2025 + i), greatFortunes: [{ ganZhi: '壬申', startYear: 2027, endYear: 2036 }], annualFortunes: [], monthlyFortunes: [] } as unknown as BaziRecord['nonAiResult'] };
-    const result = await orchestrateBaziAnalysis(withDecades, async (task) => { calls.push(task.taskId); return { task, status: 'completed', analysis: { ...okAnalysis, explanation: task.type === 'overview' ? OVERVIEW_TEXT_FULL : okText } }; });
+    const result = await orchestrateBaziAnalysis(withDecades, async (task) => { calls.push(task.taskId); return { task, status: 'completed', analysis: { ...okAnalysis, explanation: task.type === 'overview' ? OVERVIEW_TEXT_FULL : RAW_TEXT } }; });
     // 23 基础任务 + 1 大运(起点晚于窗口起点的下一运) + 1 全盘总结 = 25
     expect(calls.length).toBe(25);
     expect(calls[0]).toBe('task-01');
@@ -126,7 +137,7 @@ describe('task layout: 本命 + 未来十年 + 滚动12个月(+大运) + 末条�
         expect(task.guide?.career).toContain('木');
         expect(ELEMENT_GUIDES['木']).toBeDefined();
       }
-      return { task, status: 'completed', analysis: { pattern: 'x', strength: 'x', usefulElements: [], avoidElements: [], explanation: okText } };
+      return { task, status: 'completed', analysis: { pattern: '从财格', strength: '身弱', usefulElements: [], avoidElements: [], explanation: okText } };
     });
     expect(called).toContain('task-30');
     expect(result.aiTasks?.['task-30']?.task.type).toBe('adjustment');
@@ -142,7 +153,7 @@ describe('task layout: 本命 + 未来十年 + 滚动12个月(+大运) + 末条�
     const result = await orchestrateBaziAnalysis({ ...record, nonAiResult: undefined }, async (task) => {
       return { task, status: 'completed', analysis: (task.type === 'baseline' ? { pattern: 'p', strength: '强' } : { pattern: '总', strength: '强', usefulElements: 'bad', avoidElements: undefined, explanation: 42 }) as never };
     });
-    expect(result.aiAnalysis).toEqual(expect.objectContaining({ pattern: 'p', usefulElements: [], avoidElements: [], explanation: '' }));
+    expect(result.aiAnalysis).toEqual(expect.objectContaining({ pattern: '', usefulElements: [], avoidElements: [], explanation: '' }));
     expect((result.aiAnalysis?.usefulElements ?? []).join('、')).toBe('');
   });
 });
@@ -268,7 +279,7 @@ describe('全盘总结任务(task-31)', () => {
       return { task, status: 'completed', analysis: { ...okAnalysis, explanation: task.type === 'overview' ? '【核心结论】1. 主线。\n【值得关注的时间节点】1. 2027年(丙午)机会窗口。\n【行动建议】1. 抓上半年。' : '【事业】1. 有升迁机会。' } };
     }, undefined, { now: HORIZON });
     expect(captured).toBeTruthy();
-    expect(String((captured!.baseline as { summary?: string }).summary)).toContain('格局：x');
+    expect(String((captured!.baseline as { summary?: string }).summary)).toContain('格局：从财格');
     expect(captured!.findings?.annuals.length).toBeGreaterThan(0);
     expect(captured!.findings?.decades[0]?.heading).toContain('辛未');
     expect(captured!.findings?.annuals[0]?.text).toContain('【事业】');

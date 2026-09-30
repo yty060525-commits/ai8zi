@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { openDatabase, insertRecord, getRecordById, writeCache, readCache, clearChartCache } from '../db.mjs';
-import { analyzeQuestion, extractWhen, sliceSections, cutAtBoundary, collectEvidence, buildChatMessages, chatCacheKey, applyFollowUp, runChat, sanitizeChatText, FIELD_NAME_ZH, SCAN_YEARS } from '../chat.mjs';
+import { analyzeQuestion, extractWhen, sliceSections, cutAtBoundary, collectEvidence, buildChatMessages, chatCacheKey, applyFollowUp, runChat, sanitizeChatText, isChineseOnly, nonChineseKinds, FIELD_NAME_ZH, SCAN_YEARS } from '../chat.mjs';
 import { saveProviderKey, cacheKey } from '../ai.mjs';
 import { createApp } from '../app.mjs';
 
@@ -460,11 +460,11 @@ describe('runChat 解析路径', () => {
     const d = openDatabase(':memory:');
     insertRecord(d, { id: 'ck1', userId: 'u7', name: '王二', gender: 'male', birthYear: 1984, birthMonth: 2, createdAt: '2025-01-01', yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午', nonAiResult: { greatFortunes: [], annualFortunes: [], monthlyFortunes: [] }, aiStatus: 'completed' });
     const rec = getRecordById(d, 'ck1');
-    writeCache(d, chatCacheKey(rec, '我的喜用五行是什么？', 'deepseek-flash', 80), '身弱喜土金(缓存答案)');
+    writeCache(d, chatCacheKey(rec, '我的喜用五行是什么？', 'deepseek-flash', 80), '身弱喜土金，缓存答案。');
     return runChat(d, { id: 'u7', role: 'user' }, { question: '我的喜用五行是什么？' }).then((reply) => {
       assert.equal(reply.status, 'completed');
       assert.equal(reply.cached, true);
-      assert.equal(reply.answer, '身弱喜土金(缓存答案)');
+      assert.equal(reply.answer, '身弱喜土金，缓存答案。');
       assert.equal(reply.evidence.recordId, 'ck1');
       d.close();
     });
@@ -487,21 +487,25 @@ describe('runChat 解析路径', () => {
   });
 });
 
-/* ---------- 聊天正文去英文：与客户端 features/chart/elements.ts 同口径 ---------- */
-describe('聊天正文去英文(防英文字段名漏进正文)', () => {
-  test('证据 JSON 的英文字段名翻成中文而非删掉', () => {
+/* ---------- 聊天正文中文闸门：与客户端 features/chart/elements.ts 同口径 ----------
+ * 正式版把「只能中文」限死：字母、数字、括号、书名号一律不许出现在答案里。 */
+describe('聊天正文中文闸门(防英文字段名与符号漏进正文)', () => {
+  test('证据 JSON 的英文字段名翻成中文，括号与阿拉伯数字一并清掉', () => {
     const out = sanitizeChatText('本命盘事实为庚金日主、身弱（strengthScore 42），喜土金。');
     assert.doesNotMatch(out, /strengthScore/);
-    assert.match(out, /旺衰评分 42/);
-    assert.match(out, /庚金日主/);
+    assert.equal(out, '本命盘事实为庚金日主、身弱旺衰评分 四十二，喜土金。');
+    assert.ok(isChineseOnly(out));
   });
-  test('未收录的变量名从中文语境剔除，纯中文正文原样不动', () => {
+  test('未收录的变量名从中文语境剔除，编号翻成中文序号、小节括号作为唯一结构标记保留', () => {
     const out = sanitizeChatText('依据 someInternalVar 判断，身弱。');
-    assert.doesNotMatch(out, /[A-Za-z]{2,}/);
-    const pure = '1. 事业：稳中有进。依据：流年批断的【事业】小节。';
-    assert.equal(sanitizeChatText(pure), pure);
+    assert.doesNotMatch(out, /[A-Za-z]/);
+    // 【】是检索/切段/缺段重写唯一的结构判据，闸门专门放行它；其余符号一律清除。
+    assert.equal(sanitizeChatText('1. 事业：稳中有进。依据：流年批断的【事业】小节。'),
+      '一、事业：稳中有进。依据：流年批断的【事业】小节。');
   });
-  test('整段跑成英文 → 返回空(交回调用方换通道)', () => {
+  test('清洗后仍不合规 → 返回空(交回调用方换通道)，日志报出违规类型', () => {
+    assert.deepEqual(nonChineseKinds('甲子㊣乙丑'), ['其他符号']);
+    assert.equal(sanitizeChatText('甲子㊣乙丑'), '');
     assert.equal(sanitizeChatText('Sorry, I cannot answer this question based on the provided data.'), '');
     assert.equal(sanitizeChatText(''), '');
   });
@@ -511,7 +515,7 @@ describe('聊天正文去英文(防英文字段名漏进正文)', () => {
       assert.match(FIELD_NAME_ZH[key], /^[\u4e00-\u9fff]+$/);
     }
   });
-  test('缓存答案读出来也去英文：旧的脏缓存自动洗净', async () => {
+  test('缓存答案读出来也过闸门：旧的脏缓存自动洗净', async () => {
     const d = openDatabase(':memory:');
     insertRecord(d, { id: 'san1', userId: 'usan', name: '洗衣', gender: 'male', birthYear: 1984, birthMonth: 2, createdAt: '2025-01-01', yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午', nonAiResult: { greatFortunes: [], annualFortunes: [], monthlyFortunes: [] }, aiStatus: 'completed' });
     const stored = getRecordById(d, 'san1');
@@ -520,7 +524,7 @@ describe('聊天正文去英文(防英文字段名漏进正文)', () => {
     const reply = await runChat(d, { id: 'usan', role: 'user' }, { question: '我的喜用五行是什么？' });
     assert.equal(reply.status, 'completed');
     assert.equal(reply.cached, true);
-    assert.doesNotMatch(reply.answer, /strengthScore/);
+    assert.doesNotMatch(reply.answer, /[A-Za-z0-9（）]/);
     assert.match(reply.answer, /旺衰评分/);
     d.close();
   });

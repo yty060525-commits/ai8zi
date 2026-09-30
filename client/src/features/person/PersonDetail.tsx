@@ -219,16 +219,17 @@ const DIMS: Array<{ key: DimKey; label: string; markers: string[] }> = [
 ];
 
 interface Section { head: string; body: string }
-/** 按【...】标记把正文切成带标题的段落（标记本身从正文里剥掉，输出时原样还原）。 */
+/** 按【...】标记把正文切成带标题的段落（标记本身从正文里剥掉，输出时原样还原）。
+ *  闸门清洗后的正文仍带着这对括号：纯中文闸门只放行汉字与中文句读，因此小节名是
+ *  「翻回括号写法」而不是删掉括号(见 shared/chineseGate.ts normalizeStructure)。 */
 export function splitSections(text: string): Section[] {
   const re = /【([^】]{1,16})】/g;
   const sections: Section[] = [];
   let cursor = 0;
   let last: Section | null = null;
   for (let m: RegExpExecArray | null; (m = re.exec(text)); ) {
-    const between = text.slice(cursor, m.index);
-    if (last) { last.body += between; }
-    else { const lead = between.trim(); if (lead) sections.push({ head: '', body: lead }); }
+    if (last) { last.body += text.slice(cursor, m.index); }
+    else { const lead = text.slice(cursor, m.index).trim(); if (lead) sections.push({ head: '', body: lead }); }
     const section: Section = { head: m[1], body: '' };
     sections.push(section);
     last = section;

@@ -80,7 +80,9 @@ describe('旧记录读取时兜底清洗(展示/复制共用)', () => {
     const out = formatCopyBody(analysis, null);
     expect(out).not.toMatch(/[A-Za-z]/);
     expect(out).toContain('故判定为不得令');
-    expect(out).toContain('为 28.8');
+    // 正式版口径：连引擎读数也不许出现——数字转中文后「得分二十八点八」是无信息量长句，整段删掉。
+    expect(out).not.toContain('二十八');
+    expect(out).toContain('助身方得分');
   });
 
   it('复制路径：标题/格局/强弱/喜忌这几个单行字段同样清洗', () => {
