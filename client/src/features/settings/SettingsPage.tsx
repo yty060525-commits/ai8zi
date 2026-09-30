@@ -190,7 +190,7 @@ export function SettingsPage() {
   }
 
   return <main className="settings-page">
-    <header className="page-heading"><p className="eyebrow">LOCAL SETTINGS</p><h1>设置</h1><p className="page-description">管理内部服务的访问配置。</p></header>
+    <header className="page-heading"><p className="eyebrow">本机设置</p><h1>设置</h1><p className="page-description">管理内部服务的访问配置。</p></header>
     <section aria-label="AI 通道" aria-labelledby="channels-title"><h2 id="channels-title">AI 通道（三条可同时配置）</h2>
       <p className="page-description">三条通道各自独立保存，互不影响。当前生效的那条会标注「使用中」并优先调用，失败时自动依次回退到已配置的其它通道。</p>
       // 「使用中」曾被理解成「这条已经配好了、正在跑」：一条凭据都没填时，页面同时摆出

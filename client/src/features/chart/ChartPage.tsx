@@ -104,7 +104,7 @@ export function ChartPage({ onRecordCreated }: ChartPageProps) {
     <label>{label}<input type="number" step={1} value={value} onChange={(e) => { setError(''); set(e.target.value); }} {...extra} /></label>;
   const cityLevel = selectedProvince?.municipality ? '区' : '市';
   const showDistricts = !!selectedCity?.districts?.length;
-  return <main className="chart-page"><header className="page-heading"><p className="eyebrow">LOCAL WORKSPACE</p><h1>排盘</h1><p>{mode === 'auto' ? '输入出生日期和时辰，自动排四柱八字并保存。' : '输入基本信息和四柱八字，保存一条记录。'}</p>
+  return <main className="chart-page"><header className="page-heading"><p className="eyebrow">本机工作台</p><h1>排盘</h1><p>{mode === 'auto' ? '输入出生日期和时辰，自动排四柱八字并保存。' : '输入基本信息和四柱八字，保存一条记录。'}</p>
     <p className="chat-shortcut"><button className="text-button" type="button" onClick={scrollToChat}>问问 AI ›</button></p></header>
     <div className="button-group mode-switch" role="group" aria-label="排盘方式">
       {(['auto', 'manual'] as const).map((item) => <button type="button" key={item} className={mode === item ? 'choice-button selected' : 'choice-button'} onClick={() => { setError(''); setMode(item); }} aria-pressed={mode === item}>{item === 'auto' ? '按生日排' : '手录四柱'}</button>)}

@@ -136,7 +136,7 @@ export function generatePersonDetailText(record: BaziRecord) {
 }
 function BasicInfo({ record }: { record: BaziRecord }) {
   return <section className="detail-section" aria-labelledby="basic-title" aria-label="基础信息">
-    <div className="section-heading"><div><p className="eyebrow">01 / PROFILE</p><h2 id="basic-title">基础信息</h2></div><button className="text-button" type="button" onClick={() => void copy(generatePersonDetailText(record))}>复制基础信息</button></div>
+    <div className="section-heading"><div><p className="eyebrow">壹 · 基础信息</p><h2 id="basic-title">基础信息</h2></div><button className="text-button" type="button" onClick={() => void copy(generatePersonDetailText(record))}>复制基础信息</button></div>
     <dl className="info-grid">{getBasicFields(record).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
   </section>;
 }
@@ -178,14 +178,14 @@ export const formatElementRatio = (value: Record<string, number>) => {
   return shown.join(' · ') + (missing.length ? `（缺${missing.join('、')}）` : '');
 };
 function NonAiAnalysis({ result, record }: { result?: NonAiChart; record: BaziRecord }) {
-  if (!result) return <section className="detail-section" aria-label="基础排盘数据"><div className="section-heading"><div><p className="eyebrow">02 / CHART DATA</p><h2>基础排盘数据</h2></div></div><p role="status">暂无基础排盘数据</p></section>;
+  if (!result) return <section className="detail-section" aria-label="基础排盘数据"><div className="section-heading"><div><p className="eyebrow">贰 · 排盘数据</p><h2>基础排盘数据</h2></div></div><p role="status">暂无基础排盘数据</p></section>;
   const fields: [string, string][] = [
     ['四柱', `${result.pillars.year} · ${result.pillars.month} · ${result.pillars.day} · ${result.pillars.hour}`],
     ['公历日期', result.solarDate],
     ['五行', mapText(result.elements)], ['五行比例', formatElementRatio(result.elementRatio)],
     ['日主', result.dayMaster], ['十二长生', listText(result.twelveLongevity)],
     ['起运', luckStartText(result, new Date().getFullYear())],
-    ['袁天罡称骨', result.chenggu ? `${result.chenggu.totalText}（年 ${result.chenggu.parts.year}·月 ${result.chenggu.parts.month}·日 ${result.chenggu.parts.day}·时 ${result.chenggu.parts.hour}，${result.chenggu.ruleVersion}）` : '—'],
+    ['袁天罡称骨', result.chenggu ? `${result.chenggu.totalText}（年 ${result.chenggu.parts.year}·月 ${result.chenggu.parts.month}·日 ${result.chenggu.parts.day}·时 ${result.chenggu.parts.hour}）` : '—'],
   ];
   const columns: [string, string][] = [['四柱', fields[0][1]], ['藏干', listText(result.hiddenStems)], ['藏干十神', result.tenGodDetails.hidden.map((items) => items.map((item) => `${item.stem}:${item.tenGod}`).join('、')).join(' · ') || '—'], ['十神', listText(result.tenGods)], ['纳音', listText(result.naYin)]];
   const relationLabels: Array<[keyof NonAiChart['relationships'], string]> = [['sanHe', '三合'], ['liuHe', '六合'], ['xing', '刑'], ['chong', '冲'], ['po', '破'], ['hai', '害'], ['ke', '克']];
@@ -198,7 +198,7 @@ function NonAiAnalysis({ result, record }: { result?: NonAiChart; record: BaziRe
   const yb = record.yearPillar?.[1] ?? '';
   const zs = yb && '子丑寅卯辰巳午未申酉戌亥'.includes(yb) ? interpersonalZodiac(yb) : null;
   const selfZodiac = yb ? zodiacOfBranch(yb) : '';
-  return <section className="detail-section" aria-label="基础排盘数据"><div className="section-heading"><div><p className="eyebrow">02 / CHART DATA</p><h2>基础排盘数据</h2></div></div><dl className="info-grid chart-data-grid">{fields.slice(1).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl><div className="chart-columns">{columns.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</div><section className="subsection" aria-label="大运"><h3>大运</h3><table className="luck-table"><thead><tr><th>大运</th><th>起运年</th><th>区间</th><th>交运日</th></tr></thead><tbody>{luckRows.map((g) => <tr key={g.ganZhi + g.startYear} className={g.ganZhi === currentGz ? 'luck-current' : undefined}><td>{g.ganZhi}{g.ganZhi === currentGz ? ' ·今' : ''}</td><td>{g.startYear}</td><td>{g.startYear}-{g.endYear}</td><td>{g.onsetDate && g.endDate ? `${g.onsetDate} ~ ${g.endDate}` : '—'}</td></tr>)}</tbody></table></section><section className="subsection" aria-label="生肖关系"><h3>生肖关系</h3><p>本命生肖：{zodiacOfBranch(record.yearPillar?.[1] ?? '')}（年支 {record.yearPillar[1]}）</p>
+  return <section className="detail-section" aria-label="基础排盘数据"><div className="section-heading"><div><p className="eyebrow">贰 · 排盘数据</p><h2>基础排盘数据</h2></div></div><dl className="info-grid chart-data-grid">{fields.slice(1).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl><div className="chart-columns">{columns.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</div><section className="subsection" aria-label="大运"><h3>大运</h3><table className="luck-table"><thead><tr><th>大运</th><th>起运年</th><th>区间</th><th>交运日</th></tr></thead><tbody>{luckRows.map((g) => <tr key={g.ganZhi + g.startYear} className={g.ganZhi === currentGz ? 'luck-current' : undefined}><td>{g.ganZhi}{g.ganZhi === currentGz ? ' ·今' : ''}</td><td>{g.startYear}</td><td>{g.startYear}-{g.endYear}</td><td>{g.onsetDate && g.endDate ? `${g.onsetDate} ~ ${g.endDate}` : '—'}</td></tr>)}</tbody></table></section><section className="subsection" aria-label="生肖关系"><h3>生肖关系</h3><p>本命生肖：{zodiacOfBranch(record.yearPillar?.[1] ?? '')}（年支 {record.yearPillar[1]}）</p>
       {zs && <p>人际适配：我属{selfZodiac} → 三合 {zs.sanHe.join('、')} · 六合 {zs.liuHe.join('、')} · 六冲 {zs.chong.join('、')} · 六害 {zs.hai.join('、')}（生肖人际参考，非决断）</p>}<ul>{relationLabels.map(([key, label]) => <li key={key}><strong>{label}</strong>：{result.relationships[key].join('、') || '—'}</li>)}</ul></section></section>;
 }
 const safeAiError = (error: string) => error
@@ -564,7 +564,7 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
   useEffect(() => () => { if (noteTimer.current) clearTimeout(noteTimer.current); if (autoTimerRef.current) clearTimeout(autoTimerRef.current); }, []);
 
   return <section className="detail-section" aria-labelledby="ai-title" aria-label="AI 分析">
-    <div className="section-heading"><div><p className="eyebrow">03 / AI ANALYSIS</p><h2 id="ai-title">AI 分析</h2></div><div className="button-group"><button className="primary-button" type="button" onClick={() => void requestAnalysis()} disabled={record.aiStatus === 'pending' || busy}>{busy ? '分析中…' : 'AI 分析'}</button>{(record.aiStatus === 'pending' || busy) && <button className="danger-button stop-button" type="button" onClick={stopAnalysis}>立即停止</button>}<button className="text-button" type="button" onClick={() => void clearResultsOnly()} disabled={record.aiStatus === 'pending' || busy}>清除AI结果与缓存（只清除，不重算）</button></div></div>
+    <div className="section-heading"><div><p className="eyebrow">叁 · 批断结果</p><h2 id="ai-title">AI 分析</h2></div><div className="button-group"><button className="primary-button" type="button" onClick={() => void requestAnalysis()} disabled={record.aiStatus === 'pending' || busy}>{busy ? '分析中…' : 'AI 分析'}</button>{(record.aiStatus === 'pending' || busy) && <button className="danger-button stop-button" type="button" onClick={stopAnalysis}>立即停止</button>}<button className="text-button" type="button" onClick={() => void clearResultsOnly()} disabled={record.aiStatus === 'pending' || busy}>清除AI结果与缓存（只清除，不重算）</button></div></div>
     <div className="tone-block" aria-label="分析语气">
       <span className="tone-label">措辞语气</span>
       <input id="tone-slider" type="range" min={0} max={100} step={5} value={tone} aria-valuetext={toneLabel(tone)} onChange={(event) => { const v = Number(event.target.value); setTone(v); saveRecordTone(record.id, v); }} />
@@ -664,7 +664,7 @@ export function PersonDetail({ personId, onBack, refreshKey = 0 }: PersonDetailP
     }
   }
   return <main className="person-detail">
-    <header className="page-heading detail-top"><div><p className="eyebrow">PERSON RECORD · {record.id}</p><h1>人物详情</h1><p className="page-description">{record.name} 的八字记录与 AI 分析</p></div><div>{confirmDelete
+    <header className="page-heading detail-top"><div><p className="eyebrow">本机命盘档案</p><h1>人物详情</h1><p className="page-description">{record.name} 的八字记录与 AI 分析</p></div><div>{confirmDelete
       ? <div className="button-group" role="group" aria-label="确认删除"><span className="danger-hint">确定删除「{record.name}」？四柱、排盘数据与全部 AI 结果一并清除，无法撤销。</span><button className="danger-button" type="button" onClick={() => void remove()}>确认删除</button><button className="text-button" type="button" onClick={() => setConfirmDelete(false)}>取消</button></div>
       : <button className="text-button" type="button" onClick={onBack}>返回记录</button>}<button className="danger-button" type="button" onClick={() => setConfirmDelete(true)} hidden={confirmDelete}>删除数据</button></div></header>
     {notice && <p role="status">{notice}</p>}

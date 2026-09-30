@@ -104,7 +104,7 @@ export function RecordsPage({ onOpenPerson, refreshKey = 0 }: RecordsPageProps) 
   return (
     <main className="records-page">
       <header className="page-heading">
-        <p className="eyebrow">LOCAL DIRECTORY</p>
+        <p className="eyebrow">本机档案库</p>
         <h1>记录</h1>
         <p className="page-description">管理已经保存的出生与四柱记录。{adminScope ? '（管理员：本列表为服务器全部账号记录，含账号名）' : '（登录服务器后自动同步）'}</p>
       </header>
