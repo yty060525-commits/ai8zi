@@ -15,14 +15,17 @@ const statusText: Record<BaziRecord['aiStatus'], string> = {
   not_started: '未开始', pending: '分析中', completed: '已完成', failed: '分析失败', not_configured: '未配置',
 };
 
+/* 范围标题的两种写法：屏幕上的 <summary> 用带年份与括号的这一套(可读、且④栏标题是既有判据)，
+   「复制/导出」拼进文档的那一行则一律走 sanitizeCopyLine —— 正式版口径是「输出只许中文」，
+   应用自己拼的表头也不能留阿拉伯年份、括号、间隔号，否则复制出去的文件里全是算法侧符号。 */
 const scopeLabel = (result: BaziTaskResult): string => {
   const task = result.task;
   switch (task.type) {
     case 'baseline': return '本命命局（身强身弱/格局/喜忌）';
     case 'overview': return '全盘总结（值得关注的时间节点）';
     case 'adjustment': return '后天调整与职业适配（按喜用五行）';
-    case 'annual': return `${task.year ?? ''} 年流年`;
-    case 'monthly': return `${task.year ?? ''} 年 ${task.month ?? ''} 月`;
+    case 'annual': return task.year === undefined ? '流年' : `${task.year} 年流年`;
+    case 'monthly': return task.year === undefined ? '流月' : (task.month === undefined ? `${task.year} 年` : `${task.year} 年 ${task.month} 月`);
     case 'synthesis': return '最终总结';
     default: return task.type;
   }
@@ -93,14 +96,13 @@ const describeScope = (result: BaziTaskResult, record: BaziRecord): string => {
 };
 
 const scopeGroups: Array<{ key: BaziTaskResult['task']['type']; title: string }> = [
-  { key: 'baseline', title: '① 本命（身强身弱/格局/喜忌 + 健康·事业·财运·爱情）' },
-  { key: 'overview', title: '② 全盘总结（值得关注的时间节点）' },
-  { key: 'adjustment', title: '③ 后天调整与职业适配（按喜用五行）' },
-  { key: 'decade', title: '④ 未来大运' },
-  { key: 'annual', title: '⑤ 未来十年 · 每年流年' },
-  { key: 'monthly', title: '⑥ 从今天起 · 未来十二个月' },
+  { key: 'baseline', title: '本命：格局喜忌与健康、事业、财运、爱情' },
+  { key: 'overview', title: '全盘总结与值得关注的时间节点' },
+  { key: 'adjustment', title: '后天调整与职业适配' },
+  { key: 'decade', title: '未来大运' },
+  { key: 'annual', title: '未来十年每年流年' },
+  { key: 'monthly', title: '从今天起未来十二个月' },
 ];
-const groupTitle = (title: string) => '【' + title.replace(/^\d+\s*[①-⑨]?\s*/, '') + '】';
 
 /* ---------------- 语气滑杆(犀利 ↔ 中立 ↔ 温柔夸夸，默认 80) ---------------- */
 const TONE_KEY = 'mingli.analysis.tone';
@@ -282,11 +284,14 @@ export function toPointBlocks(text: string): PointBlock[] {
   pushCurrent();
   return blocks;
 }
-/** 屏幕/复制共用的“分点正文”排版：标题行 + • 每条一行。 */
-export function pointBodyText(blocks: PointBlock[]): string {
+/** 屏幕/复制共用的“分点正文”排版：标题行 + 每条一行。
+ *  条目符号按用途分两种：屏幕上用「•」是排版，看不出算法痕迹；复制到文档里时正式版口径
+ *  要求整篇只留中文，所以同一份 blocks 换成「一、二、」的中文序号，不引入项目符号字符。 */
+const CN_BULLETS = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '十一', '十二', '十三', '十四', '十五', '十六', '十七', '十八', '十九', '二十'];
+export function pointBodyText(blocks: PointBlock[], marker: 'bullet' | 'ordinal' = 'bullet'): string {
   return blocks.map((block) => {
     const head = block.head ? block.head + '\n' : '';
-    return head + block.points.map((point) => '• ' + point).join('\n');
+    return head + block.points.map((point, i) => (marker === 'bullet' ? '• ' : (CN_BULLETS[i] ?? String(i + 1)) + '、') + point).join('\n');
   }).join('\n\n');
 }
 
@@ -297,7 +302,7 @@ export function formatCopyBody(analysis: NonNullable<BaziTaskResult['analysis']>
   if (selected === null && analysis.title) blocks.push('标题：' + sanitizeAnalysisText(analysis.title));
   if (analysis.pattern && selected === null && !analysis.explanation) {
     const elements = (list?: string[]) => (list ?? []).map((item) => sanitizeAnalysisText(item)).filter(Boolean).join('、') || '—';
-    blocks.push('格局：' + (sanitizeAnalysisText(analysis.pattern) || '—') + ' · 强弱：' + (sanitizeAnalysisText(analysis.strength || '') || '—') + '　喜：' + elements(analysis.usefulElements) + '　忌：' + elements(analysis.avoidElements));
+    blocks.push('格局：' + (sanitizeAnalysisText(analysis.pattern) || '—') + '，强弱：' + (sanitizeAnalysisText(analysis.strength || '') || '—') + '，喜：' + elements(analysis.usefulElements) + '，忌：' + elements(analysis.avoidElements));
   }
   const text = sanitizeAnalysisText(analysis.explanation || '');
   const allBlocks = toPointBlocks(text);
@@ -312,7 +317,7 @@ export function formatCopyBody(analysis: NonNullable<BaziTaskResult['analysis']>
     // 全盘总结的小节(核心结论/时间节点/行动建议)不属于五维度：勾选维度时仍要整篇带出，否则复制结果会丢掉总结
     if (keepWholeText && used.length === 0) used = allBlocks;
   }
-  const body = pointBodyText(used).trim();
+  const body = pointBodyText(used, 'ordinal').trim();
   if (body) blocks.push(body);
   return blocks.join('\n\n');
 }
@@ -382,7 +387,19 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
     noteTimer.current = setTimeout(() => setCopyNote(undefined), 3000);
   };
 
-  /* 组装复制文本：范围按界面分组顺序；维度为空数组=不筛选(全部)。 */
+  /** 复制/导出行的统一清洗：应用自己拼的表头也走正文那道中文闸门。
+ *  清洗万一判空(闸门宁缺毋滥)就退回原文，绝不把整行范围标题弄丢；
+ *  闸门会把「2029」翻成「二零二九」、删掉括号与间隔号，【】作为结构标记保留。
+ *  年份缺失的任务(存量旧记录里 task.year 为空)会洗成「年流年」这种断句，这里补一次语义兜底。 */
+const sanitizeCopyLine = (line: string): string => {
+  const cleaned = sanitizeAnalysisText(line)
+    .replace(/[ \t]+(?=[一-鿿])/g, '')   // 「二零二六 年流年」→「二零二六年流年」：数字翻中文后留下的空格并入词组
+    .replace(/(?<=[一-鿿])[ \t]+(?=[一-鿿])/g, '、'); // 「大运段2026-2033」→「大运段、二零二六、二零三三」这类并列读法
+  if (!cleaned) return line;
+  return /^年(流年|流月)$/.test(cleaned) ? cleaned.slice(1) : cleaned;
+};
+
+  /** 组装复制文本：范围按界面分组顺序；维度为空数组=不筛选(全部)。 */
   const buildCopyText = (dimFilter: DimKey[] | null): string => {
     const selected = dimFilter === null ? null : dimFilter.length === DIMS.length ? null : dimFilter;
     const groups: string[] = [];
@@ -394,16 +411,16 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
         const analysis = item.analysis!;
         const body = formatCopyBody(analysis, selected, item.task.type === 'overview');
         if (!body.trim()) continue;
-        blocks.push(describeScope(item, record) + '\n' + body);
+        blocks.push(sanitizeCopyLine(describeScope(item, record)) + '\n' + body);
       }
       if (blocks.length === 0) continue;
-      groups.push(groupTitle(group.title) + '\n' + blocks.join('\n\n'));
+      groups.push(sanitizeCopyLine(group.title) + '\n' + blocks.join('\n\n'));
     }
     const text = groups.join('\n\n\n');
     if (text.trim()) return text;
     // 兼容旧记录：没有按任务拆分的结果时，直接导出整段本命正文
     if (record.aiAnalysis?.explanation) {
-      return groupTitle('本命命局') + '\n' + formatCopyBody(record.aiAnalysis, selected);
+      return sanitizeCopyLine('本命命局') + '\n' + formatCopyBody(record.aiAnalysis, selected);
     }
     return '';
   };

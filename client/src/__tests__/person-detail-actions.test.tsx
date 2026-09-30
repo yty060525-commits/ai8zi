@@ -39,9 +39,16 @@ describe('PersonDetail AI 复制筛选/清除交互', () => {
 
     // 默认全勾：范围(2) x 维度(全部) → 复制含【健康】【爱情】
     fireEvent.click(screen.getByRole('button', { name: /复制勾选内容/ }));
-    expect(writeText.mock.calls.at(-1)?.[0]).toContain('【健康】');
-    expect(writeText.mock.calls.at(-1)?.[0]).toContain('【爱情】');
-    expect(writeText.mock.calls.at(-1)?.[0]).toContain('本命命局');
+    const first = writeText.mock.calls.at(-1)?.[0] as string;
+    expect(first).toContain('【健康】');
+    expect(first).toContain('【爱情】');
+    expect(first).toContain('本命命局');
+    // 正式版口径：导出的文档整篇只许中文 —— 应用自己拼的分组表头/范围标题也不能留数字与半角符号。
+    expect(first).not.toMatch(/[A-Za-z]/);
+    expect(first).not.toMatch(/[0-9０-９•·()（）《》\/\\@#%&*+=<>{}|~^—\-]/);
+    expect(first).toContain('未来十年每年流年');
+    // 「本命命局」那行带着清洗后的范围标题，末尾正好是「…格局喜忌」；断句判据要精确到行首。
+    expect(first.split('\n')).not.toContain('年流年');
 
     // 取消勾选“爱情”维度 → 复制不再含【爱情】
     fireEvent.click(screen.getAllByRole('button', { name: '爱情' })[0]);
@@ -54,6 +61,26 @@ describe('PersonDetail AI 复制筛选/清除交互', () => {
     fireEvent.click(screen.getAllByRole('button', { name: '清空' })[0]);
     fireEvent.click(screen.getByRole('button', { name: /复制勾选内容/ }));
     await waitFor(() => expect(screen.getByText(/已复制 0 项结果/)).toBeTruthy());
+  });
+
+  it('带年份的范围标题复制出去翻成中文读法，不留阿拉伯数字与断句', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    const dated = structuredClone(baseRecord);
+    (dated.aiTasks as Record<string, BaziTaskResult>)['task-02'].task.year = 2026;
+    initializeMockSession(
+      [{ id: 'copy-person', name: '复制测试', nameInitial: 'C', gender: 'male', birthSummary: '甲子年' }],
+      [{ person: { id: 'copy-person', name: '复制测试', nameInitial: 'C', gender: 'male', birthSummary: '甲子年' }, record: dated, aiAnalysis: { status: 'completed' } }],
+    );
+    render(<PersonDetail personId="copy-person" onBack={vi.fn()} />);
+    await screen.findByRole('button', { name: /复制勾选内容/ });
+    fireEvent.click(screen.getByRole('button', { name: /复制勾选内容/ }));
+    const out = writeText.mock.calls.at(-1)?.[0] as string;
+    expect(out).toContain('二零二六年流年');
+    expect(out).not.toMatch(/[0-9]/);
+    expect(out.split('\n')).not.toContain('年流年');
+    // 屏幕上的 <summary> 仍按原样显示年份，两种写法各归各路：
+    expect(document.body.textContent).toContain('2026 年流年');
   });
 
   it('清除按钮只清除结果与缓存，不重新调用 AI', async () => {

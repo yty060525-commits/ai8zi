@@ -66,8 +66,10 @@ describe('正文分点化(toPointBlocks / 复制)', () => {
     const analysis: BaziAIAnalysis = { pattern: '', strength: '', usefulElements: [], avoidElements: [], explanation: '【爱情】长久相合。多沟通。' };
     const full = formatCopyBody(analysis, null);
     expect(full).toContain('【爱情】');
-    expect(full).toContain('• 长久相合。');
-    expect(full).toContain('• 多沟通。');
+    // 复制出去的是文档：条目用中文序号，不用「•」这种非中文字符。
+    expect(full).toContain('一、长久相合。');
+    expect(full).toContain('二、多沟通。');
+    expect(full).not.toContain('•');
   });
 });
 
@@ -123,5 +125,28 @@ describe('复制：全盘总结在维度筛选下不丢失', () => {
   it('全选(null)时两者都完整输出', () => {
     expect(formatCopyBody(overview, null)).toContain('核心结论');
     expect(formatCopyBody(annual, null)).toContain('升迁机会');
+  });
+});
+
+/* ---------------- 导出文档整篇纯中文 ----------------
+ * 模型正文早有闸门兜着；这一组钉的是**应用自己拼的那几行**：分组表头、范围标题、条目符号。
+ * 之前实测「复制全部」拿到 digits:[2,0,6,3,…] 与 ①／（）／· 就是从这里漏出去的。 */
+describe('复制/导出的应用侧表头也不留算法符号', () => {
+  const analysis = (explanation: string): BaziAIAnalysis => ({ pattern: '', strength: '', usefulElements: [], avoidElements: [], explanation });
+
+  it('formatCopyBody 的产物：无拉丁字母、无阿拉伯数字、无半角符号，只许中文与【】结构标记', () => {
+    const out = formatCopyBody(analysis('【值得关注的时间节点】1. 2029年(乙巳)：机会窗口，宜主动争取。\n【行动建议】2. 上半年落地关键谈判。'), null);
+    expect(out).not.toMatch(/[A-Za-z]/);
+    expect(out).not.toMatch(/[0-9０-９]/);
+    expect(out).not.toMatch(/[•·()（）《》\-—/\\@#%&*+=<>[\]{}|~^]/);
+    // 年份翻成中文读法，句子不残缺
+    expect(out).toContain('二零二九年乙巳');
+    expect(out).toContain('【值得关注的时间节点】');
+  });
+
+  it('旧记录里存着的引擎读数(带字段名与小数值)在复制时同样清干净', () => {
+    const out = formatCopyBody(analysis('【身强身弱与喜忌】\n1. 日主庚金生于未月(inSeason: false)，助身方得分 28.8。'), null);
+    expect(out).not.toMatch(/[A-Za-z0-9]/);
+    expect(out).toContain('日主庚金生于未月');
   });
 });
