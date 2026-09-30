@@ -256,9 +256,14 @@ export function pickDimensionSections(text: string, selected: DimKey[] | null): 
 }
 
 export interface PointBlock { head: string; points: string[] }
-/** 已自带编号/圆点的一行保持原样；普通长句按 。；！？ 断成若干条。 */
+/** 已自带编号/圆点的一行保持原样；普通长句按 。；！？ 断成若干条。
+ *  编号形态必须同时认「1.」和闸门翻出来的中文序号「一、」：正文进到这里前一律过了中文闸门
+ *  (见 shared/chineseGate.ts 的 normalizeStructure)，阿拉伯编号在闸门里就成了中文序号。
+ *  原先这条正则只写了 d+(没有 \\d)、又要求符号后跟空格，两种形态一个都认不出，于是整行被当
+ *  普通长句按句号拆开，再由 pointBodyText 冠上「一、二、」——导出文档里就是「一、一、」。 */
+const ALREADY_INDEXED = /^(?:[0-9０-９]+[.、．]|[•·-—]|[一-鿿]{1,3}[、])/;
 function bulletize(line: string): string[] {
-  if (/^(d+[.、．]|[•·-—])\s+/.test(line)) return [line];
+  if (ALREADY_INDEXED.test(line)) return [line];
   const sentences = line.split(/(?<=[。；!?！？])\s*/).map((s) => s.trim()).filter((s) => s.length > 1);
   return sentences.length > 0 ? sentences : (line ? [line] : []);
 }
@@ -288,10 +293,18 @@ export function toPointBlocks(text: string): PointBlock[] {
  *  条目符号按用途分两种：屏幕上用「•」是排版，看不出算法痕迹；复制到文档里时正式版口径
  *  要求整篇只留中文，所以同一份 blocks 换成「一、二、」的中文序号，不引入项目符号字符。 */
 const CN_BULLETS = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '十一', '十二', '十三', '十四', '十五', '十六', '十七', '十八', '十九', '二十'];
+/** 条目行自己已经带编号(「一、」「1.」)时不再冠名，否则 pointBodyText 会拼成「一、一、」。 */
+const hasOwnIndex = (point: string) => ALREADY_INDEXED.test(point);
 export function pointBodyText(blocks: PointBlock[], marker: 'bullet' | 'ordinal' = 'bullet'): string {
   return blocks.map((block) => {
     const head = block.head ? block.head + '\n' : '';
-    return head + block.points.map((point, i) => (marker === 'bullet' ? '• ' : (CN_BULLETS[i] ?? String(i + 1)) + '、') + point).join('\n');
+    let n = 0;
+    return head + block.points.map((point) => {
+      if (hasOwnIndex(point)) return point;
+      const label = marker === 'bullet' ? '• ' : (CN_BULLETS[n] ?? String(n + 1)) + '、';
+      n += 1;
+      return label + point;
+    }).join('\n');
   }).join('\n\n');
 }
 

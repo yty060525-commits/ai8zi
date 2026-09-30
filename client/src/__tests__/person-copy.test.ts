@@ -62,6 +62,30 @@ describe('正文分点化(toPointBlocks / 复制)', () => {
     expect(blocks[2]?.points).toEqual(['1. 三合（巳酉丑半合）：遇合多助；', '2. 六冲（壬午）：易有变动。']);
   });
 
+  /* 闸门把「1.」翻成「一、」之后，分点器仍要认出这是编号行、原样保留。
+     否则 pointBodyText 会再冠一次序号，导出文档里就是「一、一、月支亥水…」(线上实测到过)。 */
+  it('闸门翻出的中文序号算“已编号”：不再拆句、不再重复冠名', () => {
+    const blocks = toPointBlocks('【身强身弱与喜忌】\n\n一、月支亥水是日主癸水的帝旺之地，故得令。\n二、日主通根于月支亥水，但年干乙木泄身，助身力量不及克泄耗。');
+    expect(blocks.map((b) => b.head)).toEqual(['【身强身弱与喜忌】']);
+    expect(blocks[0]?.points).toEqual([
+      '一、月支亥水是日主癸水的帝旺之地，故得令。',
+      '二、日主通根于月支亥水，但年干乙木泄身，助身力量不及克泄耗。',
+    ]);
+    // 端到端：复制出去不许出现重复序号。夹具用真实落库形态(闸门输出的换行结构)。
+    const stored = '【健康】\n\n一、水主肾与膀胱，需注意保养。\n\n二、冬月水寒，宜温补阳气。';
+    const out = formatCopyBody({ pattern: '', strength: '', usefulElements: [], avoidElements: [], explanation: stored }, null);
+    expect(out).toContain('一、水主肾与膀胱，需注意保养。');
+    expect(out).toContain('二、冬月水寒，宜温补阳气。');
+    expect(out).not.toMatch(/[一二三四五六七八九十]、[一二三四五六七八九十]、/);
+  });
+
+  it('没编号的长句仍然按句号拆开并各自编号(正向钉子：上一条不是把拆句整个关掉了)', () => {
+    const blocks = toPointBlocks('【健康】注意肝胆。避免熬夜。');
+    expect(blocks[0]?.points).toEqual(['注意肝胆。', '避免熬夜。']);
+    expect(formatCopyBody({ pattern: '', strength: '', usefulElements: [], avoidElements: [], explanation: '【健康】注意肝胆。避免熬夜。' }, null))
+      .toBe('【健康】\n一、注意肝胆。\n二、避免熬夜。');
+  });
+
   it('bullets the copied body too', () => {
     const analysis: BaziAIAnalysis = { pattern: '', strength: '', usefulElements: [], avoidElements: [], explanation: '【爱情】长久相合。多沟通。' };
     const full = formatCopyBody(analysis, null);
