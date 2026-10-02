@@ -16,7 +16,7 @@
  * ========================================================================== */
 import { createHash } from 'node:crypto';
 import { listRecordSummaries, getRecordById, readCache, writeCache } from './db.mjs';
-import { natalFactsOf, providerOrder, providerKey, clampTone, toneInstruction, cacheKey, callProvider, PROVIDERS } from './ai.mjs';
+import { natalFactsOf, providerOrder, providerKey, clampTone, toneInstruction, cacheKey, callProvider, PROVIDERS, PROVIDER_LABEL, AI_SERVER_UNCONFIGURED, AI_NO_CREDENTIAL_REPLY } from './ai.mjs';
 /* 正文中文闸门：与浏览器端共用的唯一一份实现(features/chart/elements.ts 再导出同一模块)。 */
 import { FIELD_NAME_ZH, isChineseOnly, nonChineseKinds, enforceChinese, sanitizeChatText } from '../client/src/shared/chineseGate.ts';
 
@@ -236,7 +236,7 @@ export function collectEvidence(db, record, plan, { tone = 80, periodFacts, prov
     if (adjustment && (wantTopics.length === 0 || wantTopics.includes('五行'))) evidence.analyses.push({ heading: '后天调整与职业', text: sliceSections(adjustment.analysis.explanation, ['后天调整', '事业适配', '健康注意']) });
     const overview = findTask(tasks, 'overview');
     if (overview && wantTopics.length === 0) evidence.analyses.push({ heading: '全盘总结', text: sliceSections(overview.analysis.explanation, ['核心结论', '值得关注的时间节点', '行动建议']) });
-    if (!baseline) evidence.missing.push('本命批断尚未生成：可先在命盘详情页点「AI 分析」');
+    if (!baseline) evidence.missing.push('本命批断尚未生成：可先在命盘详情页点批断分析');
     if (isGeneral) {
       const available = [...new Set(evidence.analyses.flatMap((a) => [...String(a.text).matchAll(/【([^】]+)】/g)].map((m) => m[1])))];
       if (available.length) evidence.sectionIndex = available;
@@ -260,14 +260,14 @@ export function collectEvidence(db, record, plan, { tone = 80, periodFacts, prov
       lines.push(String(y) + '年(' + String(annual.analysis.title || '') + ')：' + body);
     }
     if (lines.length) {
-      evidence.analyses.push({ heading: from + '—' + (from + SCAN_YEARS - 1) + '年·逐年批断(用于判断应期)', text: lines.join('\n') });
+      evidence.analyses.push({ heading: from + '年至' + (from + SCAN_YEARS - 1) + '年逐年批断，用于判断应期', text: lines.join('\n') });
       // 起算年所在大运：判断这十年运势走向，缺了它只看流年会失真
       const decade = decadeOf(record, tasks, from);
       const decadeYear = coveringDecadeStart(record, from) ?? Number(from);
       const decadeHit = decade || (() => { const d = cacheLookup(db, record, { type: 'decade', year: decadeYear }, tone, providers); return d ? { status: 'completed', analysis: d, task: { type: 'decade', year: decadeYear } } : null; })();
       if (decadeHit) evidence.analyses.push({ heading: '所处大运批断', text: sliceSections(decadeHit.analysis.explanation, labels) });
     } else {
-      evidence.missing.push(from + '—' + (from + SCAN_YEARS - 1) + ' 年的流年批断一条都还没生成，无法判断应期');
+      evidence.missing.push(from + '年至' + (from + SCAN_YEARS - 1) + '年的流年批断一条都还没生成，无法判断应期');
     }
     if (gaps.length) evidence.missing.push('下列年份尚未生成流年批断，作答时只能在这些年份之外给应期：' + gaps.join('、') + '年');
     if (uncovered.length) evidence.missing.push('下列年份虽有流年批断，但其中没有与所问主题相关的小节，不得据其判断该主题的应期：' + uncovered.join('、') + '年');    if (periodFacts && typeof periodFacts === 'object') evidence.periodFacts = periodFacts;
@@ -277,8 +277,8 @@ export function collectEvidence(db, record, plan, { tone = 80, periodFacts, prov
     const labels = wantTopics.length ? wantTopics : ['健康', '事业', '财运', '爱情', '刑冲克害批注'];
     let annual = taskOfYear(tasks, 'annual', plan.year);
     if (!annual) { const a = cacheLookup(db, record, { type: 'annual', year: plan.year, month: undefined }, tone, providers); if (a) annual = { status: 'completed', analysis: a, task: { type: 'annual', year: plan.year } }; }
-    if (annual) evidence.analyses.push({ heading: plan.year + '年·流年批断(' + String(annual.analysis.title || '') + ')', text: sliceSections(annual.analysis.explanation, labels) });
-    else evidence.missing.push(plan.year + ' 年的流年分析尚未生成');
+    if (annual) evidence.analyses.push({ heading: plan.year + '年流年批断，题为' + String(annual.analysis.title || ''), text: sliceSections(annual.analysis.explanation, labels) });
+    else evidence.missing.push(plan.year + '年的流年分析尚未生成');
     const decadeYear = coveringDecadeStart(record, plan.year) ?? Number(plan.year);
     let decade = decadeOf(record, tasks, plan.year);
     if (!decade) { const d = cacheLookup(db, record, { type: 'decade', year: decadeYear }, tone, providers); if (d) decade = { status: 'completed', analysis: d, task: { type: 'decade', year: decadeYear } }; }
@@ -286,8 +286,8 @@ export function collectEvidence(db, record, plan, { tone = 80, periodFacts, prov
     if (plan.month !== undefined) {
       let monthly = taskOfYear(tasks, 'monthly', plan.year, plan.month);
       if (!monthly) { const mm = cacheLookup(db, record, { type: 'monthly', year: plan.year, month: plan.month }, tone, providers); if (mm) monthly = { status: 'completed', analysis: mm, task: { type: 'monthly', year: plan.year, month: plan.month } }; }
-      if (monthly) evidence.analyses.push({ heading: plan.year + '年' + plan.month + '月·流月批断', text: sliceSections(monthly.analysis.explanation, labels) });
-      else evidence.missing.push(plan.year + '年' + plan.month + '月 的流月分析尚未生成');
+      if (monthly) evidence.analyses.push({ heading: plan.year + '年' + plan.month + '月流月批断', text: sliceSections(monthly.analysis.explanation, labels) });
+      else evidence.missing.push(plan.year + '年' + plan.month + '月的流月分析尚未生成');
     }
     // 时段干支事实：记录里是瘦身存储，客户端随请求带来引擎现算的当期行(仍是确定性计算结果，非模型发挥)
     if (periodFacts && typeof periodFacts === 'object') evidence.periodFacts = periodFacts;
@@ -309,7 +309,7 @@ export const CHAT_SYSTEM = '你是一位资深子平命理师，正在与用户�
   + '证据里若点名了"尚未生成流年批断"的年份，只能在该范围之外给应期，绝不能给这批空缺年份下任何结论。'
   + '【缺口处理】只有当证据覆盖不了用户所问的时段与主题时(摘录为空，或只有【数据缺口提示】)，'
   + '才明确说出"数据库里还没有计算过这批数据"，逐条列出缺了什么，'
-  + '并建议用户先到命盘详情页点「AI 分析」把对应的本命/流年/流月批断算出来，然后再来提问；'
+  + '并建议用户先到命盘详情页点批断分析把对应的本命、流年、流月批断算出来，然后再来提问；'
   + '此时只允许复述缺口与已有事实，一条都不许推测。'
   + '【所问时段以检索计划为准】用户问题里的年份/月份说法可能不规范(如把某年说成两位缩写)，'
   + '一律以本消息给出的检索计划与证据里标注的年份、月份为提问所指，不得因为问题原文的数字与你看到的年份写法不同，就回答"没有那一年的信息"。'
@@ -371,7 +371,9 @@ export function chatCacheKey(record, question, model, tone) {
   //        旧缓存里那套未含调候的答案一并作废重答。
   // chatv5：系统提示词改为「正文限死纯中文 + 禁止引用出处」，并加了确定性中文闸门(清洗不过即拦下)。
   //        旧缓存答案普遍带英文字段名、阿拉伯数字或「依据某小节」的出处说明，按新口径一律作废重写。
-  return ['chatv5', model, record.gender, record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar, 'chat', qhash, record.birthYear, toneBucket].join('|');
+  // chatv6：正式版口径下证据标题与缺口提示不再出现括号、斜杠与「AI」字样(改读成中文)，
+  //        提示词里指向入口的说法也从「点「AI 分析」」改成「点批断分析」。旧答案引用的正是那批措辞，作废重答。
+  return ['chatv6', model, record.gender, record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar, 'chat', qhash, record.birthYear, toneBucket].join('|');
 }
 
 /** 本轮问题自带的人名要能覆盖上一轮命主。返回 {personName, recordId}；解不出则 null。 */
@@ -422,10 +424,10 @@ export function applyFollowUp(plan, history, summaries = []) {
 export async function runChat(db, user, body = {}) {
   const question = String(body.question || '').trim();
   if (!question) return { status: 'failed', error: '请输入问题' };
-  if (question.length > 500) return { status: 'failed', error: '问题过长，请控制在 500 字以内' };
+  if (question.length > 500) return { status: 'failed', error: '问题过长，请控制在五百字以内' };
   const tone = clampTone(body.tone ?? 80);
   const summaries = listRecordSummaries(db, user.id);
-  if (summaries.length === 0) return { status: 'need_record', reason: '还没有任何命盘：请先在「排盘」页保存一条记录，再向我提问' };
+  if (summaries.length === 0) return { status: 'need_record', reason: '还没有任何命盘：请先在排盘页保存一条记录，再向我提问' };
   const providers = providerOrder(db, body.provider);
 
   // 目标命盘一律从「本人名下」的轻列表里解析(recordId 也必须命中)，杜绝越权读取他人记录。
@@ -442,7 +444,7 @@ export async function runChat(db, user, body = {}) {
     if (!target) return { status: 'failed', error: '记录不存在或无权访问' };
   }
   if (!target) target = plan.recordId ? summaries.find((s) => s.id === plan.recordId) : (summaries.length === 1 ? summaries[0] : null);
-  if (!target) return { status: 'need_record', reason: '你的名下有多条命盘，请告诉我问的是谁(或点选命主)', options: summaries.map((s) => ({ id: s.id, name: s.name, updatedAt: s.updated_at ?? s.updatedAt })) };
+  if (!target) return { status: 'need_record', reason: '你的名下有多条命盘，请告诉我问的是谁，或点选下方命主', options: summaries.map((s) => ({ id: s.id, name: s.name, updatedAt: s.updated_at ?? s.updatedAt })) };
 
   const record = getRecordById(db, target.id);
   if (!record) return { status: 'failed', error: '记录读取失败' };
@@ -457,7 +459,7 @@ export async function runChat(db, user, body = {}) {
       if (hit) { const clean = sanitizeChatText(hit); if (clean) return { status: 'completed', answer: clean, cached: true, evidence: evidenceMeta }; }
     }
   }
-  if (providers.length === 0) return { status: 'not_configured', error: '服务器未配置 AI 密钥，请在服务器设置中填写后保存' };
+  if (providers.length === 0) return { status: 'not_configured', error: AI_SERVER_UNCONFIGURED };
   const errors = [];
   for (const provider of providers) {
     const ck = cacheable ? chatCacheKey(record, question, provider.model, tone) : null;
@@ -465,11 +467,16 @@ export async function runChat(db, user, body = {}) {
     if (result.text) {
       const clean = sanitizeChatText(result.text);
       // 洗净后为空 = 模型整段跑成英文，当作该 provider 失败，换下一个通道再试
-      if (!clean) { errors.push(provider.id + ': 模型输出不是中文'); continue; }
+      if (!clean) { errors.push(PROVIDER_LABEL[provider.id] + '：模型输出不是中文'); continue; }
       if (ck) { try { writeCache(db, ck, clean); } catch { /* 写缓存失败不影响回答 */ } }
       return { status: 'completed', answer: clean, cached: false, evidence: evidenceMeta };
     }
-    errors.push(provider.id + ': ' + (result.error || 'failed'));
+    // 报错里必须用中文通道名：provider.id 是协议层标识(deepseek/kimi/qwen)，直接拼进 error
+    // 会让客户端那句 sanitizeAnalysisText(error) || '回答失败' 整段判空 —— 原因反而丢了。
+    errors.push(PROVIDER_LABEL[provider.id] + '：' + sanitizeChatText(result.error || ''));
   }
-  return { status: 'failed', error: errors.join('；'), evidence: evidenceMeta };
+  // 全链路最后一道：errors 里若还残留闸门不认的形态(括号、数字)，整串清洗后再返回；
+  // 清洗后为空则退回一句固定中文，保证「哪条通道、为什么没成」不会以半句英文的形式上屏。
+  const joined = sanitizeChatText(errors.join('；'));
+  return { status: 'failed', error: joined || AI_NO_CREDENTIAL_REPLY, evidence: evidenceMeta };
 }

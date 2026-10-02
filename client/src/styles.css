@@ -93,8 +93,11 @@
 .points-view { margin-top: 2px; }
 .point-block { margin: 2px 0 4px; }
 .point-head { font-weight: 700; margin: 8px 0 2px; }
-.point-list { margin: 2px 0 8px; padding-left: 20px; }
+.point-list { margin: 2px 0 8px; padding-left: 20px; list-style: none; }
 .point-list li { line-height: 1.65; margin: 3px 0; }
+/* 屏幕上不用符号式项目符(正式版口径：可见文案只留汉字与中文句读)，改用中文序号计数。 */
+.point-list { counter-reset: pt; }
+.point-list li::before { counter-increment: pt; content: counter(pt, cjk-ideographic) "、"; font-weight: 600; margin-right: 2px; }
 .long-text .points-view { margin-top: 6px; }
 .retry-hint { color: #8a6d1a; font-size: 13px; font-weight: 600; margin: 6px 0 0; }
 /* ---- 语气滑杆 ---- */

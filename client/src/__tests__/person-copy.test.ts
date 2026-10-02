@@ -28,15 +28,19 @@ describe('copy 排版/筛选(范围 x 维度)', () => {
     expect(picked.map((s) => s.head)).toEqual(['刑冲克害批注']);
   });
 
+  /* 小节括号是算法侧的切段标记(检索、维度筛选、缺段重写都靠它)，正式版口径下不许出现在
+     用户看得见的文字里。toPointBlocks 把它吃进 head、pointBodyText 只打印名字，
+     所以复制/导出的产物应当一个 【】 都没有 —— 这条判据同时钉住「吃掉」和「不重印」。 */
   it('formats a full copy with title and every section; filtered copy drops others', () => {
     const analysis: BaziAIAnalysis = { pattern: 'x', strength: '强', usefulElements: [], avoidElements: [], explanation: '【健康】早睡。\n【爱情】长久。', title: '鸾凤和鸣' };
     const full = formatCopyBody(analysis, null);
     expect(full).toContain('标题：鸾凤和鸣');
-    expect(full).toContain('【健康】');
-    expect(full).toContain('【爱情】');
+    expect(full).toContain('健康');
+    expect(full).toContain('爱情');
+    expect(full).not.toMatch(/[【】]/);
     const onlyLove = formatCopyBody(analysis, ['love']);
-    expect(onlyLove).toContain('【爱情】');
-    expect(onlyLove).not.toContain('【健康】');
+    expect(onlyLove).toContain('爱情');
+    expect(onlyLove).not.toContain('健康');
     expect(onlyLove).not.toContain('标题');
   });
 
@@ -52,7 +56,7 @@ describe('正文分点化(toPointBlocks / 复制)', () => {
 
   it('turns every splittable sentence into its own bullet', () => {
     const blocks = toPointBlocks(sample);
-    expect(blocks.map((b) => b.head)).toEqual(['【身强身弱与喜忌】', '【健康】', '【刑冲克害批注】']);
+    expect(blocks.map((b) => b.head)).toEqual(['身强身弱与喜忌', '健康', '刑冲克害批注']);
     expect(blocks[0]?.points.length).toBe(2);
     expect(blocks[1]?.points).toEqual(['注意肝胆。', '避免熬夜。']);
   });
@@ -66,7 +70,7 @@ describe('正文分点化(toPointBlocks / 复制)', () => {
      否则 pointBodyText 会再冠一次序号，导出文档里就是「一、一、月支亥水…」(线上实测到过)。 */
   it('闸门翻出的中文序号算“已编号”：不再拆句、不再重复冠名', () => {
     const blocks = toPointBlocks('【身强身弱与喜忌】\n\n一、月支亥水是日主癸水的帝旺之地，故得令。\n二、日主通根于月支亥水，但年干乙木泄身，助身力量不及克泄耗。');
-    expect(blocks.map((b) => b.head)).toEqual(['【身强身弱与喜忌】']);
+    expect(blocks.map((b) => b.head)).toEqual(['身强身弱与喜忌']);
     expect(blocks[0]?.points).toEqual([
       '一、月支亥水是日主癸水的帝旺之地，故得令。',
       '二、日主通根于月支亥水，但年干乙木泄身，助身力量不及克泄耗。',
@@ -83,13 +87,14 @@ describe('正文分点化(toPointBlocks / 复制)', () => {
     const blocks = toPointBlocks('【健康】注意肝胆。避免熬夜。');
     expect(blocks[0]?.points).toEqual(['注意肝胆。', '避免熬夜。']);
     expect(formatCopyBody({ pattern: '', strength: '', usefulElements: [], avoidElements: [], explanation: '【健康】注意肝胆。避免熬夜。' }, null))
-      .toBe('【健康】\n一、注意肝胆。\n二、避免熬夜。');
+      .toBe('健康\n一、注意肝胆。\n二、避免熬夜。');
   });
 
   it('bullets the copied body too', () => {
     const analysis: BaziAIAnalysis = { pattern: '', strength: '', usefulElements: [], avoidElements: [], explanation: '【爱情】长久相合。多沟通。' };
     const full = formatCopyBody(analysis, null);
-    expect(full).toContain('【爱情】');
+    expect(full).toContain('爱情');
+    expect(full).not.toMatch(/[【】]/);
     // 复制出去的是文档：条目用中文序号，不用「•」这种非中文字符。
     expect(full).toContain('一、长久相合。');
     expect(full).toContain('二、多沟通。');
@@ -127,7 +132,7 @@ describe('旧记录读取时兜底清洗(展示/复制共用)', () => {
   it('纯中文正文读取时一字不改(只加分点，不改字)', () => {
     const clean = '【财运】\n1. 今年财星得地，宜守不宜攻。';
     const out = formatCopyBody({ pattern: '', strength: '', usefulElements: [], avoidElements: [], explanation: clean }, null);
-    expect(out).toContain('【财运】');
+    expect(out).toContain('财运');
     expect(out).toContain('今年财星得地，宜守不宜攻。');
     expect(out).not.toMatch(/[A-Za-z]/);
   });
@@ -158,14 +163,16 @@ describe('复制：全盘总结在维度筛选下不丢失', () => {
 describe('复制/导出的应用侧表头也不留算法符号', () => {
   const analysis = (explanation: string): BaziAIAnalysis => ({ pattern: '', strength: '', usefulElements: [], avoidElements: [], explanation });
 
-  it('formatCopyBody 的产物：无拉丁字母、无阿拉伯数字、无半角符号，只许中文与【】结构标记', () => {
+  it('formatCopyBody 的产物：无拉丁字母、无阿拉伯数字、无半角符号，连小节结构标记也不外泄', () => {
     const out = formatCopyBody(analysis('【值得关注的时间节点】1. 2029年(乙巳)：机会窗口，宜主动争取。\n【行动建议】2. 上半年落地关键谈判。'), null);
     expect(out).not.toMatch(/[A-Za-z]/);
     expect(out).not.toMatch(/[0-9０-９]/);
     expect(out).not.toMatch(/[•·()（）《》\-—/\\@#%&*+=<>[\]{}|~^]/);
+    // 【】只活在算法侧(切段/检索/筛选)，用户拿到的文档里一个都不该有
+    expect(out).not.toMatch(/[【】]/);
     // 年份翻成中文读法，句子不残缺
     expect(out).toContain('二零二九年乙巳');
-    expect(out).toContain('【值得关注的时间节点】');
+    expect(out).toContain('值得关注的时间节点');
   });
 
   it('旧记录里存着的引擎读数(带字段名与小数值)在复制时同样清干净', () => {

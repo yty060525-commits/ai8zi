@@ -32,11 +32,11 @@ describe('RecordsPage', () => {
     render(<RecordsPage onOpenPerson={onOpenPerson} />);
 
     await waitFor(() => expect(screen.getAllByRole('button', { name: /查看/ })).toHaveLength(3));
-    fireEvent.click(screen.getByRole('button', { name: /按姓名排序/ }));
+    fireEvent.click(screen.getByRole('button', { name: /按姓名(正序|倒序)/ }));
     const items = screen.getAllByRole('button', { name: /查看/ });
     expect(items[0].textContent).toContain('张伟');
 
-    fireEvent.click(screen.getByRole('button', { name: /按姓名排序/ }));
+    fireEvent.click(screen.getByRole('button', { name: /按姓名(正序|倒序)/ }));
     expect(screen.getAllByRole('button', { name: /查看/ })[0].textContent).toContain('李明');
 
     fireEvent.click(screen.getByRole('button', { name: /查看李明/ }));
@@ -56,7 +56,7 @@ describe('RecordsPage', () => {
     expect(firstItem?.textContent).toContain('男');
     expect(firstItem?.textContent).toContain('甲子年');
     expect(firstItem?.textContent).toContain('壬午时');
-    expect(firstItem?.textContent).toContain('AI：已完成');
+    expect(firstItem?.textContent).toContain('批断：已完成');
     expect(firstItem?.textContent).not.toMatch(/DeepSeek|模型|厂商|额度|费用/);
   });
 
@@ -65,8 +65,8 @@ describe('RecordsPage', () => {
 
     await waitFor(() => expect(screen.getByText('王芳')).toBeTruthy());
     const pendingItem = screen.getByRole('button', { name: '查看王芳' });
-    expect(pendingItem.textContent).toContain('AI：分析中');
-    expect(pendingItem.textContent).not.toContain('AI：未开始');
+    expect(pendingItem.textContent).toContain('批断：分析中');
+    expect(pendingItem.textContent).not.toContain('批断：未开始');
   });
 
   it('shows the 立春 zodiac (derived from year pillar), not a stale stored zodiac, for legacy records', async () => {
@@ -85,8 +85,8 @@ describe('RecordsPage', () => {
     await waitFor(() => expect(screen.getByText('甲辰')).toBeTruthy());
     const row = screen.getByRole('button', { name: '查看甲辰' });
     expect(row.textContent).toContain('甲辰年');   // 年柱(立春)
-    expect(row.textContent).toContain('生肖 龙');  // 与年支辰一致
-    expect(row.textContent).not.toContain('生肖 兔'); // 存量假值不得再显示
+    expect(row.textContent).toContain('生肖龙');  // 与年支辰一致
+    expect(row.textContent).not.toContain('生肖兔'); // 存量假值不得再显示
   });
 
   it('publishes only the newest asynchronous refresh result', async () => {

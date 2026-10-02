@@ -228,7 +228,7 @@ describe('查库取证', () => {
     insertRecord(db, baseRecord);
     const rec = getRecordById(db, 'r1');
     const ev26 = collectEvidence(db, rec, { year: 2026, topics: ['事业'] }, { providers: [] });
-    assert.ok(ev26.analyses.some((a) => a.heading.includes('2026年·流年批断')));
+    assert.ok(ev26.analyses.some((a) => a.heading.includes('2026年流年批断')));
     assert.ok(ev26.analyses.find((a) => a.heading.includes('流年')).text.includes('有升迁'));
     const ev27 = collectEvidence(db, rec, { year: 2027, topics: [] }, { providers: [] });
     assert.ok(ev27.missing.some((m) => m.includes('2027')));
@@ -263,7 +263,7 @@ describe('查库取证', () => {
     // 与 cacheLookup 同口径写入一条 2026 流年批断缓存；providers 传入模型以复现主键查找
     writeCache(db, cacheKey(rec, { type: 'annual', year: 2026, month: undefined }, 'test-model', 80), JSON.stringify({ title: '丙午·测试', explanation: '【事业】1. 缓存补读命中。' }));
     const ev = collectEvidence(db, rec, { year: 2026, topics: ['事业'] }, { providers: [{ model: 'test-model' }] });
-    assert.ok(ev.analyses.some((a) => a.heading.includes('2026年·流年批断') && a.text.includes('缓存补读命中')), '应能从 ai_cache 补读流年批断');
+    assert.ok(ev.analyses.some((a) => a.heading.includes('2026年流年批断') && a.text.includes('缓存补读命中')), '应能从 ai_cache 补读流年批断');
     // 不传 providers 时无法补读 → 明确写入数据缺口
     const evNone = collectEvidence(db, rec, { year: 2026, topics: ['事业'] }, { providers: [] });
     assert.ok(evNone.missing.some((m) => m.includes('2026')));
@@ -338,7 +338,8 @@ describe('查库取证', () => {
     assert.equal(ev.analyses.some((a) => a.heading.includes('逐年批断')), false);
     assert.ok(ev.missing.some((m) => m.includes('无法判断应期')));
     // 本命批断缺失时仍要提示补算，两条缺口并存
-    assert.ok(ev.missing.some((m) => m.includes('2026—')));
+    // 证据标题已按正式版口径写成「2026年至2035年」(不再用破折号)，判据跟着取实际形态。
+    assert.ok(ev.missing.some((m) => m.includes('2026年至')));
     db.close();
   });
 });
@@ -504,10 +505,16 @@ describe('聊天正文中文闸门(防英文字段名与符号漏进正文)', ()
       '一、事业：稳中有进。依据：流年批断的【事业】小节。');
   });
   test('清洗后仍不合规 → 返回空(交回调用方换通道)，日志报出违规类型', () => {
+    // nonChineseKinds 是「终检」的报告器，不参与清洗：它要能点出 ㊣ 这类闸门白名单之外的符号。
     assert.deepEqual(nonChineseKinds('甲子㊣乙丑'), ['其他符号']);
-    assert.equal(sanitizeChatText('甲子㊣乙丑'), '');
+    // 清洗侧现在按白名单取反删除(NOT_ALLOWED)，㊣ 会被直接删掉 ⇒ 剩下的纯中文合法上屏。
+    // 这正是「宁缺毋滥不许变成全缺」的落点：早先白名单漏了该字符时，整句会被判空丢掉原因。
+    assert.equal(sanitizeChatText('甲子㊣乙丑'), '甲子乙丑');
+    // 真不合规(整句英文、清洗后什么都不剩)时仍然返回空，交给上层换通道重答。
     assert.equal(sanitizeChatText('Sorry, I cannot answer this question based on the provided data.'), '');
     assert.equal(sanitizeChatText(''), '');
+    // 反向钉子：终检判据本身没被放宽 —— 未经清洗的脏串照样过不了 isChineseOnly。
+    assert.equal(isChineseOnly('甲子㊣乙丑'), false);
   });
   test('字段名映射表与服务端一致(两端口径基础)', () => {
     for (const key of ['patternFacts', 'strengthScore', 'dayMaster', 'elementRatio', 'periodFacts', 'missing']) {

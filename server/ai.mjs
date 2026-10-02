@@ -1,10 +1,23 @@
 import { getSetting, readCache, writeCache, setSetting } from './db.mjs';
+/* 正文中文闸门：唯一实现在客户端 shared 下，服务端与聊天侧(chat.mjs)读同一份，口径不分叉。 */
+import { sanitizeChatText } from '../client/src/shared/chineseGate.ts';
 
 export const PROVIDERS = [
   { id: 'deepseek', label: 'DeepSeek V4.1', endpoint: 'https://api.deepseek.com/chat/completions', model: 'deepseek-flash' },
   { id: 'kimi', label: 'Kimi(Moonshot)', endpoint: 'https://api.moonshot.cn/v1/chat/completions', model: 'kimi-k2.6' },
   { id: 'qwen', label: 'Qwen3.8-Flash', endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', model: 'qwen3.8-flash', disableThinking: true },
 ];
+/** 面向用户的中文通道名：与客户端 aiSettings.PROVIDER_LABEL 同一份口径。
+ *  上面那个 label 是服务商自己的英文名，属于协议层(自检接口原样回显给机主核对)，
+ *  但报错文本一旦带上它就会让客户端那道「只能中文」闸门整段判空 —— 所以所有对外文案都走这里。
+ *  名字里不带「·」：闸门白名单没有中点，写进去会被静默删掉一格(实测「通道一·深思」→「通道一深思」)。 */
+export const PROVIDER_LABEL = { deepseek: '通道一深思', kimi: '通道二克米', qwen: '通道三千问' };
+/** 取对外通道名：未知 id 时不回落成英文 label(那等于把泄漏源搬回来)，改用编号形式。 */
+export const providerLabel = (id) => PROVIDER_LABEL[id] ?? ('通道' + (sanitizeChatText(String(id)) || '未命名'));
+/** 状态码逐位读：503 → 五零三，界面写成「服务返回五零三」。
+ *  与客户端 shared/chineseReadAloud.ts 的 cnCode 同一算法(那边是 TS，这里直译成 JS)，
+ *  报错串里留阿拉伯数字会被那道「只能中文」闸门整段判空，所以数字只能在源头就读成人话。 */
+export const cnCode = (status) => String(status).split('').map((d) => ('零一二三四五六七八九'[+d] ?? d)).join('');
 export const currentProviderId = (db) => getSetting(db, 'ai.provider', 'qwen');
 export const providerOf = (id) => PROVIDERS.find((p) => p.id === id) ?? PROVIDERS[0];
 export const providerKey = (db, id) => getSetting(db, 'ai.key.' + id, '');
@@ -115,7 +128,7 @@ export const BASELINE_PROMPT = '你是资深子平命理师。严格依据下方
 export const SCOPE_PREFIX = '你是资深子平命理师，仅分析时段运势。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行或关系。'
   + '禁止输出注释或代码块/围栏标记，只给最终正文。本命格局与旺衰已由引擎算定并写在【事实数据】的「格局事实」「旺衰评分」里，你不得重判、不得改口径；本期吉凶只在既定喜忌下衡量该期干支的作用。'
   + '用 JSON(仅 JSON)返回，schema：{"title":"古风四字或对仗标题(可选)","explanation":长文}。'
-  + 'title 只能用干支+四字直书(如：卯戌六合·和合之象)或古典口诀风格，不得编造伪古文引文。'
+  + 'title 只能用干支+四字直书(如：卯戌六合和合之象)或古典口诀风格，不得编造伪古文引文；标题里也不要出现任何符号，只用汉字。'
   + 'explanation 必须依次各出现一次【健康】【事业】【财运】【爱情】【刑冲克害批注】，顺序一致，不得合并、省略或改名。'
   + '\n\n# 时段判断标准(硬性)\n'
   + '1. 先读【事实数据】里「旺衰评分」的档位与其中的喜忌方向：本期干支(含大运)属喜用则论顺、属忌神则论逆，生扶与克制关系以【事实数据】的「藏干」和「本期命中的刑冲合害」为准，禁止自造五行关系。\n'
@@ -297,24 +310,37 @@ export function cacheKey(record, task, model, tone = DEFAULT_TONE) {
   //      结论是模型自行体会调候的版本，与新口径不一致，整体作废重算一次。
   // v14：输出硬性要求改写为「正文限死纯中文 + 禁止引用出处」(通则 5/6 两条)，旧缓存正文里普遍带着
   //      英文字段名、阿拉伯数字与「依据某小节」的出处说明，已不符合新的展示口径，整体作废重写。
-  return ['v14', model, record.gender, record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar, task.type, task.year ?? 0, task.month ?? 0, record.birthYear, toneBucket].join('|');
+  // v15：时段任务指令里的标题示例去掉「·」并明写「标题不用任何符号」—— 那道闸门白名单没有中点，
+  //      旧提示词等于教模型产出会被删字的标题；提示词字节变了，缓存键必须跟着升。
+  return ['v15', model, record.gender, record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar, task.type, task.year ?? 0, task.month ?? 0, record.birthYear, toneBucket].join('|');
 }
 
 /* ---------- 失败原因分类：把上游错误翻译成用户能看懂的原因 ---------- */
-/** 依据 HTTP 状态码 + 响应体文案判定失败类型。 */
+/** 服务器一条密钥都没配时的固定回执(聊天侧 chat.mjs 用同一句，别各写一份)。
+ *  这句会直接进 record.aiError / 聊天错误框并过「只能中文」闸门，所以正文里不许出现「AI」这类拉丁缩写：
+ *  「服务器未配置 AI 密钥」原本会被整段判空，用户只剩「未知错误」。 */
+export const AI_SERVER_UNCONFIGURED = '服务器未配置访问凭据，请在服务器设置中填写后保存';
+/** 各通道都失败、且清洗后什么都剩不下时的兜底回执：必须保证「有话说」，否则界面只剩「未知错误」。 */
+export const AI_NO_CREDENTIAL_REPLY = '各通道都未返回可显示的原因，请检查服务器上的凭据配置';
+/** 依据 HTTP 状态码 + 响应体文案判定失败类型。与客户端 deepseekAdapter.classifyFailure 同一份口径：
+ *  这里返回的句子会直接进 record.aiError / 进度提示，一旦带上「5xx」「（）」这类痕迹，
+ *  展示层那道「只能中文」闸门就把整段判空，用户只剩「未知错误」——真正的原因反而丢了。
+ *  所以状态码数字不在这里出现，由调用方按「服务返回五零三」的形式补上。 */
 export function classifyFailure(status, bodyText) {
   const text = String(bodyText || '');
   const lower = text.toLowerCase();
   // 余额/额度类：各家文案不同，命中即判
   if (status === 402 || /insufficient|balance|quota|arrears|欠费|余额|额度|配额|exceeded your current quota|free tier/i.test(text)) return '余额不足或额度已用完';
   if (status === 401 || status === 403 || /invalid.*(api.?key|token)|authentication|unauthorized|incorrect api key|api key.*invalid|密钥无效|鉴权/i.test(text)) return '密钥无效或无权限';
-  if (status === 429 || /rate.?limit|too many requests|requests per|限流|频繁/i.test(lower)) return '请求过于频繁（已被限流）';
+  if (status === 429 || /rate.?limit|too many requests|requests per|限流|频繁/i.test(lower)) return '请求过于频繁，已被限流';
   if (status === 404 || /model.*(not found|not exist)|no such model|模型不存在/i.test(lower)) return '模型名不存在或已下线';
   if (status === 400 || /invalid.*request|bad request|参数/i.test(lower)) return '请求参数不被接受';
-  if (status >= 500) return '服务端故障（上游 5xx）';
+  if (status >= 500) return '服务端故障';
   if (status === 0) return '网络不可达或延迟过高';
-  const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 160);
-  return snippet ? ('上游报错：' + snippet) : ('HTTP ' + status);
+  // 上游自述多半整句是英文：原样拼进报错等于让闸门删掉全句，所以先过一遍清洗，
+  // 拿不到可用中文就退回固定说法，绝不把残句留进来。
+  const snippet = sanitizeChatText(text.replace(/\s+/g, ' ').trim().slice(0, 160));
+  return snippet ? '服务方说明：' + snippet : '服务未给出可显示的原因';
 }
 
 /** 阿里云百炼「上下文缓存」最小可缓存前缀(约 1024 token)；中文近似一字一 token，低于它这次
@@ -362,33 +388,40 @@ export async function callProvider(provider, key, messages, effort, mode = 'json
           signal: controller.signal,
         });
       } catch (netErr) {
-        // 网络层失败：区分超时与不可达，并给出耗时便于判断
-        if (netErr?.name === 'AbortError') return { error: '网络超时：上游 ' + Math.round((Date.now() - startedAt) / 1000) + ' 秒未响应（' + provider.label + '）' };
+        // 网络层失败：区分超时与不可达。耗时和上游原始英文串都不进正文(数字与残句都会让闸门判空)，
+        // 只保留中文结论；要排查请看服务器日志，那里由下面这条 console 记录完整细节。
+        const name = String(netErr?.name || '');
+        const msg = String(netErr?.message || netErr);
+        console.warn('[通道调用] ' + provider.id + ' 网络失败：' + Math.round((Date.now() - startedAt) / 1000) + 's ' + name + ' ' + msg);
+        if (name === 'AbortError') return { error: providerLabel(provider.id) + '：网络超时或不可达' };
         if (attempt === 0) continue;
-        return { error: '网络不可达或延迟过高（' + provider.label + '）：' + String(netErr?.message || netErr) };
+        return { error: providerLabel(provider.id) + '：网络不可达或延迟过高' };
       }
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
         // 限流/上游抖动重试一次
         if (attempt === 0 && (res.status === 429 || res.status >= 500)) continue;
-        return { error: classifyFailure(res.status, errText) + '（HTTP ' + res.status + ' · ' + provider.label + '）' };
+        return { error: providerLabel(provider.id) + '：' + classifyFailure(res.status, errText) + '，服务返回' + cnCode(res.status) };
       }
       let data;
       try { data = await res.json(); }
-      catch { return { error: '上游返回内容无法解析（' + provider.label + '）' }; }
+      catch { return { error: providerLabel(provider.id) + '：服务器返回的内容无法解析' }; }
       const raw = String(data?.choices?.[0]?.message?.content ?? '').trim();
       if (!raw) {
         const finish = String(data?.choices?.[0]?.finish_reason ?? '');
-        return { error: '上游返回空正文' + (finish ? '（finish_reason=' + finish + '）' : '') + '（' + provider.label + '）' };
+        if (finish) console.warn('[通道调用] ' + provider.id + ' 空正文：finish_reason=' + finish);
+        return { error: providerLabel(provider.id) + '：上游返回空正文，可能被内容过滤或达到输出上限' };
       }
       if (mode === 'text') return { text: raw };
       const cleaned = raw.replace(/^\`\`\`json?\s*/i, '').replace(/\`\`\`\s*$/, '').trim();
       try { return { analysis: JSON.parse(cleaned) }; }
-      catch { return { error: '模型输出不是合法 JSON（' + provider.label + '）' }; }
+      catch { return { error: providerLabel(provider.id) + '：正文格式不符合约定，无法解析' }; }
     }
-    return { error: '多次重试仍失败（' + provider.label + '）' };
+    return { error: providerLabel(provider.id) + '：多次重试仍未成功' };
   } catch (err) {
-    return { error: (err?.name === 'AbortError' ? '网络超时' : '调用异常') + '（' + provider.label + '）：' + String(err?.message || err) };
+    const aborted = err?.name === 'AbortError';
+    console.warn('[通道调用] ' + provider.id + ' 异常：' + String(err?.message || err));
+    return { error: providerLabel(provider.id) + '：' + (aborted ? '网络超时或不可达' : '调用过程未正常结束') };
   } finally {
     clearTimeout(timer);
   }
@@ -399,7 +432,7 @@ export async function runOneTask(db, record, task, tone = DEFAULT_TONE, preferre
   const t = clampTone(tone);
   const { messages, effort } = buildTaskPayload(record, task, t);
   const order = providerOrder(db, preferred);
-  if (order.length === 0) return { status: 'not_configured', error: '服务器未配置 AI 密钥，请在服务器设置中填写后保存' };
+  if (order.length === 0) return { status: 'not_configured', error: AI_SERVER_UNCONFIGURED };
   const errors = [];
   for (const provider of order) {
     const model = provider.model;
@@ -414,11 +447,15 @@ export async function runOneTask(db, record, task, tone = DEFAULT_TONE, preferre
       try { writeCache(db, ck, JSON.stringify(result.analysis)); } catch { /* 写缓存失败忽略 */ }
       return { status: 'completed', analysis: result.analysis };
     }
-    errors.push(provider.id + ': ' + (result.error || 'failed'));
+    // 对外只报中文通道名：这条 error 会写进 record.aiError 并进进度提示，
+    // 带上 provider.id(英文)或上游原句都会让展示层闸门整段判空，用户只剩「未知错误」。
+    errors.push(result.error || (providerLabel(provider.id) + '：未返回可显示的原因'));
   }
-  return { status: 'failed', error: errors.join('；') };
+  const joined = sanitizeChatText(errors.join('；'));
+  return { status: 'failed', error: joined || AI_NO_CREDENTIAL_REPLY };
 }
 
+/** 连通自检：面向机主的诊断回执，允许保留服务商英文名(协议层，不进正文闸门)。 */
 export async function runSelfTest(db) {
   const order = providerOrder(db);
   if (order.length === 0) return { ok: false, message: '未配置 AI 密钥' };
@@ -428,5 +465,5 @@ export async function runSelfTest(db) {
   const started = Date.now();
   const r = await callProvider(provider, key, messages, 'low');
   if (r.analysis) return { ok: true, provider: provider.id, model: provider.model, latencyMs: Date.now() - started, reply: r.analysis };
-  return { ok: false, message: provider.id + ' ' + (r.error || 'failed') };
+  return { ok: false, message: provider.label + ' ' + (r.error || 'failed') };
 }

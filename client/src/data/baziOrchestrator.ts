@@ -1,5 +1,7 @@
 import type { AiFindings, BaziAIAnalysis, BaziAnalysisTask, BaziRecord, BaziTaskResult, BaziTaskType } from '../types/domain';
 import * as adapter from './deepseekAdapter';
+import { readableTransportError } from './deepseekAdapter';
+
 import { chinaYearMonth } from '../utils/date';
 import { ELEMENT_GUIDES, primaryElement, type ElementGuide } from './elementKnowledge';
 import { sanitizeAnalysisText } from '../features/chart/elements';
@@ -7,7 +9,7 @@ export type TaskRunner = (task: BaziAnalysisTask, payload: { nonAiResult: BaziRe
 export interface AiProgress { done: number; total: number; label: string; record: BaziRecord; }
 export type ProgressFn = (progress: AiProgress) => void | Promise<void>;
 
-export const ABORTED_MESSAGE = '已停止：已完成的任务已保存，可随时点“AI 分析”继续完成剩余任务';
+export const ABORTED_MESSAGE = '已停止：已完成的任务已保存，可随时再点批断分析继续完成剩余任务';
 export interface OrchestrateOptions {
   /** 外部可中止整个分析会话(点“停止”时触发) */
   signal?: AbortSignal;
@@ -31,7 +33,9 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 export const isRetryableFailure = (error: string | undefined): boolean => {
   if (!error) return false;
   if (/not_configured|未配置|credential|keyring/i.test(error)) return false;
-  if (/HTTP 40[0-9]|HTTP 404/i.test(error)) return false;
+  // 状态码现在一律读成中文「服务返回四零一」，不再出现「HTTP 401」这种形态；
+  // 两种写法都留着认：存量 record.aiError 里还有旧格式，漏掉就会对着余额不足白烧两次钱。
+  if (/HTTP 40[0-9]|服务返回四[零一二三四五六七八九]/.test(error)) return false;
   return true;
 };
 
@@ -103,13 +107,21 @@ export async function fixedMapLimit<T>(items: T[], concurrency: number, worker: 
   });
 }
 
+/** 进度条上的任务名：界面文案在正式版口径下不许出现阿拉伯数字与半角括号，
+ *  所以年份逐位读成汉字(补零到两位，「零九」不会读成「九」)。工具函数放这一层，
+ *  客户端两条通道(编排器进度与详情页展示)共用。 */
+const CN_DIGITS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+const cnDigits = (n: number): string => String(n).split('').map((d) => CN_DIGITS[Number(d)] ?? d).join('');
+const readYear = (n: number): string => cnDigits(n);
+const readPadded = (n: number): string => cnDigits(Number(String(n).padStart(2, '0')));
+
 const taskLabel = (task: BaziAnalysisTask): string => {
   if (task.type === 'baseline') return '本命命局分析';
-  if (task.type === 'annual') return task.year !== undefined ? task.year + ' 年流年' : '流年';
-  if (task.type === 'monthly') return task.year !== undefined && task.month !== undefined ? task.year + ' 年 ' + task.month + ' 月' : '流月';
-  if (task.type === 'decade') return task.year !== undefined ? '大运段 ' + task.year : '大运段';
-  if (task.type === 'adjustment') return '后天调整与职业适配(按喜用五行)';
-  if (task.type === 'overview') return '全盘总结(值得关注的时间节点)';
+  if (task.type === 'annual') return task.year !== undefined ? readYear(task.year) + '年流年' : '流年';
+  if (task.type === 'monthly') return task.year !== undefined && task.month !== undefined ? readYear(task.year) + '年' + readPadded(task.month) + '月' : '流月';
+  if (task.type === 'decade') return task.year !== undefined ? '大运段、' + readYear(task.year) : '大运段';
+  if (task.type === 'adjustment') return '后天调整与职业适配，按喜用五行';
+  if (task.type === 'overview') return '全盘总结，值得关注的时间节点';
   return '任务';
 };
 
@@ -224,7 +236,9 @@ const pickPoints = (text: string, limit: number): string => {
   return out;
 };
 
-/** 汇总各时段已完成结果，作为「全盘总结」的输入(不含未完成任务，避免让模型猜)。 */
+/** 汇总各时段已完成结果，作为「全盘总结」的输入(不含未完成任务，避免让模型猜)。
+ *  要点标题给模型看，也会经「原因」类回显漏到界面上，所以与详情页同一套中文读法：
+ *  年份逐位、区间用「至」、括号一律不写。 */
 export function collectFindings(record: BaziRecord, aiTasks: Record<string, BaziTaskResult>, tasks: BaziAnalysisTask[], now?: Date): AiFindings {
   const from = analysisHorizon(record, now).year;
   const horizon = { from, to: from + 9 };
@@ -233,7 +247,7 @@ export function collectFindings(record: BaziRecord, aiTasks: Record<string, Bazi
       const gf = task.decade ?? (record.nonAiResult?.greatFortunes ?? []).find((row) => task.year !== undefined && task.year >= row.startYear && task.year <= row.endYear);
       // 与详情页 decadeSegment 同口径：只显这一运与「未来十年」窗口的交集，整段在窗口之外退回整段。
       const rawStart = gf?.startYear ?? task.year;
-      // 终点不往「起点+9」抬：当前运与窗口的交集就该是「今年 → 它交出去那一年」(如 2026-2033)。
+      // 终点不往「起点+9」抬：当前运与窗口的交集就该是「今年 → 它交出去那一年」(如 二零二六至二零三三)。
       // 把只有 endYear=year+1 的段抬到 year+9，会让标题盖住正文根本没谈过的年份。
       // 旧记录里 endYear 比 startYear+9 小的段仍按真实 endYear 显示，展示层不替存量数据编年份。
       const rawEnd = gf?.endYear ?? rawStart ?? horizon.to;
@@ -241,11 +255,12 @@ export function collectFindings(record: BaziRecord, aiTasks: Record<string, Bazi
       const intersects = hasSpan && (rawStart as number) <= horizon.to && (rawEnd as number) >= horizon.from;
       const start = intersects ? Math.max(rawStart as number, horizon.from) : rawStart;
       const end = intersects ? Math.min(rawEnd as number, horizon.to) : rawEnd;
-      const range = intersects && typeof start === 'number' && typeof end === 'number' ? `${start}-${end}` : `${gf?.startYear ?? task.year ?? ''}-${gf?.endYear ?? ''}`;
-      return (gf?.ganZhi ? gf.ganZhi + ' ' : '') + '大运段(' + range + ')';
+      // readYear 对 undefined 会读出「零」，所以拿不到年份时只写干支，不编造区间。
+      const range = typeof start === 'number' && typeof end === 'number' ? '大运段、' + readYear(start) + '至' + readYear(end) : '大运段';
+      return (gf?.ganZhi ? gf.ganZhi + '、' : '') + range;
     }
-    if (task.type === 'monthly') return task.year + '年' + task.month + '月' + (task.monthly?.ganZhi ? '(' + task.monthly.ganZhi + ')' : '');
-    return (task.year ?? '') + '年' + (task.annual?.ganZhi ? '(' + task.annual.ganZhi + ')' : '');
+    if (task.type === 'monthly') return readYear(task.year ?? 0) + '年' + readPadded(task.month ?? 0) + '月' + (task.monthly?.ganZhi ? '，干支' + task.monthly.ganZhi : '');
+    return readYear(task.year ?? 0) + '年' + (task.annual?.ganZhi ? '，干支' + task.annual.ganZhi : '');
   };
   const bucket = (type: BaziTaskType) => tasks
     .filter((task) => task.type === type)
@@ -297,7 +312,7 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
     }
     const settle: Promise<BaziTaskResult> = (async () => {
       try { return await actualRunner(task, { nonAiResult: record.nonAiResult, task }); }
-      catch (error) { return { task, status: 'failed' as const, error: error instanceof Error ? error.message : 'request failed' }; }
+      catch (error) { return { task, status: 'failed' as const, error: readableTransportError(error instanceof Error ? error.message : '') }; }
     })();
     if (!signal) return settle;
     if (signal.aborted) throw abortError();
@@ -379,10 +394,11 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
   const analysis = baselineResult.analysis;
   let baselineSummaryText = '';
   if (baselineResult.status === 'completed' && analysis) {
-    baselineSummaryText = '格局：' + (analysis.pattern || '—') + ' · 强弱：' + (analysis.strength || '—')
-      + '　喜：' + (analysis.usefulElements ?? []).join('、') + '　忌：' + (analysis.avoidElements ?? []).join('、');
-    // 这段摘要会作为「事实锚点」拼进下游时段任务的提示词，不是给用户看的正文，
-    // 因此不走闸门(闸门会吃掉干支括号与间隔点)，但字段值本身已在 sanitizeAnalysis 洗过。
+    baselineSummaryText = '格局：' + (analysis.pattern || '无') + '，强弱：' + (analysis.strength || '未判')
+      + '，喜：' + (analysis.usefulElements ?? []).join('、') + '，忌：' + (analysis.avoidElements ?? []).join('、');
+    // 这段摘要会作为「事实锚点」拼进下游时段任务的提示词，不是给用户看的正文。
+    // 分隔符只用中文逗号与顿号：整串连同标签都会被闸门读进界面(全盘总结失败时那条原因里就有它)，
+    // 所以间隔号、全角空格和破折号一律不许出现。
     for (const task of tasks) {
       if (task.type === 'annual' || task.type === 'monthly' || task.type === 'decade') task.baseline = { summary: baselineSummaryText } as never;
     }
@@ -449,7 +465,7 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
   if (stillFailed.length > 0 && !signal?.aborted) {
     const waitMs = isTest ? 0 : REPAIR_WAIT_MS;
     if (waitMs > 0) await sleep(waitMs);
-    if (!signal?.aborted) await onProgress?.({ done, total: tasks.length, label: '自动重试失败任务(' + stillFailed.length + ')…', record: snapshot() });
+    if (!signal?.aborted) await onProgress?.({ done, total: tasks.length, label: '自动重试失败任务，共' + cnDigits(stillFailed.length) + '条', record: snapshot() });
     const repairStep = async (task: BaziAnalysisTask): Promise<BaziTaskResult> => {
       ensureLive();
       const sanitizeDone = (r: BaziTaskResult): BaziTaskResult => r.status === 'completed' && r.analysis ? { ...r, analysis: sanitizeAnalysis(r.analysis) } : r;
@@ -481,6 +497,6 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
     // 全盘总结落到 aiOverview(记录里已有该字段与持久化通道)，供详情页顶部展示
     aiOverview: aiTasks[OVERVIEW_TASK_ID]?.analysis ? sanitizeAnalysis(aiTasks[OVERVIEW_TASK_ID]!.analysis) : undefined,
     aiStatus: statuses.includes('failed') ? 'failed' : statuses.includes('not_configured') ? 'not_configured' : 'completed',
-    aiError: failedTask?.error ?? (notConfigured ? '未配置 AI 服务' : undefined),
+    aiError: failedTask?.error ?? (notConfigured ? '未配置访问凭据' : undefined),
   };
 }

@@ -60,8 +60,10 @@ export async function setSelectedService(service: ServiceId): Promise<ServiceId>
   return service;
 }
 
-/** 通道显示名（与服务器/桌面端一致）。 */
-export const PROVIDER_LABEL: Record<AiProvider, string> = { deepseek: 'DeepSeek', kimi: 'Kimi', qwen: 'Qwen3.8-Flash' };
+/** 通道显示名：界面正文只放行中文，所以用中文名；服务商英文名只在协议层(模型标识)出现，不外露。
+ *  中间不写「·」：那道「只能中文」闸门的白名单里没有中点，带进去会被静默删成「通道一深思」，
+ *  界面上等于凭空少一个字 —— 这里直接写成闸门放行的最终形态。 */
+export const PROVIDER_LABEL: Record<AiProvider, string> = { deepseek: '通道一深思', kimi: '通道二克米', qwen: '通道三千问' };
 
 /** 测试专用：清空本机(浏览器)凭据与通道选择，避免用例之间互相污染。 */
 export function resetAiSettingsForTests(): void {

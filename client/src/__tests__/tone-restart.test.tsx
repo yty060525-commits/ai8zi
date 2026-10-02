@@ -53,11 +53,11 @@ beforeEach(() => {
 afterEach(() => { cleanup(); resetMockSession(); vi.restoreAllMocks(); try { localStorage.clear(); } catch {} });
 
 describe('语气滑杆跟本机走，不写进会同步的 record', () => {
-  it('结果不完整时点 AI 分析会重算；且写回的记录不带 toneUsed(不污染同步)', async () => {
+  it('结果不完整时点批断分析会重算；且写回的记录不带 toneUsed(不污染同步)', async () => {
     seed(recordBase);   // 无 toneUsed
     render(<PersonDetail personId={ID} onBack={vi.fn()} />);
-    await screen.findByRole('button', { name: 'AI 分析' });
-    fireEvent.click(screen.getByRole('button', { name: 'AI 分析' }));
+    await screen.findByRole('button', { name: '批断分析' });
+    fireEvent.click(screen.getByRole('button', { name: '批断分析' }));
     await waitFor(() => expect(analyzeBazi).toHaveBeenCalled(), { timeout: 5000 });
     await screen.findAllByText('按新语气生成。');
     const saved = await getBaziRecord(ID);
@@ -86,7 +86,7 @@ describe('语气滑杆跟本机走，不写进会同步的 record', () => {
     const slider = await screen.findByRole('slider');
     expect((slider as HTMLInputElement).value).toBe('55');   // 来自本机 ran，而非 record
     vi.mocked(analyzeBazi).mockClear();
-    fireEvent.click(screen.getByRole('button', { name: 'AI 分析' }));
+    fireEvent.click(screen.getByRole('button', { name: '批断分析' }));
     await waitFor(() => expect(screen.getByText(/已存在该语气下的完整分析结果/)).toBeTruthy());
     expect(analyzeBazi, '本机语气与上次一致却被重算').not.toHaveBeenCalled();
   });
@@ -99,7 +99,7 @@ describe('语气滑杆跟本机走，不写进会同步的 record', () => {
     const slider = await screen.findByRole('slider');
     expect((slider as HTMLInputElement).value, '本机没选过的盘被同步来的 toneUsed 拽到 55 = 就是用户投诉的“别人那也调低”').toBe('80');
     vi.mocked(analyzeBazi).mockClear();
-    fireEvent.click(screen.getByRole('button', { name: 'AI 分析' }));
+    fireEvent.click(screen.getByRole('button', { name: '批断分析' }));
     await waitFor(() => expect(screen.getByText(/已存在该语气下的完整分析结果/)).toBeTruthy());
     expect(analyzeBazi, '本机没跑过却被当成“改语气”整轮清掉重算').not.toHaveBeenCalled();
   });

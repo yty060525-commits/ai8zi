@@ -53,8 +53,10 @@ export function createApp({ db, allowRegister = true }) {
         const body = await readJsonBody(req);
         const username = String(body.username ?? '').trim();
         const password = String(body.password ?? '');
-        if (!/^[\w\u4e00-\u9fa5-]{2,24}$/.test(username)) return json(res, 400, { error: '用户名需 2-24 位(字母/数字/下划线/中文)' });
-        if (password.length < 6) return json(res, 400, { error: '密码至少 6 位' });
+        // 校验规则的正文会经 serverFetch 抛到设置页(登录/注册失败：…)，所以数字要读成中文、
+        // 括号与斜杠也不能留 —— 半角字符会被客户端那道「只能中文」闸门整段判空，用户只剩「未知错误」。
+        if (!/^[\w\u4e00-\u9fa5-]{2,24}$/.test(username)) return json(res, 400, { error: '用户名需两到二十四位，可用字母、数字、下划线或中文' });
+        if (password.length < 6) return json(res, 400, { error: '密码至少六位' });
         if (getUserByUsername(db, username)) return json(res, 409, { error: '用户名已存在' });
         const first = countUsers(db) === 0;
         const { salt, hash } = hashPassword(password);
@@ -88,7 +90,7 @@ export function createApp({ db, allowRegister = true }) {
         const body = await readJsonBody(req);
         if (!verifyPassword(String(body.old ?? ''), user.salt, user.pass_hash)) return json(res, 403, { error: '原密码错误' });
         const pw = String(body.new ?? '');
-        if (pw.length < 6) return json(res, 400, { error: '新密码至少 6 位' });
+        if (pw.length < 6) return json(res, 400, { error: '新密码至少六位' });
         const { salt, hash } = hashPassword(pw);
         changePassword(db, user.id, hash, salt);
         return json(res, 200, { ok: true });
@@ -98,7 +100,7 @@ export function createApp({ db, allowRegister = true }) {
       if (method === 'GET' && route === 'records') return json(res, 200, { records: listRecordsByUser(db, user.id) });
       if (method === 'POST' && route === 'records') {
         const body = await readJsonBody(req);
-        if (!body || !body.name || !body.yearPillar) return json(res, 400, { error: '缺少必填字段(name/yearPillar)' });
+        if (!body || !body.name || !body.yearPillar) return json(res, 400, { error: '缺少必填字段：姓名与年柱' });
         const rec = { ...body, id: body.id || 'r-' + uuid(), userId: user.id };
         const saved = insertRecord(db, rec);
         return json(res, 200, { record: saved });
@@ -119,7 +121,7 @@ export function createApp({ db, allowRegister = true }) {
         }
         if (method === 'POST' && rest[1] === 'ai' && rest[2] === 'task') {
           const body = await readJsonBody(req);
-          if (!body?.task) return json(res, 400, { error: '缺少 task' });
+          if (!body?.task) return json(res, 400, { error: '缺少任务信息，无法批断' });
           const result = await runOneTask(db, rec, body.task, body.tone, body.provider);
           return json(res, 200, { result });
         }
@@ -157,7 +159,9 @@ export function createApp({ db, allowRegister = true }) {
           if (typeof body.keys?.[p.id] === 'string' && body.keys[p.id].trim()) saveProviderKey(db, p.id, body.keys[p.id]);
           if (typeof body.key === 'string' && body.key.trim() && body.provider === p.id) saveProviderKey(db, p.id, body.key);
         }
-        return json(res, 200, { ok: true, message: 'AI 配置已保存' });
+        // 不回 message：客户端 saveConfig 把响应体整个丢掉，这句从没被读过。
+        // 留着「AI 配置已保存」只是把拉丁缩写摆在对外字段里，改字面量不如直接去掉这个源头。
+        return json(res, 200, { ok: true });
       }
       if (method === 'POST' && route === 'admin/test') {
         const r = await runSelfTest(db);
@@ -165,8 +169,10 @@ export function createApp({ db, allowRegister = true }) {
       }
       return json(res, 404, { error: 'unknown api: /api/' + route });
     } catch (err) {
+      // 请求体过大/不是合法 JSON：原始 err.message 是整句英文，客户端过闸门会整段判空，
+      // 这里直接给一句中文；细节留在下面的 console 里供机主排查。
       if (String(err?.message || err).includes('too large') || String(err?.message || err).includes('JSON')) {
-        return json(res, 400, { error: String(err.message) });
+        return json(res, 400, { error: '请求内容过大或格式不正确' });
       }
       console.error('[server]', req.method, path, err);
       return json(res, 500, { error: '服务器内部错误' });

@@ -21,7 +21,7 @@ export async function compactRecords(): Promise<number> {
 }
 export interface AiSelfTest { ok: boolean; provider?: string; model?: string; reply?: string; latencyMs?: number; message?: string; }
 
-/** AI 连通自检：发一次最小请求。网页版没有本机调用通道(密钥在服务器或桌面端)，
+/** 批断连通自检：发一次最小请求。网页版没有本机调用通道(凭据在服务器或桌面端)，
  *  这里如实说明并指出该去哪儿测，而不是报一个看起来像故障的「失败」。 */
 export async function runAiSelfTest(): Promise<AiSelfTest> {
   if (inTauri()) {
@@ -31,7 +31,7 @@ export async function runAiSelfTest(): Promise<AiSelfTest> {
       return { ok: false, message: error instanceof Error ? error.message : String(error) };
     }
   }
-  return { ok: false, message: '网页版不能在本地做连通自检。要看 AI 是否可用：在任一命盘详情页点「AI 分析」，或在「排盘 → 问问 AI」提一个问题，看它能否答上。' };
+  return { ok: false, message: '网页版不能在本地做连通自检。要看批断是否可用：在任一命盘详情页点批断分析，或在排盘页的问问批断里提一个问题，看它能否答上。' };
 }
 /** AI 结果缓存清理：网页版的缓存在服务器库里，走服务器的清除接口按盘清除；
  *  桌面版清本机库。返回删除条数。 */

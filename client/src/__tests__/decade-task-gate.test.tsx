@@ -15,7 +15,7 @@ const year = new Date().getFullYear();
  *  用户要未来十年这段路被大运完整盖住，所以这一运也排任务、也摆进分组④。
  *  关键是 buildBaziTasks 与 pruneStaleTasks 必须用**逐字同一条判据**：两边不一致时，界面摆出来的运
  *  就没有槽位、或有槽位界面看不到 —— 「本机结果是否完整」因此恒为假，
- *  23/23 都已完成的盘每次点「AI 分析」都会整轮重算(花的是真钱)。 */
+ *  23/23 都已完成的盘每次点「批断分析」都会整轮重算(花的是真钱)。 */
 const record: BaziRecord = {
   id: 'decade-gate', name: '大运槽位', gender: 'male', birthYear: 1990, birthMonth: 5,
   createdAt: new Date(Date.UTC(year - 1, 2, 8, 12, 34, 56)).toISOString(),
@@ -56,7 +56,7 @@ function mount(withTasks: Record<string, BaziTaskResult>) {
 beforeEach(() => { vi.mocked(analyzeBazi).mockResolvedValue({ status: 'completed', analysis: { pattern: '身弱', strength: '弱', usefulElements: ['水'], avoidElements: ['火'], explanation: '重新生成的一段正文。' } } as never); });
 afterEach(() => { cleanup(); resetMockSession(); vi.restoreAllMocks(); try { localStorage.clear(); } catch { /* jsdom 可能禁用 storage */ } });
 
-describe('已跑完的盘再点「AI 分析」不得整轮重算(大运槽位口径)', () => {
+describe('已跑完的盘再点「批断分析」不得整轮重算(大运槽位口径)', () => {
   /** 独立算一遍「该必填的任务清单」：本命 1 + 未来十年流年 10 + 滚动十二个月 + **与十年窗口有交集**
    *  的大运(判据与 pruneStaleTasks/界面分组④逐字一致)。故意不复用 buildBaziTasks
    *  —— 两边各算各的对得上才叫契约，测试跟着实现改就测不出回归。 */
@@ -101,8 +101,8 @@ describe('已跑完的盘再点「AI 分析」不得整轮重算(大运槽位口
     mount({ ...tasksFor(impl), [OVERVIEW_TASK_ID]: overviewDone });
     // 挂进视图的这条必须带着总结正文，否则界面上的「② 全盘总结」与判定用的清单对不上。
     expect((await hydrateRecord(withOverview)).aiOverview?.explanation, '读取路径丢了总结正文').toBeTruthy();
-    await screen.findByRole('button', { name: 'AI 分析' });
-    fireEvent.click(screen.getByRole('button', { name: 'AI 分析' }));
+    await screen.findByRole('button', { name: '批断分析' });
+    fireEvent.click(screen.getByRole('button', { name: '批断分析' }));
     await waitFor(() => expect(screen.getByText(/已存在该语气下的完整分析结果/)).toBeTruthy(), { timeout: 5000 });
     expect(analyzeBazi, '本机结果被当成不完整而整轮重算').not.toHaveBeenCalled();
   });
@@ -112,8 +112,8 @@ describe('已跑完的盘再点「AI 分析」不得整轮重算(大运槽位口
     const tasks = buildBaziTasks(full, new Date());
     const missing = tasks.find((t) => t.type === 'annual')!;
     mount(tasksFor(tasks.filter((t) => t.taskId !== missing.taskId)));
-    await screen.findByRole('button', { name: 'AI 分析' });
-    fireEvent.click(screen.getByRole('button', { name: 'AI 分析' }));
+    await screen.findByRole('button', { name: '批断分析' });
+    fireEvent.click(screen.getByRole('button', { name: '批断分析' }));
     await waitFor(() => expect(analyzeBazi).toHaveBeenCalled(), { timeout: 8000 });
   });
 });

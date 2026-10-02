@@ -34,7 +34,7 @@ const grabRust = (src: string, name: string) => {
   }
   return out;
 };
-/** Rust 的普通字符串常量(非 concat!)：lib.rs 里 TONE_TAIL 这类单行 const 用这个取。 */
+/** Rust 的普通字符串常量(非 concat!)：lib.rs 里 TONE_TAIL、OUTPUT_RULES_HEAD 这类单行 const 用这个取。 */
 const grabRustStr = (src: string, name: string) => {
   const m = new RegExp(`^const ${name}: &str = "((?:[^"\\\\]|\\\\.)*)";`, 'm').exec(src);
   if (!m) throw new Error('missing rust str ' + name);
@@ -63,14 +63,20 @@ describe('三通道提示词一致性', () => {
     // (标题 + 规则 + 语气标题)，两端切法不同，这里各自还原成同一段文本再比。
     const s = grabJs(server, 'OUTPUT_RULES_TEXT');
     const a = grabJs(adapter, 'OUTPUT_RULES_TEXT');
-    // Rust 把「标题 + 规则 + 语气标题」存成一个 OUTPUT_RULES_HEAD，语气标题在 concat! 里是
-    // 标识符行(TONE_TAIL)而非字面量，grabRust 只收字面量行，所以这里得到的就是「标题 + 规则」。
-    const head = grabRust(rust, 'OUTPUT_RULES_HEAD');
+    // Rust 端把「标题 + 规则」存成 OUTPUT_RULES_HEAD。它必须是普通字符串字面量而不是
+    // concat!(..., TONE_TAIL)：concat! 只收字面量参数，传标识符在本机 rustc 1.98 报
+    // 「expected a literal」，桌面端整个编译不过(此坑实测)。所以这里用 grabRustStr 取单行 const。
+    const head = grabRustStr(rust, 'OUTPUT_RULES_HEAD');
     const rulesHeadMark = '\n\n# 输出硬性要求(违反即整篇作废重写)\n';
     expect(head.startsWith(rulesHeadMark)).toBe(true);
     const r = head.slice(rulesHeadMark.length);
     expect(a).toBe(s);
     expect(r).toBe(s);
+    // 反向钉子：语气标题不在 HEAD 里 —— Rust 侧由调用处的 format! 写出；
+    // 若有人把它塞回 HEAD，桌面端任务正文会比另两端多出一段，上面那条逐字节比对当场红。
+    expect(head).not.toContain('\n\n# 语气要求\n');
+    // 桌面端的提示词文本不许残留「·」：闸门白名单没有中点，带上等于教模型产出会被删字的标题。
+    expect(head.includes('·')).toBe(false);
     // 钉子：删掉这两条规则(或改字)必须当场红 —— 闸门只兜得住漏网的，口径靠提示词。
     expect(s).toContain('【正文只许中文】');
     expect(s).toContain('【禁止引用出处】');

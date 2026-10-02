@@ -324,11 +324,11 @@ export function buildEvidence(record: BaziRecord, plan: ChatPlan): ChatEvidence 
       lines.push(String(y) + '年(' + String(annual.analysis.title ?? '') + ')：' + body);
     }
     if (lines.length) {
-      evidence.analyses.push({ heading: from + '—' + (from + SCAN_YEARS - 1) + '年·逐年批断(用于判断应期)', text: lines.join('\n') });
+      evidence.analyses.push({ heading: from + '年至' + (from + SCAN_YEARS - 1) + '年逐年批断，用于判断应期', text: lines.join('\n') });
       const decade = decadeOf(record, tasks, from);
       if (decade) evidence.analyses.push({ heading: '所处大运批断', text: sliceSections(decade.analysis.explanation, labels) });
     } else {
-      evidence.missing.push(from + '—' + (from + SCAN_YEARS - 1) + ' 年的流年批断一条都还没生成，无法判断应期');
+      evidence.missing.push(from + '年至' + (from + SCAN_YEARS - 1) + '年的流年批断一条都还没生成，无法判断应期');
     }
     if (gaps.length) evidence.missing.push('下列年份尚未生成流年批断，作答时只能在这些年份之外给应期：' + gaps.join('、') + '年');
     if (uncovered.length) evidence.missing.push('下列年份虽有流年批断，但其中没有与所问主题相关的小节，不得据其判断该主题的应期：' + uncovered.join('、') + '年');
@@ -339,7 +339,7 @@ export function buildEvidence(record: BaziRecord, plan: ChatPlan): ChatEvidence 
     if (baseline) {
       const text = sliceSections(baseline.analysis.explanation, topics.length ? [...topics, '身强身弱与喜忌'] : []) || cutAtBoundary(String(baseline.analysis.explanation ?? ''), 900);
       evidence.analyses.push({ heading: '本命批断', text });
-    } else evidence.missing.push('本命批断尚未生成：可先在命盘详情页点「AI 分析」');
+    } else evidence.missing.push('本命批断尚未生成：可先在命盘详情页点批断分析');
     const adjustment = findCompleted(tasks, 'adjustment');
     if (adjustment && (!topics.length || topics.includes('五行'))) evidence.analyses.push({ heading: '后天调整与职业', text: sliceSections(adjustment.analysis.explanation, ['后天调整', '事业适配', '健康注意']) });
     const overview = findCompleted(tasks, 'overview');
@@ -351,14 +351,14 @@ export function buildEvidence(record: BaziRecord, plan: ChatPlan): ChatEvidence 
   } else {
     const labels = topics.length ? topics : ['健康', '事业', '财运', '爱情', '刑冲克害批注'];
     const annual = findCompleted(tasks, 'annual', plan.year);
-    if (annual) evidence.analyses.push({ heading: plan.year + '年·流年批断(' + String(annual.analysis.title ?? '') + ')', text: sliceSections(annual.analysis.explanation, labels) });
-    else evidence.missing.push(plan.year + ' 年的流年分析尚未生成');
+    if (annual) evidence.analyses.push({ heading: plan.year + '年流年批断，题为' + String(annual.analysis.title ?? '') , text: sliceSections(annual.analysis.explanation, labels) });
+    else evidence.missing.push(plan.year + '年的流年分析尚未生成');
     const decade = decadeOf(record, tasks, plan.year);
     if (decade) evidence.analyses.push({ heading: '所处大运批断', text: sliceSections(decade.analysis.explanation, labels) });
     if (plan.month !== undefined) {
       const monthly = findCompleted(tasks, 'monthly', plan.year, plan.month);
-      if (monthly) evidence.analyses.push({ heading: plan.year + '年' + plan.month + '月·流月批断', text: sliceSections(monthly.analysis.explanation, labels) });
-      else evidence.missing.push(plan.year + '年' + plan.month + '月 的流月分析尚未生成');
+      if (monthly) evidence.analyses.push({ heading: plan.year + '年' + plan.month + '月流月批断', text: sliceSections(monthly.analysis.explanation, labels) });
+      else evidence.missing.push(plan.year + '年' + plan.month + '月的流月分析尚未生成');
     }
   }
   const periodFacts = buildPeriodFacts(record, plan);
@@ -380,7 +380,7 @@ export const CHAT_SYSTEM = '你是一位资深子平命理师，正在与用户�
   + '证据里若点名了"尚未生成流年批断"的年份，只能在该范围之外给应期，绝不能给这批空缺年份下任何结论。'
   + '【缺口处理】只有当证据覆盖不了用户所问的时段与主题时(摘录为空，或只有【数据缺口提示】)，'
   + '才明确说出"数据库里还没有计算过这批数据"，逐条列出缺了什么，'
-  + '并建议用户先到命盘详情页点「AI 分析」把对应的本命/流年/流月批断算出来，然后再来提问；'
+  + '并建议用户先到命盘详情页点批断分析把对应的本命、流年、流月批断算出来，然后再来提问；'
   + '此时只允许复述缺口与已有事实，一条都不许推测。'
   + '【所问时段以检索计划为准】用户问题里的年份/月份说法可能不规范(如把某年说成两位缩写)，'
   + '一律以本消息给出的检索计划与证据里标注的年份、月份为提问所指，不得因为问题原文的数字与你看到的年份写法不同，就回答"没有那一年的信息"。'
@@ -433,18 +433,58 @@ function anyChannelConfigured(): boolean {
 
 /** 「谁都没配」这句话该指向哪儿：连着服务器时密钥在服务器那边，界面却写着「去设置」，
  *  用户点开的是本机凭据框 —— 填了也不会让服务器那条通道动起来。
- *  入口方位按实际位置写「右上角」：「设置」按钮靠行尾对齐，窄屏同样靠右。 */
+ *  入口方位按实际位置写「右上角」：「设置」按钮靠行尾对齐，窄屏同样靠右。
+ *  这句会原样显示给用户(闸门只在有正文时才跑)，所以里面不许出现英文缩写、括号与分号。 */
+/** 中文计数与「闸门同款」的清洗：这两样原先在 PersonDetail / RecordsPage / SettingsPage 各抄一份，
+ *  第三份出现在这里 —— 抄来抄去就会分叉(界面上「已配置 零 条」那种空格、以及漏洗的英文串都是这么来的)。
+ *  读法统一放 shared/chineseReadAloud，清洗沿用上面已 import 的闸门那一份。 */
+import { cnCount, cnCode } from '../shared/chineseReadAloud';
+
+/** 通道原始报错 → 能上屏的中文。
+ *  fetch 抛的是整句英文(带括号、冒号、状态码)，直接拼进 error 会被展示层的闸门整段判空，
+ *  于是用户只看到「回答失败，请稍后重试」，真正的原因反而丢了 —— 这与「宁缺毋滥」的本意相反：
+ *  这里不是要藏原因，而是要把原因读成人话。所以先删凭据痕迹、把 HTTP 三位数逐位读成中文
+ *  (五零三比「HTTP 503」好懂，留阿拉伯数字又违反正式版口径)，再交给闸门做终检；
+ *  闸门仍判空时退回一句固定中文，至少不丢掉「哪一段没成功」。 */
+export function readableChannelError(raw?: string): string {
+  const masked = String(raw ?? '')
+    .replace(/sk-[a-z0-9_-]+/gi, '已隐藏的密钥')
+    .replace(/github_pat_[a-z0-9_]+/gi, '已隐藏的令牌')
+    .replace(/bearer\s+[^\s，。）]+/gi, '已隐藏的凭据')
+    .replace(/(api[_-]?key\s*[:=]\s*)\S+/gi, '$1已隐藏')
+    .replace(/\bhttp\s*([0-9]{3})\b/gi, (_m, code: string) => '服务返回' + cnCode(code));
+  return sanitizeChatText(masked) || '该通道未返回可显示的原因';
+}
+
+/** 账号名读法：用户名是登录时自填的机器串(常见形态带字母、数字或下划线)，直接印进正文就违反
+ *  「只能中文」口径。纯中文名原样显示；含非中文字符时逐位读成中文(字母按近似读音，数字逐位)，
+ *  至少界面这一行不留拉丁字母 —— 原始账号仍放进悬浮说明里供管理员核对。 */
+const LATIN_READ: Record<string, string> = {
+  a: '阿', b: '比', c: '西', d: '地', e: '伊', f: '艾夫', g: '吉', h: '艾尺', i: '艾', j: '杰', k: '开',
+  l: '艾勒', m: '艾姆', n: '恩', o: '欧', p: '皮', q: '克优', r: '阿', s: '艾斯', t: '提', u: '优',
+  v: '维', w: '达不溜', x: '艾克斯', y: '外', z: '贼德',
+};
+export function readableAccount(name?: string): string {
+  const raw = String(name ?? '').trim();
+  if (!raw) return '未命名';
+  if (/^[一-鿿]+$/.test(raw)) return raw;
+  const read = [...raw.toLowerCase()].map((ch) => (/[0-9]/.test(ch) ? cnCode(ch) : LATIN_READ[ch] ?? '')).join('');
+  return sanitizeChatText(read) || '该账号名无法用中文念出，详见悬浮说明';
+}
+
 function serverOnlyReason(detail?: string): string {
   const where = isServerMode()
-    ? '服务器那边还没配 AI 密钥(需要在服务器上配置，本客户端的设置页管不到它)；想马上能问：点页面右上角「设置」给任一通道填凭据，就走本机通道回答。'
-    : '尚未配置 AI 密钥：配置后即可向我提问(服务器通道或本机通道均可)。';
-  return where + (detail ? '（' + detail + '）' : '');
+    ? '服务器那边还没配访问凭据，需要在服务器上配置，本客户端的设置页管不到它。想马上能问：点页面右上角设置，给任一通道填凭据，就走本机通道回答。'
+    : '还没配访问凭据：配置后即可向我提问，服务器通道或本机通道均可。';
+  // detail 是通道原始报错(常带 HTTP 状态码与整句英文)，读成人话再上屏，宁缺毋滥。
+  const reason = detail ? readableChannelError(detail) : '';
+  return where + (reason ? '原因：' + reason + '。' : '');
 }
 
 export async function askChat(input: AskChatInput): Promise<ChatReply> {
   const question = String(input.question || '').trim();
   if (!question) return { status: 'failed', error: '请输入问题' };
-  if (question.length > 500) return { status: 'failed', error: '问题过长，请控制在 500 字以内' };
+  if (question.length > 500) return { status: 'failed', error: '问题过长，请控制在五百字以内' };
   const history = Array.isArray(input.history) ? input.history : [];
   const tone = Number.isFinite(input.tone as number) ? Math.max(0, Math.min(100, Math.round(Number(input.tone)))) : 80;
 
@@ -482,15 +522,15 @@ export async function askChat(input: AskChatInput): Promise<ChatReply> {
         ]);
         if (localCount > 0) {
           return { ...data, reason: unsynced.length
-            ? '本机有 ' + unsynced.length + ' 条命盘还没传上服务器，所以查不到。保持联网，稍等片刻(列表里那条的「未同步」标记消失)后再问一次。'
-            : '本机这些盘都已同步到服务器，却仍查不到你的命盘：可能是当前登录账号与建盘时的账号不同(数据按账号隔离)。请在「设置 → 服务器通道」确认已连接的账号。' };
+            ? '本机有' + cnCount(unsynced.length) + '条命盘还没传上服务器，所以查不到。保持联网，稍等片刻，等列表里那条的未同步标记消失后再问一次。'
+            : '本机这些盘都已同步到服务器，却仍查不到你的命盘：可能是当前登录账号与建盘时的账号不同，数据按账号隔离。请在设置里的服务器通道确认已连接的账号。' };
         }
       }
       // 闸门拦住了(清洗后仍非纯中文)：这条不能当答案，落到本机通道重答；
       // 本机也没配凭据时至少给出人话，而不是把一屏英文摆给用户。
       if (data?.status === 'completed' && !answer) {
         serverReason = '服务器返回的正文不是纯中文';
-        if (!anyChannelConfigured()) return { status: 'failed', error: 'AI 返回的正文不是纯中文，已拦下未展示。' };
+        if (!anyChannelConfigured()) return { status: 'failed', error: '批断返回的正文不是纯中文，已拦下未展示。' };
       } else {
         return { ...data, answer: data?.status === 'not_configured' && data.error ? serverOnlyReason(data.error) : answer, evidence: data?.evidence };
       }
@@ -500,6 +540,7 @@ export async function askChat(input: AskChatInput): Promise<ChatReply> {
       // 服务器答不上来(它自己那条通道没密钥/调用失败)时，本机若配了凭据还能接着答；
       // 一条都没配才是真的「谁都用不了」，报「未配置」。
       if (!offline) {
+        // serverFetch 已经把非 2xx 兜底成「服务返回五零三」，这里不再自己拼 HTTP 数字。
         const reason = error instanceof Error ? error.message : '服务器请求失败';
         if (!anyChannelConfigured()) return { status: 'not_configured', error: serverOnlyReason(reason) };
         serverReason = reason; // 本机配了凭据：继续往下落到本机通道
@@ -509,8 +550,9 @@ export async function askChat(input: AskChatInput): Promise<ChatReply> {
   }
   const local = await askChatLocal({ ...input, question, history, tone });
   // 本机这条也失败时，光说「本机失败」会漏掉真正的原因(往往是服务器那边先报错的那条)。
+  // 两段各自过读法再拼接：原始英文串直接拼进 error 会让展示层整段判空，原因反而丢了。
   if (serverReason && local.status === 'failed' && !local.error?.includes('已取消')) {
-    return { ...local, error: '服务器：' + serverReason + '；本机通道：' + (local.error || '也未成功') };
+    return { ...local, error: '服务器：' + readableChannelError(serverReason) + '；本机通道：' + readableChannelError(local.error || '') };
   }
   // 本机也没配凭据、而用户其实连着服务器：别让人跑去填一个用不上的本机密钥。
   if (local.status === 'not_configured' && isServerMode()) return { ...local, error: serverOnlyReason(local.error) };
@@ -519,13 +561,13 @@ export async function askChat(input: AskChatInput): Promise<ChatReply> {
 
 async function askChatLocal(input: { question: string; history: ChatMessage[]; tone: number; recordId?: string | null; signal?: AbortSignal }): Promise<ChatReply> {
   const records = await listBaziRecords();
-  if (records.length === 0) return { status: 'need_record', reason: '还没有任何命盘：请先在「排盘」页保存一条记录，再向我提问' };
+  if (records.length === 0) return { status: 'need_record', reason: '还没有任何命盘：请先在排盘页保存一条记录，再向我提问' };
   // records 一并传入：本轮没点人名时沿用上一个人，点了别人的名字则换人(否则整段对话锁死在第一个命主)。
   const plan = applyFollowUp(analyzeQuestion(input.question, records), input.history, records);
   let target = input.recordId ? records.find((r) => r.id === input.recordId) : undefined;
   if (!target && plan.recordId) target = records.find((r) => r.id === plan.recordId);
   if (!target && records.length === 1) target = records[0];
-  if (!target) return { status: 'need_record', reason: '你的名下有多条命盘，请告诉我问的是谁(或点选命主)', evidence: { plan, options: records.map((r) => ({ id: r.id, name: r.name })) } };
+  if (!target) return { status: 'need_record', reason: '你的名下有多条命盘，请告诉我问的是谁，或点选下方命主', evidence: { plan, options: records.map((r) => ({ id: r.id, name: r.name })) } };
   // 证据要读大运/流年/流月数组，而存储里这些是空的(落库时瘦身)：只对定下来的这一条做重算。
   const fullTarget = await hydrateRecord(target);
   const evidence = buildEvidence(fullTarget, plan);
@@ -543,15 +585,15 @@ async function askChatLocal(input: { question: string; history: ChatMessage[]; t
         messages,
       });
       const clean = result.answer ? sanitizeChatText(result.answer) : result.answer;
-      if (result.status === 'completed' && !clean) return { status: 'failed', error: 'AI 返回的正文不是纯中文，已拦下未展示。', evidence: meta };
+      if (result.status === 'completed' && !clean) return { status: 'failed', error: '批断返回的正文不是纯中文，已拦下未展示。', evidence: meta };
       return { status: result.status as ChatReply['status'], answer: clean, error: result.error, cached: result.cached, evidence: meta };
     } catch (error) {
-      return { status: 'failed', error: error instanceof Error ? error.message : '本机 AI 请求失败', evidence: meta };
+      return { status: 'failed', error: readableChannelError(error instanceof Error ? error.message : String(error)), evidence: meta };
     }
   }
   const result = await chatDirect(messages, { signal: input.signal });
   const direct = (result as { answer?: string }).answer;
   const clean = direct ? sanitizeChatText(direct) : direct;
-  if (result.status === 'completed' && !clean) return { status: 'failed', error: 'AI 返回的正文不是纯中文，已拦下未展示。', evidence: meta };
+  if (result.status === 'completed' && !clean) return { status: 'failed', error: '批断返回的正文不是纯中文，已拦下未展示。', evidence: meta };
   return { status: result.status as ChatReply['status'], answer: clean, error: (result as { error?: string }).error, evidence: meta };
 }

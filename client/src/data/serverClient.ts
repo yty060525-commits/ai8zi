@@ -1,5 +1,6 @@
 import type { BaziRecord, BaziAnalysisTask, BaziTaskResult } from '../types/domain';
 import { getBrowserCredential } from './aiSettings';
+import { cnCode } from '../shared/chineseReadAloud';
 
 /* ---------------- 服务器与账号会话(设备记住) ---------------- */
 export interface ServerSession { token: string; username: string; role: 'admin' | 'user' }
@@ -44,11 +45,11 @@ export async function serverFetch<T = unknown>(path: string, opts: { method?: st
     });
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') throw err;
-    throw new ServerError(0, '无法连接服务器（网络不可达）');
+    throw new ServerError(0, '无法连接服务器，网络不可达');
   }
   let data: T = undefined as T;
   try { data = (await res.json()) as T; } catch { /* 无 JSON */ }
-  if (!res.ok) throw new ServerError(res.status, ((data as { error?: string })?.error) || ('HTTP ' + res.status));
+  if (!res.ok) throw new ServerError(res.status, ((data as { error?: string })?.error) || ('服务返回' + cnCode(res.status)));
   return { status: res.status, data };
 }
 
@@ -111,7 +112,7 @@ export async function runTaskOnServer(record: BaziRecord, task: BaziAnalysisTask
 }
 
 
-/** 本机备用直连(无服务器 / 服务器断线时用)：优先 DeepSeek 浏览器凭据。 */
+/** 本机备用通道(没设置服务器、或服务器断线时用)：按设置里选中的那条优先。 */
 export async function runLocalFallback(record: BaziRecord, task: BaziAnalysisTask | undefined, tone: number | undefined, signal?: AbortSignal): Promise<{ ok: boolean } | { ok: false; reason: string }> {
   // 不再写死 DeepSeek：交给直连实现按“当前使用通道 → 其余已配置通道”依次尝试
   const { browserFallback } = await import('./deepseekAdapter');

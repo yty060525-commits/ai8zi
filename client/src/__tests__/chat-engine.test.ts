@@ -8,6 +8,7 @@ import { analyzeQuestion, applyFollowUp, buildChatMessages, buildEvidence, build
 import { isServerMode, serverFetch, ServerError } from '../data/serverClient';
 import { hydrateRecord, listBaziRecords } from '../data/clientRepository';
 import { chatDirect } from '../data/deepseekAdapter';
+import { sanitizeAnalysisText } from '../features/chart/elements';
 
 /* 三通道共用的提问解析/证据组装(与服务端 chat.mjs 同口径)的单元测试。 */
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
@@ -22,7 +23,7 @@ vi.mock('../data/deepseekAdapter', () => ({
   toneInstructionText: (t: number) => '语气(' + t + ')',
 }));
 
-afterEach(() => { vi.clearAllMocks(); vi.mocked(isServerMode).mockReturnValue(false); });
+afterEach(() => { vi.clearAllMocks(); vi.mocked(isServerMode).mockReturnValue(false); localStorage.clear(); });
 
 const rec = {
   id: 'r1', name: '张三', gender: 'male', birthYear: 1984, birthMonth: 2,
@@ -195,7 +196,7 @@ describe('证据组装(查本地库)', () => {
   it('问流年：命中该年批断，periodFacts 带引擎现算时段行', () => {
     const plan = analyzeQuestion('2026年事业如何', [rec]);
     const ev = buildEvidence(rec, plan);
-    const annual = ev.analyses.find((a) => a.heading.includes('2026年·流年批断'));
+    const annual = ev.analyses.find((a) => a.heading.includes('2026年流年批断'));
     expect(annual?.text).toContain('有升迁');
     expect(annual?.text).not.toContain('心火旺'); // 未问健康则不带该节
     const pf = buildPeriodFacts(rec, plan) as Record<string, any>;
@@ -288,7 +289,7 @@ describe('askChat 通道分流', () => {
   it('服务器断线(status 0) → 落本机直连并回传命主定位', async () => {
     vi.mocked(isServerMode).mockReturnValue(true);
     vi.mocked(listBaziRecords).mockResolvedValue([rec]);
-    vi.mocked(serverFetch).mockRejectedValue(new ServerError(0, '无法连接服务器（网络不可达）'));
+    vi.mocked(serverFetch).mockRejectedValue(new ServerError(0, '无法连接服务器，网络不可达'));
     vi.mocked(chatDirect).mockResolvedValue({ status: 'completed', answer: '本机答案' } as never);
     const reply = await askChat({ question: '2026年事业如何？' });
     expect(reply.status).toBe('completed');
@@ -304,6 +305,24 @@ describe('askChat 通道分流', () => {
     expect(r.status).toBe('need_record');
     expect(r.evidence?.options).toHaveLength(2);
     expect(chatDirect).not.toHaveBeenCalled();
+  });
+  it('服务器与本机都失败时，两段原因各自读成中文后拼接，整句过闸门不塌成空', async () => {
+    // 这是「原因丢失」那条链路的端到端钉子：展示层(ChartChat)只做 sanitizeAnalysisText(error) || '回答失败'。
+    // 只要拼串里还留一个英文词或半角括号，整句就被判空，用户看到的就只剩「回答失败，请稍后重试」。
+    vi.mocked(isServerMode).mockReturnValue(true);
+    localStorage.setItem('mingli.provider', 'qwen');
+    // anyChannelConfigured() 读的就是这条本机凭据；不给它，服务器报错会被判成「谁都没配」而走 not_configured。
+    localStorage.setItem('mingli.cred.qwen', 'test-secret');
+    vi.mocked(listBaziRecords).mockResolvedValue([rec]);
+    vi.mocked(serverFetch).mockRejectedValue(new ServerError(503, '服务返回五零三'));
+    vi.mocked(chatDirect).mockResolvedValue({ status: 'failed', error: 'upstream connect error! (bad)' } as never);
+    const reply = await askChat({ question: '2026年事业如何？' });
+    expect(reply.status).toBe('failed');
+    const text = String(reply.error ?? '');
+    expect(text).toContain('服务器：');
+    expect(text).toContain('本机通道：');
+    expect(text, '报错串里仍有拉丁字母：' + text).not.toMatch(/[A-Za-z]/);
+    expect(sanitizeAnalysisText(text), '整句被闸门判空，界面会退化成「回答失败」：' + text).toBeTruthy();
   });
   it('问题为空/超长在入口即拒绝', async () => {
     expect((await askChat({ question: '  ' })).status).toBe('failed');

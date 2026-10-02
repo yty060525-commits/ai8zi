@@ -3,6 +3,7 @@ import { askChat, type ChatMessage, type ChatReply } from '../../data/chatEngine
 import { listBaziRecords } from '../../data/clientRepository';
 import { cancelAiSession } from '../../data/deepseekAdapter';
 import { isServerMode } from '../../data/serverClient';
+import { sanitizeAnalysisText } from '../chart/elements';
 import { recordTone } from '../person/PersonDetail';
 
 /** 聊天语气与「AI 分析」滑杆同一把尺：按当前这条盘取本机偏好(选过→上次跑→全局默认)。 */
@@ -35,13 +36,16 @@ function publish(patch: Partial<ChatState>) {
 /* 中止句柄同样常驻：请求发出后切页回来，「停止」也该还能按。 */
 let sharedAbort: AbortController | null = null;
 
-/** 标注这条回答查的是谁、命中的是哪段时间(多命主时尤其需要)。 */
+/** 标注这条回答查的是谁、命中的是哪段时间(多命主时尤其需要)。
+ *  年份逐位读成中文：界面正文里不许留阿拉伯数字与间隔号这类算法痕迹。 */
+const CN_DIGITS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+const cnYear = (n: number): string => String(n).split('').map((d) => CN_DIGITS[+d] ?? d).join('');
 function aboutOf(reply: ChatReply): string {
   const evidence = reply.evidence;
   if (!evidence?.personName) return '';
   const year = evidence.plan?.year;
   const month = evidence.plan?.month;
-  return '依据：' + evidence.personName + (year ? ' · ' + year + '年' + (month ? month + '月' : '') : ' · 本命');
+  return '依据：' + evidence.personName + (year ? '，' + cnYear(year) + '年' + (month ? cnYear(month) + '月' : '') : '，本命');
 }
 
 /** 清空对话：中断在途请求并回到空会话。 */
@@ -121,15 +125,15 @@ export function ChartChat() {
       return;
     }
     const keyMissing = reply.status === 'not_configured';
-    // 通道原始错误串(「DeepSeek：未配置凭据；…」)不外露，一律换成一句人话；
-    // 连着服务器时密钥该填在服务器那边，界面却只写「去设置」会把人领到本机凭据框。
+    // 通道原始错误串不外露，一律换成一句人话；
+    // 连着服务器时凭据该填在服务器那边，界面却只写「去设置」会把人领到本机凭据框。
     const serverSide = keyMissing && isServerMode();
     publish({
       busy: false,
       needKey: keyMissing,
       error: keyMissing
-        ? (serverSide ? '服务器那边还没配 AI 密钥(需要在服务器上配置，本客户端的设置页管不到它)；想马上能问：点页面右上角「设置」给任一通道填凭据，就走本机通道回答。' : '尚未配置 AI 密钥：配置后即可向我提问(服务器通道或本机通道均可)。')
-        : (reply.error || '回答失败，请稍后重试'),
+        ? (serverSide ? '服务器那边还没配访问凭据，需要在服务器上配置，本客户端的设置页管不到它。想马上能问：点页面右上角设置给任一通道填凭据，就走本机通道回答。' : '尚未配置访问凭据：配置后即可向我提问，服务器通道或本机通道均可。')
+        : sanitizeAnalysisText(reply.error || '') || '回答失败，请稍后重试',
     });
   }
 
@@ -148,17 +152,17 @@ export function ChartChat() {
     ? [`${people[0].name}的喜用五行是什么？`, ...(people.length > 1 ? [`${people[1].name}今年事业运如何？`] : ['明年运势整体如何？'])]
     : [];
 
-  return <section className="chat-panel" aria-label="问问 AI">
-    <h2>问问 AI</h2>
-    <p className="chat-hint">基于已入库的命盘与已算批断作答，例如：「张三的喜用五行是什么？」「2027年事业运如何？」。{selected ? <span>当前命主：<button type="button" className="link-button chat-current-person" aria-expanded={pickOpen} aria-label="切换当前命主" onClick={() => setPickOpen((open) => !open)}>{selected.name}</button>（点姓名可切换）</span> : null}</p>
-    {messages.length === 0 ? <p className="chat-empty">支持追问：先问本命，再问某年某月，AI 会引用数据库里已算好的流年/流月批断。</p> : null}
+  return <section className="chat-panel" aria-label="问问批断">
+    <h2>问问批断</h2>
+    <p className="chat-hint">基于已入库的命盘与已算批断作答，例如：张三的喜用五行是什么？明年事业运如何？。{selected ? <span>当前命主：<button type="button" className="link-button chat-current-person" aria-expanded={pickOpen} aria-label="切换当前命主" onClick={() => setPickOpen((open) => !open)}>{selected.name}</button>，点姓名可切换</span> : null}</p>
+    {messages.length === 0 ? <p className="chat-empty">支持追问：先问本命，再问某年某月，会引用数据库里已算好的流年、流月批断。</p> : null}
     {suggestions.length ? <div className="chat-people" aria-label="示例提问">{suggestions.map((suggestion) => <button type="button" key={suggestion} className="choice-button" disabled={busy} onClick={() => void ask(suggestion)}>{suggestion}</button>)}</div> : null}
     {messages.length > 0 ? <div className="chat-log" role="log" ref={logRef}>
       {messages.map((item, index) => <div key={index} className={item.role === 'user' ? 'chat-msg chat-user' : 'chat-msg chat-assistant'}>
-        <span className="chat-role">{item.role === 'user' ? '我' : 'AI'}</span>
+        <span className="chat-role">{item.role === 'user' ? '我' : '批断'}</span>
         <div className="chat-body">{item.content}{item.about ? <span className="chat-about">{item.about}</span> : null}</div>
       </div>)}
-      {busy ? <div className="chat-msg chat-assistant"><span className="chat-role">AI</span><div className="chat-body chat-thinking">正在查库思考…</div></div> : null}
+      {busy ? <div className="chat-msg chat-assistant"><span className="chat-role">批断</span><div className="chat-body chat-thinking">正在查库思考，请稍候</div></div> : null}
     </div> : null}
     {messages.length > 0 ? <p className="chat-tools"><button type="button" className="text-button chat-clear" onClick={clearChatThread}>清空对话</button></p> : null}
     {pending ? <div className="chat-people" aria-label="选择命主">{pending.options.map((option) => <button type="button" key={option.id} className="choice-button" onClick={() => { publish({ selected: option }); void ask(pending.question, option.id); }}>{option.name}</button>)}</div> : null}
@@ -166,9 +170,9 @@ export function ChartChat() {
       {people.map((person) => <button type="button" key={person.id} className={'choice-button' + (person.id === selected?.id ? ' selected' : '')} title="指定该命主后提问" onClick={() => { publish({ selected: person }); setPickOpen(false); }}>{person.name}</button>)}
       {selected ? <button type="button" className="text-button chat-clear-person" onClick={() => { publish({ selected: null }); setPickOpen(false); }}>取消指定</button> : null}
     </div> : null}
-    {error ? <p className="form-error" role="alert">{error}{needKey ? <button type="button" className="text-button chat-settings-link" onClick={openSettings}>去设置 ›</button> : null}</p> : null}
+    {error ? <p className="form-error" role="alert">{error}{needKey ? <button type="button" className="text-button chat-settings-link" onClick={openSettings}>去设置</button> : null}</p> : null}
     <div className="chat-input-row">
-      <input value={input} maxLength={500} disabled={busy} placeholder="输入命理问题(500 字以内)" aria-label="命理问题"
+      <input value={input} maxLength={500} disabled={busy} placeholder="输入命理问题，五百字以内" aria-label="命理问题"
         onChange={(event) => { if (shared.error) publish({ error: '', needKey: false }); setInput(event.target.value); }}
         onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void ask(input); } }} />
       {busy ? <button className="danger-button" type="button" onClick={stop}>停止</button> : <button className="primary-button" type="button" onClick={() => void ask(input)}>发送</button>}

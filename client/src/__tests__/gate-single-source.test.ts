@@ -31,6 +31,9 @@ describe('正文中文闸门单一来源(服务器与浏览器同口径)', () =>
       '依据：2027年·流年批断的【事业】小节。',
       'Sorry, I cannot answer this in English.',
       '甲子㊣乙丑',
+      // @ 这类「不在任何清洗表里」的符号：既不许留在正文，也不许把整篇判空。
+      '联系师傅@微信：xxx_888，见【总评/行为建议】小节。',
+      '命局#吉%宜忌&参考*备注+说明=结论',
       '',
     ];
     for (const text of cases) {
@@ -40,4 +43,25 @@ describe('正文中文闸门单一来源(服务器与浏览器同口径)', () =>
       if (viaElements) expect(viaElements.replace(/[【】]/g, '')).toMatch(/^[一-鿿 \n、。，：；？！]+$/);
     }
   });
+
+  /* 删表与判据必须同源：以前 stripToChinese 末尾手写一份符号表，白名单之外漏了 @ ㊣ # % 等形，
+     漏掉的字符既不删也过不了 isChineseOnly ⇒ enforceChinese 判空(宁缺毋滥变成全缺)，
+     上层按「该通道没给出可用中文」换通道重答，脏符号还会从调用方兜底拼回正文。 */
+  it('特殊符号一律清除，且不会因残留把整篇判空', () => {
+    const nasty = '甲@乙#丙%丁&戊*己+庚=辛<壬>癸【】《》「」〔〕㊣█■□◆●◎＄￥＿｜~^`\'"“”‘’';
+    const out = gate.sanitizeAnalysisText(nasty);
+    expect(out, '含生僻符号的正文不该整篇作废').not.toBe('');
+    expect(out).toBe('甲乙丙丁戊己庚辛壬癸【】');
+    expect(nonChineseSymbols(out)).toEqual([]);
+    // 逐类抽查：每类符号单独出现时都被清掉，且句子骨架还在
+    for (const sym of ['@', '#', '%', '&', '*', '+', '=', '~', '^', '`', '㊣', '█', '￥', '＿', '｜']) {
+      const one = gate.sanitizeAnalysisText(`日主庚金${sym}身弱`);
+      expect(one, sym).toBe('日主庚金身弱');
+    }
+  });
 });
+
+/** 白名单之外的字符(【】单独放行)：用于终态断言，不再手写第二份符号清单。 */
+function nonChineseSymbols(text: string): string[] {
+  return [...text.replace(/[【】]/g, '')].filter((c) => !/^[一-鿿 \n、。，：；？！]$/.test(c));
+}

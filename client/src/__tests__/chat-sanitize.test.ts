@@ -44,10 +44,14 @@ describe('聊天正文中文闸门', () => {
     expect(sanitizeChatText('Sorry, I cannot answer this question based on the provided data.')).toBe('');
   });
 
-  it('清洗后仍混着不可读符号 → 返回空而不是放行', () => {
-    // 闸门比清洗器更严：清洗表里没有的字符(如 ㊣)不该被放过，也不该在日志里报成「无违规」。
+  it('清洗器会把白名单外的符号删掉；判空只发生在真删不掉的残留上', () => {
+    // nonChineseKinds 看的是**原文**：这条钉住「日志能报出生僻符号」，不是「闸门会拦下它」。
     expect(nonChineseKinds('甲子㊣乙丑')).toEqual(['其他符号']);
-    expect(sanitizeChatText('甲子㊣乙丑')).toBe('');
+    // 删表用「白名单取反」实现，所以 ㊣ 这类不在任何旧符号表里的字符会被直接删掉，
+    // 正文保住而不是整篇作废(见 gate-single-source.test.ts 的同一口径)。
+    expect(sanitizeChatText('甲子㊣乙丑')).toBe('甲子乙丑');
+    // 真要判空的是删不掉的形态：整段英文无中文。
+    expect(sanitizeChatText('Sorry, I cannot answer this question.')).toBe('');
   });
 
   it('空白与 null 输入不抛错', () => {

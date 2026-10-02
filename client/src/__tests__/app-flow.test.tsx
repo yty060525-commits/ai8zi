@@ -25,9 +25,9 @@ describe('simplified chart application flow', () => {
 
   it('opens the settings page when a child broadcasts mingli:open-settings', () => {
     render(<App />);
-    expect(screen.queryByText('AI 通道（三条可同时配置）')).toBeNull();
+    expect(screen.queryByText('批断通道，三条可同时配置')).toBeNull();
     act(() => { window.dispatchEvent(new Event('mingli:open-settings')); });
-    expect(screen.getByText('AI 通道（三条可同时配置）')).toBeTruthy();
+    expect(screen.getByText('批断通道，三条可同时配置')).toBeTruthy();
     // 设置打开后切到别的分页要能回到正常导航
     fireEvent.click(screen.getByRole('button', { name: '记录' }));
     expect(screen.getByRole('heading', { name: '记录' })).toBeTruthy();
@@ -48,13 +48,13 @@ describe('simplified chart application flow', () => {
     expect(onRecordCreated).toHaveBeenCalledWith(expect.objectContaining({ name: '测试用户', yearPillar: '甲子' }));
   });
 
-  it('opens a person detail view with only record and AI sections', async () => {
+  it('opens a person detail view with only record and analysis sections', async () => {
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: '记录' }));
     fireEvent.click(await screen.findByRole('button', { name: '查看张伟' }));
     expect(await screen.findByRole('heading', { name: '人物详情' })).toBeTruthy();
     expect(await screen.findByRole('region', { name: '基础信息' })).toBeTruthy();
-    expect(await screen.findByRole('region', { name: 'AI 分析' })).toBeTruthy();
+    expect(await screen.findByRole('region', { name: '批断分析' })).toBeTruthy();
     expect(await screen.findByText('状态：已完成')).toBeTruthy();
     expect(screen.getByText('适合稳步推进长期计划。')).toBeTruthy();
     expect(screen.getByText('出生年')).toBeTruthy();
@@ -89,7 +89,7 @@ describe('simplified chart application flow', () => {
     fireEvent.click(screen.getByRole('button', { name: '复制基础信息' }));
     const copied = writeText.mock.lastCall?.[0] as string;
     expect(copied).toContain('姓名：张伟');
-    expect(copied).toContain('出生年：1990');
+    expect(copied).toContain('出生年：一九九零');
     expect(copied).toContain('年柱：甲子');
     expect(copied).not.toContain('行动建议');
     expect(copied).not.toContain('甲戌大运');
@@ -136,13 +136,13 @@ describe('simplified chart application flow', () => {
     expect((await listBaziRecords())[0]?.aiStatus).toBe('not_started');
   });
 
-  it('requests AI only from detail and deletes one record', async () => {
+  it('requests analysis only from detail and deletes one record', async () => {
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: '记录' }));
     fireEvent.click(await screen.findByRole('button', { name: '查看张伟' }));
-    expect(await screen.findByRole('button', { name: 'AI 分析' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: '批断分析' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '删除数据' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'AI 分析' }));
+    fireEvent.click(screen.getByRole('button', { name: '批断分析' }));
     await waitFor(() => expect(analyzeBazi).toHaveBeenCalledWith(expect.objectContaining({ id: 'zhang-wei' }), expect.objectContaining({ taskId: 'task-01' }), expect.anything()));
     fireEvent.click(screen.getByRole('button', { name: '删除数据' }));
     // 删除必须二次确认：先只出确认条，记录还在
@@ -168,7 +168,7 @@ describe('simplified chart application flow', () => {
     expect(document.querySelector('.modal')).toBeNull();
   });
 
-  it('shows completed AI analysis after the detail action finishes', async () => {
+  it('shows completed analysis after the detail action finishes', async () => {
     vi.mocked(analyzeBazi).mockImplementation(async (_record, task) => ({
       status: 'completed',
       // 全盘总结任务返回它自己的三段结构，其它任务返回通用正文
@@ -179,7 +179,7 @@ describe('simplified chart application flow', () => {
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: '记录' }));
     fireEvent.click(await screen.findByRole('button', { name: '查看张伟' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'AI 分析' }));
+    fireEvent.click(await screen.findByRole('button', { name: '批断分析' }));
 
     expect((await screen.findAllByText('完成的分析结果')).length).toBeGreaterThan(0);
     expect(screen.getByText('状态：已完成')).toBeTruthy();
@@ -191,15 +191,15 @@ describe('simplified chart application flow', () => {
     expect(screen.getByText('一、二零二九年乙巳：机会窗口，宜主动争取。')).toBeTruthy();
   });
 
-  it('重新计算非 AI：只换排盘数据，不动已生成的 AI 结果，也不调用 AI', async () => {
+  it('重新排盘：只换排盘数据，不动已生成的批断结果，也不调用模型', async () => {
     vi.mocked(analyzeBazi).mockClear();
     initializeMockSession([mockPeople[0]], [{ ...mockPersonDetails[0], record: { ...mockPersonDetails[0].record, birthYear: 1984, birthMonth: 2, aiStatus: 'completed', aiTasks: { old: { task: { taskId: 'old', type: 'baseline' }, status: 'completed' } } } }]);
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: '记录' }));
     fireEvent.click(await screen.findByRole('button', { name: '查看张伟' }));
-    fireEvent.click(await screen.findByRole('button', { name: '重新计算非 AI' }));
+    fireEvent.click(await screen.findByRole('button', { name: '重新排盘' }));
 
-    expect(await screen.findByText('非 AI 已重新计算')).toBeTruthy();
+    expect(await screen.findByText('排盘数据已重新计算')).toBeTruthy();
     const saved = await listBaziRecords();
     const record = saved.find((item) => item.id === 'zhang-wei');
     expect(record?.nonAiResult).toBeDefined();
@@ -210,14 +210,14 @@ describe('simplified chart application flow', () => {
     expect(analyzeBazi).not.toHaveBeenCalled();
   });
 
-  it('shows the saved safe reason when AI analysis fails', async () => {
+  it('shows the saved safe reason when analysis fails', async () => {
     vi.mocked(analyzeBazi).mockResolvedValue({ status: 'failed', error: 'HTTP 503' });
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: '记录' }));
     fireEvent.click(await screen.findByRole('button', { name: '查看张伟' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'AI 分析' }));
+    fireEvent.click(await screen.findByRole('button', { name: '批断分析' }));
 
-    expect(await screen.findByText('原因：HTTP 503')).toBeTruthy();
+    expect(await screen.findByText('原因：服务返回五零三')).toBeTruthy();
     expect(screen.queryByText(/API|DeepSeek|模型|Bearer|sk-/i)).toBeNull();
   });
 

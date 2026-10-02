@@ -17,8 +17,8 @@ describe('ChartPage simplified form', () => {
     expect(screen.queryByText('分类')).toBeNull();
     // 历法选择现在是刻意提供的(阳历/农历)，默认阳历；不再有「公历/农历」二选一的旧式录入按钮组以外形态
     expect(screen.getByRole('group', { name: '历法' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: '阳历(公历)' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: '农历(夏历)' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '阳历' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '农历' })).toBeTruthy();
     expect(screen.queryByText(/额度|费用|基础排盘结果|排盘状态/)).toBeNull();
   });
 
@@ -51,8 +51,8 @@ describe('ChartPage simplified form', () => {
     fireEvent.change(screen.getByLabelText('出生年'), { target: { value: '2000' } });
     fireEvent.change(screen.getByLabelText('出生月'), { target: { value: '2' } });
     fireEvent.change(screen.getByLabelText('出生日'), { target: { value: '5' } });
-    fireEvent.change(screen.getByLabelText('时(0–23)'), { target: { value: '8' } });
-    fireEvent.change(screen.getByLabelText('分(0–59)'), { target: { value: '0' } });
+    fireEvent.change(screen.getByLabelText('时，零到二十三'), { target: { value: '8' } });
+    fireEvent.change(screen.getByLabelText('分，零到五十九'), { target: { value: '0' } });
     fireEvent.click(screen.getByRole('button', { name: '排盘并保存' }));
     await act(async () => { for (let i = 0; i < 60; i += 1) await Promise.resolve(); });
     // 2000-02-05 立春后 08:00 辰时 → 庚辰 戊寅 癸巳 丙辰
@@ -82,7 +82,7 @@ describe('ChartPage simplified form', () => {
     expect(screen.getByLabelText('出生日')).toBeTruthy(); // 默认 auto 模式有日栏
     fireEvent.click(screen.getByRole('button', { name: '手录四柱' }));
     expect(screen.queryByLabelText('出生日')).toBeNull();
-    expect(screen.queryByLabelText('时(0–23)')).toBeNull();
+    expect(screen.queryByLabelText('时，零到二十三')).toBeNull();
     expect(screen.getByLabelText('出生月')).toBeTruthy();
   });
 
@@ -91,17 +91,17 @@ describe('ChartPage simplified form', () => {
     vi.setSystemTime(new Date('2025-03-08T12:34:56.000Z'));
     const onRecordCreated = vi.fn();
     render(<ChartPage onRecordCreated={onRecordCreated} />);
-    fireEvent.click(screen.getByRole('button', { name: '农历(夏历)' }));
+    fireEvent.click(screen.getByRole('button', { name: '农历' }));
     // 农历态下月/日标签改成农历口径，并出现「闰月」勾选
-    expect(screen.getByLabelText('月(农历)')).toBeTruthy();
-    expect(screen.getByLabelText('日(初几)')).toBeTruthy();
+    expect(screen.getByLabelText('月，农历')).toBeTruthy();
+    expect(screen.getByLabelText('日，初几')).toBeTruthy();
     expect(screen.getByLabelText('闰月')).toBeTruthy();
     fireEvent.change(screen.getByLabelText('姓名'), { target: { value: '农历命主' } });
     fireEvent.change(screen.getByLabelText('出生年'), { target: { value: '1990' } });
-    fireEvent.change(screen.getByLabelText('月(农历)'), { target: { value: '5' } });
-    fireEvent.change(screen.getByLabelText('日(初几)'), { target: { value: '15' } });
-    fireEvent.change(screen.getByLabelText('时(0–23)'), { target: { value: '10' } });
-    fireEvent.change(screen.getByLabelText('分(0–59)'), { target: { value: '30' } });
+    fireEvent.change(screen.getByLabelText('月，农历'), { target: { value: '5' } });
+    fireEvent.change(screen.getByLabelText('日，初几'), { target: { value: '15' } });
+    fireEvent.change(screen.getByLabelText('时，零到二十三'), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText('分，零到五十九'), { target: { value: '30' } });
     fireEvent.click(screen.getByRole('button', { name: '排盘并保存' }));
     await act(async () => { for (let i = 0; i < 60; i += 1) await Promise.resolve(); });
     // 农历 1990 五月十五 = 公历 1990-06-07：库中存公历年月，若误存农历 5 月则引擎在该月找不到此四柱会报错
@@ -114,11 +114,11 @@ describe('ChartPage simplified form', () => {
     vi.useFakeTimers();
     const onRecordCreated = vi.fn();
     render(<ChartPage onRecordCreated={onRecordCreated} />);
-    fireEvent.click(screen.getByRole('button', { name: '农历(夏历)' }));
+    fireEvent.click(screen.getByRole('button', { name: '农历' }));
     fireEvent.change(screen.getByLabelText('姓名'), { target: { value: '闰命主' } });
     fireEvent.change(screen.getByLabelText('出生年'), { target: { value: '2023' } });
-    fireEvent.change(screen.getByLabelText('月(农历)'), { target: { value: '2' } });
-    fireEvent.change(screen.getByLabelText('日(初几)'), { target: { value: '1' } });
+    fireEvent.change(screen.getByLabelText('月，农历'), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText('日，初几'), { target: { value: '1' } });
     fireEvent.click(screen.getByLabelText('闰月')); // 2023 有闰二月 → 公历 2023-03-22
     fireEvent.click(screen.getByRole('button', { name: '排盘并保存' }));
     await act(async () => { for (let i = 0; i < 60; i += 1) await Promise.resolve(); });
@@ -129,11 +129,11 @@ describe('ChartPage simplified form', () => {
     cleanup();
     const onSecond = vi.fn();
     render(<ChartPage onRecordCreated={onSecond} />);
-    fireEvent.click(screen.getByRole('button', { name: '农历(夏历)' }));
+    fireEvent.click(screen.getByRole('button', { name: '农历' }));
     fireEvent.change(screen.getByLabelText('姓名'), { target: { value: '错命主' } });
     fireEvent.change(screen.getByLabelText('出生年'), { target: { value: '2023' } });
-    fireEvent.change(screen.getByLabelText('月(农历)'), { target: { value: '5' } });
-    fireEvent.change(screen.getByLabelText('日(初几)'), { target: { value: '1' } });
+    fireEvent.change(screen.getByLabelText('月，农历'), { target: { value: '5' } });
+    fireEvent.change(screen.getByLabelText('日，初几'), { target: { value: '1' } });
     fireEvent.click(screen.getByLabelText('闰月'));
     fireEvent.click(screen.getByRole('button', { name: '排盘并保存' }));
     await act(async () => { for (let i = 0; i < 30; i += 1) await Promise.resolve(); });
@@ -152,9 +152,9 @@ describe('ChartPage simplified form', () => {
     fireEvent.change(screen.getByLabelText('出生年'), { target: { value: '2025' } });
     fireEvent.change(screen.getByLabelText('出生月'), { target: { value: '6' } });
     fireEvent.change(screen.getByLabelText('出生日'), { target: { value: '21' } });
-    fireEvent.change(screen.getByLabelText('时(0–23)'), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText('时，零到二十三'), { target: { value: '10' } });
     // 选了省但未选市 → 提示，不落库
-    fireEvent.change(screen.getByLabelText('真太阳时·省'), { target: { value: '新疆维吾尔自治区' } });
+    fireEvent.change(screen.getByLabelText('真太阳时，按省选'), { target: { value: '新疆维吾尔自治区' } });
     expect(screen.getByLabelText('市')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: '排盘并保存' }));
     await act(async () => { for (let i = 0; i < 30; i += 1) await Promise.resolve(); });
@@ -162,13 +162,13 @@ describe('ChartPage simplified form', () => {
     expect(onRecordCreated).not.toHaveBeenCalled();
     // 乌鲁木齐市下有区：只选市不选区 → 提示，不落库
     fireEvent.change(screen.getByLabelText('市'), { target: { value: '乌鲁木齐市' } });
-    expect(screen.getByLabelText('区/县')).toBeTruthy();
+    expect(screen.getByLabelText('区县')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: '排盘并保存' }));
     await act(async () => { for (let i = 0; i < 30; i += 1) await Promise.resolve(); });
-    expect(screen.getByRole('alert').textContent).toContain('请选择出生所在区/县');
+    expect(screen.getByRole('alert').textContent).toContain('请选择出生所在区县');
     expect(onRecordCreated).not.toHaveBeenCalled();
     // 选到区 天山区(87.6°E)：10:00 修正后落辰时(北京则巳时)，且不再显示经度数值提示
-    fireEvent.change(screen.getByLabelText('区/县'), { target: { value: '天山区' } });
+    fireEvent.change(screen.getByLabelText('区县'), { target: { value: '天山区' } });
     fireEvent.click(screen.getByRole('button', { name: '排盘并保存' }));
     await act(async () => { for (let i = 0; i < 60; i += 1) await Promise.resolve(); });
     expect(screen.queryByText(/°E/)).toBeNull();
@@ -187,12 +187,12 @@ describe('ChartPage simplified form', () => {
     fireEvent.change(screen.getByLabelText('出生年'), { target: { value: '2025' } });
     fireEvent.change(screen.getByLabelText('出生月'), { target: { value: '6' } });
     fireEvent.change(screen.getByLabelText('出生日'), { target: { value: '21' } });
-    fireEvent.change(screen.getByLabelText('时(0–23)'), { target: { value: '10' } });
-    fireEvent.change(screen.getByLabelText('真太阳时·省'), { target: { value: '北京市' } });
+    fireEvent.change(screen.getByLabelText('时，零到二十三'), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText('真太阳时，按省选'), { target: { value: '北京市' } });
     // 直辖市第二级标签是「区」，选到区即可，无第三级
     expect(screen.getByLabelText('区')).toBeTruthy();
     fireEvent.change(screen.getByLabelText('区'), { target: { value: '朝阳区' } });
-    expect(screen.queryByLabelText('区/县')).toBeNull();
+    expect(screen.queryByLabelText('区县')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: '排盘并保存' }));
     await act(async () => { for (let i = 0; i < 60; i += 1) await Promise.resolve(); });
     // 朝阳 116.5°E，10:00 修正约 09:46 仍巳时(与不修正同为巳)

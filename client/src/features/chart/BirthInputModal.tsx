@@ -41,15 +41,15 @@ export function BirthInputModal({ open, onClose, onSubmit, error: engineError }:
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const incomplete = (Object.keys(PILLAR_TITLES) as PillarKey[]).find((k) => pillars[k].length !== 2);
-    if (incomplete) { setError(PILLAR_TITLES[incomplete] + '要填满两个字(一天干、一地支)，四柱都要填'); return; }
+    if (incomplete) { setError(PILLAR_TITLES[incomplete] + '要填满两个字，一天干、一地支，四柱都要填'); return; }
     const badYy = (Object.keys(PILLAR_TITLES) as PillarKey[]).find((k) => (STEMS.indexOf(pillars[k][0]) & 1) !== (BRANCHES.indexOf(pillars[k][1]) & 1));
-    if (badYy) { setError(PILLAR_TITLES[badYy] + '「' + pillars[badYy] + '」不成柱：天干与地支要同阴阳(如甲子、乙丑)，干支里不存在这一柱'); return; }
+    if (badYy) { setError(PILLAR_TITLES[badYy] + pillars[badYy] + '不成柱：天干与地支要同阴阳，如甲子、乙丑，干支里不存在这一柱'); return; }
     setError(''); onSubmit(pillars);
   }
   const field = (label: PillarKey) => <label>{PILLAR_TITLES[label]}<input required={!combined} value={pillars[label]} maxLength={2} inputMode="text" autoComplete="off" placeholder={label === 'yearPillar' ? '如 甲子' : ''} onChange={(event) => onPillar(label, event.target.value)} /></label>;
   return <Modal title="四柱八字" onClose={onClose}><form className="input-form" onSubmit={submit}>
     {(shown) && <p className="form-error" role="alert">{shown}</p>}
-    <label>八字整串（八个字一起输，自动分成四柱；也可只用这一栏）<input value={combined} maxLength={8} autoComplete="off" placeholder="例如 甲子丙寅戊辰庚申" onChange={(event) => { setError(''); onCombined(event.target.value); }} /></label>
+    <label>八字整串，八个字一起输、自动分成四柱，也可只用这一栏<input value={combined} maxLength={8} autoComplete="off" placeholder="例如 甲子丙寅戊辰庚申" onChange={(event) => { setError(''); onCombined(event.target.value); }} /></label>
     <div className="field-grid">{field('yearPillar')}{field('monthPillar')}{field('dayPillar')}{field('hourPillar')}</div>
     <button className="primary-button" type="submit">提交</button>
   </form></Modal>;

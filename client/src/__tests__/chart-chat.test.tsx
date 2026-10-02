@@ -19,7 +19,7 @@ describe('排盘页「问问 AI」', () => {
     await flush();
     fireEvent.change(screen.getByLabelText('命理问题'), { target: { value: '我的五行喜用是什么？' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
-    expect(screen.getByText('正在查库思考…')).toBeTruthy();
+    expect(screen.getByText('正在查库思考，请稍候')).toBeTruthy();
     await screen.findByText('以金为日主，喜火土。');
     expect(askChat).toHaveBeenCalledWith(expect.objectContaining({ question: '我的五行喜用是什么？' }));
   });
@@ -48,12 +48,12 @@ describe('排盘页「问问 AI」', () => {
   });
 
   it('失败时提示错误文案', async () => {
-    vi.mocked(askChat).mockResolvedValue({ status: 'failed', error: '服务器未配置 AI 密钥' } as never);
+    vi.mocked(askChat).mockResolvedValue({ status: 'failed', error: '回答失败，请稍后重试' } as never);
     render(<ChartChat />);
     await flush();
     fireEvent.change(screen.getByLabelText('命理问题'), { target: { value: '财运？' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
-    expect(await screen.findByText('服务器未配置 AI 密钥')).toBeTruthy();
+    expect(await screen.findByText('回答失败，请稍后重试')).toBeTruthy();
   });
 
   it('未配置密钥时给出友好引导(不泄漏通道原始错误串)', async () => {
@@ -62,7 +62,7 @@ describe('排盘页「问问 AI」', () => {
     await flush();
     fireEvent.change(screen.getByLabelText('命理问题'), { target: { value: '财运？' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
-    expect(await screen.findByText(/尚未配置 AI 密钥/)).toBeTruthy();
+    expect(await screen.findByText(/尚未配置访问凭据/)).toBeTruthy();
     expect(screen.queryByText(/未配置凭据；/)).toBeNull();
   });
 
@@ -74,7 +74,7 @@ describe('排盘页「问问 AI」', () => {
     await flush();
     fireEvent.change(screen.getByLabelText('命理问题'), { target: { value: '财运？' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
-    fireEvent.click(await screen.findByRole('button', { name: '去设置 ›' }));
+    fireEvent.click(await screen.findByRole('button', { name: '去设置' }));
     expect(listener).toHaveBeenCalledTimes(1);
     window.removeEventListener('mingli:open-settings', listener);
   });
@@ -100,7 +100,7 @@ describe('排盘页「问问 AI」', () => {
     await flush();
     fireEvent.change(screen.getByLabelText('命理问题'), { target: { value: '张三2027年事业？' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
-    expect(await screen.findByText('依据：张三 · 2027年')).toBeTruthy();
+    expect(await screen.findByText('依据：张三，二零二七年')).toBeTruthy();
   });
 
   it('切页导致组件卸载后，对话仍在(会话常驻)', async () => {
@@ -129,12 +129,12 @@ describe('排盘页「问问 AI」', () => {
     await flush();
     fireEvent.change(screen.getByLabelText('命理问题'), { target: { value: '财运？' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
-    await screen.findByRole('button', { name: '去设置 ›' });
+    await screen.findByRole('button', { name: '去设置' });
     first.unmount();
     render(<ChartChat />);
     await flush();
-    expect(screen.getByText(/尚未配置 AI 密钥/)).toBeTruthy();
-    expect(screen.getByRole('button', { name: '去设置 ›' })).toBeTruthy();
+    expect(screen.getByText(/尚未配置访问凭据/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: '去设置' })).toBeTruthy();
   });
 
   it('「清空对话」重新开始', async () => {

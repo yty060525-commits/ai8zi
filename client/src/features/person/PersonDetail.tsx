@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { deleteBaziRecord, getBaziRecord, refreshRecord, saveBaziRecord } from '../../data/clientRepository';
 import { ABORTED_MESSAGE, analysisHorizon, buildBaziTasks, expectedTaskIds, isRetryableFailure, orchestrateBaziAnalysis, DEFAULT_TONE } from '../../data/baziOrchestrator';
+import { readableChannelError } from '../../data/chatEngine';
 import { beginAiSession, cancelAiSession } from '../../data/deepseekAdapter';
 import { clearChartCache } from '../../data/storageInfo';
 import { sanitizeAnalysisText } from '../chart/elements';
@@ -15,17 +16,23 @@ const statusText: Record<BaziRecord['aiStatus'], string> = {
   not_started: '未开始', pending: '分析中', completed: '已完成', failed: '分析失败', not_configured: '未配置',
 };
 
-/* 范围标题的两种写法：屏幕上的 <summary> 用带年份与括号的这一套(可读、且④栏标题是既有判据)，
-   「复制/导出」拼进文档的那一行则一律走 sanitizeCopyLine —— 正式版口径是「输出只许中文」，
-   应用自己拼的表头也不能留阿拉伯年份、括号、间隔号，否则复制出去的文件里全是算法侧符号。 */
+/** 界面上的计数一律读成中文：「共二十六项」「未来第三年」里的阿拉伯数字与括号，
+ *  在正式版口径下和英文字段名一样属于算法痕迹。超过二十就退回逐位读。
+ *  词表与读法在 shared/chineseReadAloud —— 原先这里、RecordsPage、SettingsPage 各抄一份，
+ *  三份互不相干就会分叉(同一屏里「已配置 零 条」与「已配置零条」混着出现就是这么来的)。 */
+import { cnCount, cnYear } from '../../shared/chineseReadAloud';
+
+/** 范围标题的两种写法：屏幕上的 <summary> 用带年份的这一套(④栏的大运区间是既有判据，
+   不能凭空改口径)，「复制/导出」拼进文档的那一行则一律走 sanitizeCopyLine。
+   两边都不写括号、斜杠、间隔号 —— 正式版口径下这些半角符号与英文字段名一样属于算法痕迹。 */
 const scopeLabel = (result: BaziTaskResult): string => {
   const task = result.task;
   switch (task.type) {
-    case 'baseline': return '本命命局（身强身弱/格局/喜忌）';
-    case 'overview': return '全盘总结（值得关注的时间节点）';
-    case 'adjustment': return '后天调整与职业适配（按喜用五行）';
-    case 'annual': return task.year === undefined ? '流年' : `${task.year} 年流年`;
-    case 'monthly': return task.year === undefined ? '流月' : (task.month === undefined ? `${task.year} 年` : `${task.year} 年 ${task.month} 月`);
+    case 'baseline': return '本命命局、身强身弱、格局、喜忌';
+    case 'overview': return '全盘总结、值得关注的时间节点';
+    case 'adjustment': return '后天调整与职业适配、按喜用五行';
+    case 'annual': return task.year === undefined ? '流年' : `${cnYear(task.year)}年流年`;
+    case 'monthly': return task.year === undefined ? '流月' : (task.month === undefined ? `${cnYear(task.year)}年` : `${cnYear(task.year)}年${cnCount(task.month)}月`);
     case 'synthesis': return '最终总结';
     default: return task.type;
   }
@@ -69,34 +76,40 @@ export const decadeSegment = (task: { year?: number; decade?: { ganZhi: string; 
   return { start: Math.max(rawStart, horizon.from), end: Math.min(rawEnd, horizon.to) };
 };
 
-/** 大运标题：只保留干支+时段（如“庚子 大运段(2020-2029)”）。不显示年龄推算。 */
+/** 大运标题：干支 + 时段，如「庚子、大运段、二零二零至二零二九」。不显示年龄推算。
+ *  区间翻成中文读法(逐位)，复制路径再按同一份 sanitizeCopyLine 走一遍，结果一致。
+ *  分隔一律用顿号，不留半角空格 —— 闸门会把「汉字+空格+汉字」收成顿号，这里就按同一形态写。 */
 const decadeHeading = (result: BaziTaskResult, record: BaziRecord): string => {
   const seg = decadeSegment(result.task, record);
   const name = findDecade(record, result.task)?.ganZhi ?? '';
-  return name ? `${name} 大运段(${seg.start}-${seg.end})` : `大运段(${seg.start}-${seg.end})`;
+  const span = `${cnYear(seg.start)}至${cnYear(seg.end)}`;
+  return name ? `${name}、大运段、${span}` : `大运段、${span}`;
 };
 
 const fortuneMeta = (result: BaziTaskResult, record: BaziRecord): string => {
   const task = result.task;
   const nonAi = record.nonAiResult;
-  const age = task.year !== undefined && record.birthYear ? `年龄约 ${task.year - record.birthYear} 岁` : '';
+  const age = task.year !== undefined && record.birthYear ? `年龄约${cnCount(task.year - record.birthYear)}岁` : '';
   let ganZhi = '';
   if (task.type === 'annual' && nonAi) {
     ganZhi = task.annual?.ganZhi ?? nonAi.annualFortunes.find((item) => item.year === task.year)?.ganZhi ?? '';
   } else if (task.type === 'monthly') {
     ganZhi = task.monthly?.ganZhi ?? (nonAi ? nonAi.monthlyFortunes.find((item) => item.year === task.year && item.month === task.month)?.ganZhi ?? '' : '');
   }
-  return [ganZhi, age].filter(Boolean).join(' · ');
+  return [ganZhi, age].filter(Boolean).join('，');
 };
 const describeScope = (result: BaziTaskResult, record: BaziRecord): string => {
   const task = result.task;
   if (task.type === 'decade') return decadeHeading(result, record);
   const meta = fortuneMeta(result, record);
-  return scopeLabel(result) + (meta ? ' · ' + meta : '');
+  return scopeLabel(result) + (meta ? '，' + meta : '');
 };
 
+/* 分组标题就是分组名，别再复述「这一组里有哪些维度」：勾选维度时复制结果会按筛选走，
+   标题却把五个维度全列一遍(「本命：格局喜忌与健康、事业、财运、爱情」)，于是只勾健康也会
+   在文档里看到「爱情」二字，读起来像筛选没生效。小节名下面各条已经逐行写了，这里不重复。 */
 const scopeGroups: Array<{ key: BaziTaskResult['task']['type']; title: string }> = [
-  { key: 'baseline', title: '本命：格局喜忌与健康、事业、财运、爱情' },
+  { key: 'baseline', title: '本命' },
   { key: 'overview', title: '全盘总结与值得关注的时间节点' },
   { key: 'adjustment', title: '后天调整与职业适配' },
   { key: 'decade', title: '未来大运' },
@@ -130,7 +143,8 @@ export const toneLabel = (v: number): string => {
 
 const getBasicFields = (record: BaziRecord): [string, string][] => [
   ['姓名', record.name], ['性别', record.gender === 'male' ? '男' : '女'],
-  ['出生年', String(record.birthYear)], ['出生月', String(record.birthMonth)],
+  // 出生年/月读成中文：这条数组既铺在「基础信息」表上，也是「复制基础信息」的正文来源。
+  ['出生年', cnYear(record.birthYear)], ['出生月', cnCount(record.birthMonth)],
   ['年柱', record.yearPillar], ['月柱', record.monthPillar], ['日柱', record.dayPillar], ['时柱', record.hourPillar],
 ];
 export function generatePersonDetailText(record: BaziRecord) {
@@ -138,11 +152,13 @@ export function generatePersonDetailText(record: BaziRecord) {
 }
 function BasicInfo({ record }: { record: BaziRecord }) {
   return <section className="detail-section" aria-labelledby="basic-title" aria-label="基础信息">
-    <div className="section-heading"><div><p className="eyebrow">壹 · 基础信息</p><h2 id="basic-title">基础信息</h2></div><button className="text-button" type="button" onClick={() => void copy(generatePersonDetailText(record))}>复制基础信息</button></div>
+    <div className="section-heading"><div><p className="eyebrow">壹、基础信息</p><h2 id="basic-title">基础信息</h2></div><button className="text-button" type="button" onClick={() => void copy(generatePersonDetailText(record))}>复制基础信息</button></div>
     <dl className="info-grid">{getBasicFields(record).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
   </section>;
 }
-const listText = (value: string[] | string[][]) => value.map((item) => Array.isArray(item) ? item.join('、') : item).join(' · ') || '—';
+/** 列表读法：内层用「、」并列，外层用中文分号分隔。界面与导出都不许出现半角符号，
+ *  所以这里不用中点当分隔符；空值统一读成「暂无」，不留破折号占位。 */
+const listText = (value: string[] | string[][]) => value.map((item) => Array.isArray(item) ? item.join('、') : item).join('；') || '暂无';
 /** 今天(或指定时刻)落在哪一步大运：优先按精确交运周年区间 onsetDate~endDate 裁决，
  *  老记录无该字段才退回整数年 startYear≤今≤endYear。抽成一处，起运文案与大运表共用，
  *  避免两处各写一份判据而漂移。 */
@@ -153,43 +169,66 @@ export const findCurrentFortune = (result: NonAiChart, nowYear: number, todayYmd
 };
 
 /** 起运文案：几岁起运 + 当前正走哪一运。老记录没算过起运时如实说「未记录」，
- *  引导去点「重新计算非 AI」，而不是悄悄沿用旧的十年边界对齐结果。 */
+ *  引导去点「重新排盘」，而不是悄悄沿用旧的十年边界对齐结果。 */
 export const luckStartText = (result: NonAiChart, nowYear: number): string => {
   const start = result.luckStart;
-  if (!start?.date) return '未记录（点下方「重新计算非 AI」可补算）';
+  if (!start?.date) return '未记录，点下方重新排盘可补算';
   /* 「今年在哪步运」按真实交运日(onsetDate，首步交运日 + 10k 周年)裁决，而不是整数年区间。
      大运段的十年展示(startYear/endYear)仍与库 getDaYun 同源不动；但交运日几乎不在 1/1，
      用「startYear ≤ 今 ≤ endYear」判当前运会让整条段相对真太阳历前漂近一年(实测约 4% 的人
      报错一柱)。老记录无 onsetDate 时退回整数年区间，至少不丢这一句。 */
   const today = new Date(); const todayYmd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
   const current = findCurrentFortune(result, nowYear, todayYmd);
-  const age = `${start.years}岁${start.months ? start.months + '个月' : ''}`;
+  const age = `${cnCount(start.years)}岁${start.months ? cnCount(start.months) + '个月' : ''}`;
   /* 交运日优先用引擎自算的 luckOnset(与库逐日一致且口径可控)，老记录没这个字段才退回库值。 */
   const onset = result.luckOnset || start.date;
-  return `约 ${age}、${onset} 交运${current ? `；今年在${current.ganZhi}运（${current.startYear}-${current.endYear}）` : '；当前已出排定的大运区间'}`;
+  return `约${age}、${cnDate(onset)}交运${current ? `；今年在${current.ganZhi}运，${cnYear(current.startYear)}至${cnYear(current.endYear)}` : '；当前已出排定的大运区间'}`;
 };
-const mapText = (value: Record<string, number>) => Object.entries(value).map(([key, count]) => `${key} ${count}`).join(' · ') || '—';
+/** 界面上的日期读法：「1984-02-06」→「一九八四年二月六日」。年份逐位、月日按中文数读，
+ *  与闸门里数字的读法同规则；解析不出 ISO 形态就原样返回(存量数据里有只到月份的)。 */
+export const cnDate = (iso: string): string => {
+  const m = /^(\d{4})-(\d{1,2})(?:-(\d{1,2}))?/.exec(String(iso ?? '').trim());
+  if (!m) return String(iso ?? '');
+  return `${cnYear(+m[1])}年${cnCount(+m[2])}月${m[3] ? cnCount(+m[3]) + '日' : ''}`;
+};
+const mapText = (value: Record<string, number>) => Object.entries(value).map(([key, count]) => `${key}${cnCount(count)}`).join('、') || '暂无';
 /** 五行比例按百分比展示(原始值是 0~1 的小数，直接打出来是 0.375 这种看不懂的数)。
  *  分母是实际观测数(四干 + 四支本气 = 8)，为 0 时不硬凑百分比。
  *  空格点名的五行补一句「缺X」，这是读盘最关心的一句话，不该让用户自己去数。
+ *  百分比读成中文(三成七半)，界面与导出都不留 % 与阿拉伯数字。
  *  导出以便测试直接锁住文案(组件本身依赖太多上下文，不适合为这一行单独渲染)。 */
 export const formatElementRatio = (value: Record<string, number>) => {
-  if (!value || !Object.values(value).reduce((a, b) => a + b, 0)) return '—';
-  const shown = Object.entries(value).map(([key, ratio]) => `${key} ${(ratio * 100).toFixed(1).replace(/\.0$/, '')}%`);
+  if (!value || !Object.values(value).reduce((a, b) => a + b, 0)) return '暂无';
+  const shown = Object.entries(value).map(([key, ratio]) => `${key}${cnPercent(ratio)}`);
   const missing = Object.entries(value).filter(([, ratio]) => ratio === 0).map(([key]) => key);
-  return shown.join(' · ') + (missing.length ? `（缺${missing.join('、')}）` : '');
+  return shown.join('、') + (missing.length ? `，缺${missing.join('、')}` : '');
+};
+/** 小数比例 → 中文成数：一成 = 10%，一厘 = 1%。0.375 → 三成七厘五(四舍五入到厘)。 */
+const cnPercent = (ratio: number): string => {
+  const liTotal = Math.round(ratio * 100);
+  if (liTotal === 0) return '〇';
+  const cheng = Math.floor(liTotal / 10);
+  const li = liTotal % 10;
+  return (cheng > 0 ? cnCount(cheng) + '成' : '') + (li > 0 ? cnCount(li) + '厘' : '');
+};
+/** 公历日期读法。排盘定位到的 solarDate 可能比命主实际生日早一天（晚子时换日：23 点后日柱进一，
+ *  人仍生在前一天），所以有真实 birthDay 时以它为准；手录四柱的老记录没有这一栏才退回 solarDate。 */
+const solarDateText = (result: NonAiChart, record: BaziRecord): string => {
+  const ymd = /^(\d{4})-(\d{1,2})-\d{1,2}$/.exec(String(result.solarDate ?? '').trim());
+  if (ymd && typeof result.birthDay === 'number') return cnDate(`${ymd[1]}-${ymd[2]}-${result.birthDay}`);
+  return cnDate(result.solarDate);
 };
 function NonAiAnalysis({ result, record }: { result?: NonAiChart; record: BaziRecord }) {
-  if (!result) return <section className="detail-section" aria-label="基础排盘数据"><div className="section-heading"><div><p className="eyebrow">贰 · 排盘数据</p><h2>基础排盘数据</h2></div></div><p role="status">暂无基础排盘数据</p></section>;
+  if (!result) return <section className="detail-section" aria-label="基础排盘数据"><div className="section-heading"><div><p className="eyebrow">贰、排盘数据</p><h2>基础排盘数据</h2></div></div><p role="status">暂无基础排盘数据</p></section>;
   const fields: [string, string][] = [
-    ['四柱', `${result.pillars.year} · ${result.pillars.month} · ${result.pillars.day} · ${result.pillars.hour}`],
-    ['公历日期', result.solarDate],
+    ['四柱', [result.pillars.year, result.pillars.month, result.pillars.day, result.pillars.hour].join('、')],
+    ['公历日期', solarDateText(result, record)],
     ['五行', mapText(result.elements)], ['五行比例', formatElementRatio(result.elementRatio)],
     ['日主', result.dayMaster], ['十二长生', listText(result.twelveLongevity)],
     ['起运', luckStartText(result, new Date().getFullYear())],
-    ['袁天罡称骨', result.chenggu ? `${result.chenggu.totalText}（年 ${result.chenggu.parts.year}·月 ${result.chenggu.parts.month}·日 ${result.chenggu.parts.day}·时 ${result.chenggu.parts.hour}）` : '—'],
+    ['袁天罡称骨', result.chenggu ? `${result.chenggu.totalText}，年${result.chenggu.parts.year}、月${result.chenggu.parts.month}、日${result.chenggu.parts.day}、时${result.chenggu.parts.hour}` : '暂无'],
   ];
-  const columns: [string, string][] = [['四柱', fields[0][1]], ['藏干', listText(result.hiddenStems)], ['藏干十神', result.tenGodDetails.hidden.map((items) => items.map((item) => `${item.stem}:${item.tenGod}`).join('、')).join(' · ') || '—'], ['十神', listText(result.tenGods)], ['纳音', listText(result.naYin)]];
+  const columns: [string, string][] = [['四柱', fields[0][1]], ['藏干', listText(result.hiddenStems)], ['藏干十神', result.tenGodDetails.hidden.map((items) => items.map((item) => `${item.stem}${item.tenGod}`).join('、')).join('；') || '暂无'], ['十神', listText(result.tenGods)], ['纳音', listText(result.naYin)]];
   const relationLabels: Array<[keyof NonAiChart['relationships'], string]> = [['sanHe', '三合'], ['liuHe', '六合'], ['xing', '刑'], ['chong', '冲'], ['po', '破'], ['hai', '害'], ['ke', '克']];
   /* 完整大运表：把九步运的干支、十年区间、精确交运日全部列出，并高亮「今年所在」那一柱。
      AI 分析区的「④未来大运」只排起运晚于今年的运(避免整轮重算)，于是眼前正在走的那步运在
@@ -200,14 +239,15 @@ function NonAiAnalysis({ result, record }: { result?: NonAiChart; record: BaziRe
   const yb = record.yearPillar?.[1] ?? '';
   const zs = yb && '子丑寅卯辰巳午未申酉戌亥'.includes(yb) ? interpersonalZodiac(yb) : null;
   const selfZodiac = yb ? zodiacOfBranch(yb) : '';
-  return <section className="detail-section" aria-label="基础排盘数据"><div className="section-heading"><div><p className="eyebrow">贰 · 排盘数据</p><h2>基础排盘数据</h2></div></div><dl className="info-grid chart-data-grid">{fields.slice(1).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl><div className="chart-columns">{columns.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</div><section className="subsection" aria-label="大运"><h3>大运</h3><table className="luck-table"><thead><tr><th>大运</th><th>起运年</th><th>区间</th><th>交运日</th></tr></thead><tbody>{luckRows.map((g) => <tr key={g.ganZhi + g.startYear} className={g.ganZhi === currentGz ? 'luck-current' : undefined}><td>{g.ganZhi}{g.ganZhi === currentGz ? ' ·今' : ''}</td><td>{g.startYear}</td><td>{g.startYear}-{g.endYear}</td><td>{g.onsetDate && g.endDate ? `${g.onsetDate} ~ ${g.endDate}` : '—'}</td></tr>)}</tbody></table></section><section className="subsection" aria-label="生肖关系"><h3>生肖关系</h3><p>本命生肖：{zodiacOfBranch(record.yearPillar?.[1] ?? '')}（年支 {record.yearPillar[1]}）</p>
-      {zs && <p>人际适配：我属{selfZodiac} → 三合 {zs.sanHe.join('、')} · 六合 {zs.liuHe.join('、')} · 六冲 {zs.chong.join('、')} · 六害 {zs.hai.join('、')}（生肖人际参考，非决断）</p>}<ul>{relationLabels.map(([key, label]) => <li key={key}><strong>{label}</strong>：{result.relationships[key].join('、') || '—'}</li>)}</ul></section></section>;
+  return <section className="detail-section" aria-label="基础排盘数据"><div className="section-heading"><div><p className="eyebrow">贰、排盘数据</p><h2>基础排盘数据</h2></div></div><dl className="info-grid chart-data-grid">{fields.slice(1).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl><div className="chart-columns">{columns.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</div><section className="subsection" aria-label="大运"><h3>大运</h3><table className="luck-table"><thead><tr><th>大运</th><th>起运年</th><th>区间</th><th>交运日</th></tr></thead><tbody>{luckRows.map((g) => <tr key={g.ganZhi + g.startYear} className={g.ganZhi === currentGz ? 'luck-current' : undefined}><td>{g.ganZhi}{g.ganZhi === currentGz ? '行' : ''}</td><td>{cnYear(g.startYear)}</td><td>{cnYear(g.startYear)}至{cnYear(g.endYear)}</td><td>{g.onsetDate && g.endDate ? `${cnDate(g.onsetDate)}至${cnDate(g.endDate)}` : '暂无'}</td></tr>)}</tbody></table></section><section className="subsection" aria-label="生肖关系"><h3>生肖关系</h3><p>本命生肖：{zodiacOfBranch(record.yearPillar?.[1] ?? '')}，年支{record.yearPillar[1]}</p>
+      {zs && <p>人际适配：我属{selfZodiac}，三合{zs.sanHe.join('、')}，六合{zs.liuHe.join('、')}，六冲{zs.chong.join('、')}，六害{zs.hai.join('、')}。生肖人际参考，非决断</p>}<ul>{relationLabels.map(([key, label]) => <li key={key}><strong>{label}</strong>：{result.relationships[key].join('、') || '暂无'}</li>)}</ul></section></section>;
 }
-const safeAiError = (error: string) => error
-  .replace(/sk-[a-z0-9_-]+/gi, '[已隐藏]')
-  .replace(/github_pat_[a-z0-9_]+/gi, '[已隐藏]')
-  .replace(/bearer\s+[^\s，。）]+/gi, '[已隐藏]')
-  .replace(/(api[_-]?key\s*[:=]\s*)\S+/gi, '$1[已隐藏]');
+/** 失败原因先抹掉凭据痕迹，再整句过中文闸门：模型报错常带英文句子、半角括号与斜杠，
+ *  直接铺到界面上就违反「输出只能中文、不留算法痕迹」的正式版口径。闸门判空时退回一句
+ *  固定中文，宁可少说细节也不把脏串留在页面上。
+ *  HTTP 状态码是这一条链路上唯一值得留下的技术读数，逐位读成「五零三」而不是「五百零三」，
+ *  也不是留着「HTTP 503」这种写法 —— 读法与聊天那条链路共用 chatEngine 那一份实现。 */
+const safeAiError = (error: string): string => readableChannelError(error) || '模型或网络返回了无法显示的异常，请稍后再试或改用其他通道。';
 
 /* ---------------- 复制筛选（范围 x 维度） ---------------- */
 const DIM_KEYS = ['chong', 'health', 'love', 'career', 'wealth'] as const;
@@ -267,18 +307,20 @@ function bulletize(line: string): string[] {
   const sentences = line.split(/(?<=[。；!?！？])\s*/).map((s) => s.trim()).filter((s) => s.length > 1);
   return sentences.length > 0 ? sentences : (line ? [line] : []);
 }
-/** 全文“分点化”：每个【主题】一行标题，其下每句一条，能分点的全部拆开。 */
+/** 全文“分点化”：每个小节一行标题，其下每句一条，能分点的全部拆开。
+ *  屏幕上不再显示符号式项目符与括号标记(正式版口径：可见文案只留汉字与中文句读)，
+ *  所以这里把行首残留的「•」「·」当成分点起点剥掉、小节名只留文字，交给排版层重新编号。 */
 export function toPointBlocks(text: string): PointBlock[] {
   const blocks: PointBlock[] = [];
   let current: PointBlock | null = null;
   const pushCurrent = () => { if (current && (current.head || current.points.length > 0)) blocks.push(current); };
   for (const rawLine of (text || '').replace(/\r/g, '').split('\n')) {
-    const line = rawLine.trim();
+    const line = rawLine.trim().replace(/^[•·]+\s*/, '');
     if (!line) continue;
     const marker = line.match(/^【([^】]{1,16})】/);
     if (marker) {
       pushCurrent();
-      current = { head: '【' + marker[1] + '】', points: [] };
+      current = { head: marker[1], points: [] };
       const rest = line.slice(marker[0].length).trim();
       if (rest) current.points.push(...bulletize(rest));
     } else {
@@ -289,33 +331,34 @@ export function toPointBlocks(text: string): PointBlock[] {
   pushCurrent();
   return blocks;
 }
-/** 屏幕/复制共用的“分点正文”排版：标题行 + 每条一行。
- *  条目符号按用途分两种：屏幕上用「•」是排版，看不出算法痕迹；复制到文档里时正式版口径
- *  要求整篇只留中文，所以同一份 blocks 换成「一、二、」的中文序号，不引入项目符号字符。 */
+/** 屏幕/复制共用的“分点正文”排版：标题行 + 每条一行，条目一律冠中文序号「一、二、」。
+ *  屏幕上不再放「•」这类符号项目符号 —— 正式版口径下可见文案只留汉字与中文句读，
+ *  符号式项目符与英文字段名同级；复制到文档里走同一份排版，两条路不会再分叉。 */
 const CN_BULLETS = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '十一', '十二', '十三', '十四', '十五', '十六', '十七', '十八', '十九', '二十'];
 /** 条目行自己已经带编号(「一、」「1.」)时不再冠名，否则 pointBodyText 会拼成「一、一、」。 */
 const hasOwnIndex = (point: string) => ALREADY_INDEXED.test(point);
-export function pointBodyText(blocks: PointBlock[], marker: 'bullet' | 'ordinal' = 'bullet'): string {
+export function pointBodyText(blocks: PointBlock[], marker?: 'bullet' | 'ordinal'): string {
   return blocks.map((block) => {
     const head = block.head ? block.head + '\n' : '';
     let n = 0;
     return head + block.points.map((point) => {
       if (hasOwnIndex(point)) return point;
-      const label = marker === 'bullet' ? '• ' : (CN_BULLETS[n] ?? String(n + 1)) + '、';
+      const label = (CN_BULLETS[n] ?? String(n + 1)) + '、';
       n += 1;
-      return label + point;
+      // 复制出去的是纯文本，条目要自己带序号；屏幕上的列表由 CSS 负责编号，不能再拼一层。
+      return marker === 'ordinal' ? label + point : point;
     }).join('\n');
   }).join('\n\n');
 }
 
-/** 复制正文排版：标题行 + 分点条目(•) + 段落间空行，方便检索/定位。
+/** 复制正文排版：标题行 + 分点条目(中文序号) + 段落间空行，方便检索/定位。
  *  与展示同理，「先读后洗」：旧记录里存的照抄字段也在这里被清掉，复制出去的不带英文。 */
 export function formatCopyBody(analysis: NonNullable<BaziTaskResult['analysis']>, selected: DimKey[] | null, keepWholeText = false): string {
   const blocks: string[] = [];
   if (selected === null && analysis.title) blocks.push('标题：' + sanitizeAnalysisText(analysis.title));
   if (analysis.pattern && selected === null && !analysis.explanation) {
-    const elements = (list?: string[]) => (list ?? []).map((item) => sanitizeAnalysisText(item)).filter(Boolean).join('、') || '—';
-    blocks.push('格局：' + (sanitizeAnalysisText(analysis.pattern) || '—') + '，强弱：' + (sanitizeAnalysisText(analysis.strength || '') || '—') + '，喜：' + elements(analysis.usefulElements) + '，忌：' + elements(analysis.avoidElements));
+    const elements = (list?: string[]) => (list ?? []).map((item) => sanitizeAnalysisText(item)).filter(Boolean).join('、') || '暂无';
+    blocks.push('格局：' + (sanitizeAnalysisText(analysis.pattern) || '暂无') + '，强弱：' + (sanitizeAnalysisText(analysis.strength || '') || '暂无') + '，喜：' + elements(analysis.usefulElements) + '，忌：' + elements(analysis.avoidElements));
   }
   const text = sanitizeAnalysisText(analysis.explanation || '');
   const allBlocks = toPointBlocks(text);
@@ -335,11 +378,11 @@ export function formatCopyBody(analysis: NonNullable<BaziTaskResult['analysis']>
   return blocks.join('\n\n');
 }
 
-/** 展示用：分点渲染 AI 正文。读取时也过一遍清洗 —— 早于提示词修复的旧记录里
- *  存着 `(inSeason: false)` 这类照抄字段，写入路径管不到它们，只能在展示层兜住。 */
+/** 展示用：分点渲染批断正文。读取时也过一遍清洗 —— 早于提示词修复的旧记录里
+ *  存着照抄的算法字段，写入路径管不到它们，只能在展示层兜住。 */
 function PointsView({ text }: { text?: string }) {
   const blocks = toPointBlocks(sanitizeAnalysisText(text || ''));
-  if (blocks.length === 0) return <p>（无正文）</p>;
+  if (blocks.length === 0) return <p>暂无正文</p>;
   return <div className="points-view">{blocks.map((block, index) => (
     <div className="point-block" key={index}>{block.head ? <p className="point-head">{block.head}</p> : null}{block.points.length > 0 && <ul className="point-list">{block.points.map((point, i) => <li key={i}>{point}</li>)}</ul>}</div>
   ))}</div>;
@@ -349,11 +392,11 @@ function PointsView({ text }: { text?: string }) {
    本机三条通道的凭据(服务器那侧的密钥要在服务器上配)。旧文案让人去填一个用不上的地方，
    所以两条路都说清楚：要么在服务器上给 AI 配密钥，要么在本机填凭据改用本机通道。
    两处口径要对齐界面实物：「设置」按钮靠行尾对齐(.settings-entry margin-left:auto)、窄屏同样靠右，
-   所以方位写「右上角」；三条通道在设置页上就叫 DeepSeek / Kimi / Qwen3.8-Flash，
-   别再写成用户根本找不到的「通义」。 */
+   所以方位写「右上角」。通道名一律用中文读法(深思、克米、千问)：正式版口径下界面正文不许出现
+   拉丁字母，包括服务商自己的英文名。 */
 const keyMissingHint = isServerMode()
-  ? 'AI 尚未可用：现在连着服务器，分析默认由服务器完成，而服务器那边还没配 AI 密钥(需要在服务器上配置，本客户端的设置页管不到它)。想马上能用：点页面右上角「设置」，在任一服务(DeepSeek / Kimi / Qwen3.8-Flash)里填写访问凭据并保存，分析就会改走本机通道。'
-  : 'AI 尚未可用：请先点页面右上角「设置」，在任一服务(DeepSeek / Kimi / Qwen3.8-Flash)里填写访问凭据并保存，再回来点 AI 分析。';
+  ? '批断尚未可用：现在连着服务器，分析默认由服务器完成，而服务器那边还没配访问凭据，需要在服务器上配置，本客户端的设置页管不到它。想马上能用：点页面右上角设置，在任一服务里填写访问凭据并保存，分析就会改走本机通道。'
+  : '批断尚未可用：请先点页面右上角设置，在任一服务里填写访问凭据并保存，再回来点批断分析。';
 
 function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (next: BaziRecord) => void }) {
   const [progress, setProgress] = useState<{ done: number; total: number; label: string } | null>(null);
@@ -407,7 +450,8 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
 const sanitizeCopyLine = (line: string): string => {
   const cleaned = sanitizeAnalysisText(line)
     .replace(/[ \t]+(?=[一-鿿])/g, '')   // 「二零二六 年流年」→「二零二六年流年」：数字翻中文后留下的空格并入词组
-    .replace(/(?<=[一-鿿])[ \t]+(?=[一-鿿])/g, '、'); // 「大运段2026-2033」→「大运段、二零二六、二零三三」这类并列读法
+    .replace(/(?<=[一-鿿])[ \t]+(?=[一-鿿])/g, '、') // 「大运段2026-2033」→「大运段、二零二六、二零三三」这类并列读法
+    .replace(/[【】]/g, '');             // 【】是算法侧的切段标记(检索/维度筛选靠它)，用户文档里不该出现
   if (!cleaned) return line;
   return /^年(流年|流月)$/.test(cleaned) ? cleaned.slice(1) : cleaned;
 };
@@ -447,16 +491,17 @@ const sanitizeCopyLine = (line: string): string => {
     const text = buildCopyText(null);
     if (!text.trim()) { showCopyNote('暂无可复制的结果'); return; }
     await copy(text);
-    showCopyNote('已复制全部(' + allCompleted.length + ' 项)');
+    showCopyNote('已复制全部，共' + cnCount(allCompleted.length) + '项');
   };
   const copySelected = async () => {
     const text = buildCopyText(dimFilter);
     if (!text.trim()) { showCopyNote('勾选的内容没有可复制的正文，请调整勾选'); return; }
     await copy(text);
-    showCopyNote('已复制 ' + selectedCount + ' 项结果（' + (disabledDims.size === 0 ? '全部维度' : enabledDims.length + ' 个维度') + '）');
+    showCopyNote('已复制' + cnCount(selectedCount) + '项结果，维度为' + (disabledDims.size === 0 ? '全部' : '其中' + cnCount(enabledDims.length) + '类'));
   };
 
-  /* 范围勾选小标签(与展示顺序一致、简短可检索) */
+  /* 范围勾选小标签(与展示顺序一致、简短可检索)。界面文案同样不许出现半角符号与算式：
+     序号用中文数字，括号一律不写。 */
   const chipLabel = (item: BaziTaskResult): string => {
     const t = item.task;
     if (t.type === 'baseline') return '本命命局';
@@ -464,15 +509,15 @@ const sanitizeCopyLine = (line: string): string => {
     if (t.type === 'adjustment') return '后天调整';
     if (t.type === 'decade') {
       const gf = findDecade(record, t);
-      return gf?.ganZhi ? '未来大运 · ' + gf.ganZhi : '未来大运';
+      return gf?.ganZhi ? '未来大运、' + gf.ganZhi : '未来大运';
     }
     if (t.type === 'annual') {
       const ord = completedResults('annual').findIndex((x) => x.task.taskId === t.taskId) + 1;
-      return `未来第${ord}年(${t.year}年)`;
+      return `未来第${cnCount(ord)}年`;
     }
     if (t.type === 'monthly') {
       const ord = completedResults('monthly').findIndex((x) => x.task.taskId === t.taskId) + 1;
-      return `未来第${ord}月(${t.year}-${t.month})`;
+      return `未来第${cnCount(ord)}月`;
     }
     return t.type;
   };
@@ -485,7 +530,7 @@ const sanitizeCopyLine = (line: string): string => {
     autoRetryCountRef.current += 1;
     const n = autoRetryCountRef.current;
     setAutoWaiting(true);
-    setHint('分析失败：将在 12 秒后自动重新分析（第 ' + n + '/2 次）…也可以现在手动点“AI 分析”或“取消自动重试”。');
+    setHint('分析失败：将在十二秒后自动重新分析，这是第 ' + cnCount(n) + ' 次，共两次。也可以现在手动点批断分析，或取消自动重试。');
     autoTimerRef.current = setTimeout(() => {
       autoTimerRef.current = undefined;
       setAutoWaiting(false);
@@ -510,10 +555,10 @@ const sanitizeCopyLine = (line: string): string => {
         if (ran === undefined || ran === currentTone) {
           markUsedTone(base.id, currentTone);
           setProgress(null);
-          setHint('已存在该语气下的完整分析结果（命中缓存/已保存）。要改语气后重出，请拖动下方语气条再点 AI 分析。');
+          setHint('已存在该语气下的完整分析结果，命中了缓存或已保存的记录。要改语气后重出，请拖动下方语气条再点批断分析。');
           return;
         }
-        setHint('语气已从 ' + ran + ' 调到 ' + currentTone + '：先清旧结果，按新语气重新生成…');
+        setHint('语气已从' + cnCount(ran) + '调到' + cnCount(currentTone) + '：先清旧结果，按新语气重新生成，请稍候');
         const cleared = await saveBaziRecord({ ...base, aiTasks: undefined, aiAnalysis: undefined, aiOverview: undefined, aiError: undefined, aiStatus: 'not_started' });
         onUpdated(cleared);
         base = cleared;
@@ -523,7 +568,7 @@ const sanitizeCopyLine = (line: string): string => {
       beginAiSession();
       markBusy(true); enteredBusy = true;
       setHint(undefined); setCopyNote(undefined);
-      setProgress({ done: 0, total: expectedIds.length + 2, label: '准备任务…' });
+      setProgress({ done: 0, total: expectedIds.length + 2, label: '正在准备任务' });
       const pending = await saveBaziRecord({ ...base, aiStatus: 'pending', aiError: undefined });   // 不再写 toneUsed：语气是本机的事，不进会同步的 record
       onUpdated(pending);
       let lastSnapshot: BaziRecord = pending;
@@ -549,12 +594,12 @@ const sanitizeCopyLine = (line: string): string => {
         setProgress(null);
         markBusy(false); enteredBusy = false;
         const aborted = controller.signal.aborted;
-        const reason = error instanceof Error ? error.message : 'request failed';
+        const reason = error instanceof Error ? error.message : '请求未完成';
         try {
           const partial = await saveBaziRecord({ ...lastSnapshot, aiStatus: 'failed', aiError: aborted ? ABORTED_MESSAGE : reason });
           onUpdated(partial);
         } catch { /* 保存部分进度失败也不卡住界面 */ }
-        setHint(aborted ? '已停止：已完成的任务已保存，可随时再点 AI 分析继续。' : '分析失败：' + safeAiError(reason));
+        setHint(aborted ? '已停止：已完成的任务已保存，可随时再点批断分析继续。' : '分析失败：' + safeAiError(reason));
       }
     } catch (error) {
       if (enteredBusy) markBusy(false);
@@ -568,12 +613,12 @@ const sanitizeCopyLine = (line: string): string => {
     controllerRef.current?.abort();
     cancelAiSession();
     setProgress(null);
-    setHint('正在停止…已阻止后续任务，正在中断当前请求。');
+    setHint('正在停止：已阻止后续任务，正在中断当前请求。');
   }
   function cancelAutoRetryFromHint() {
     autoRetryCountRef.current = 0;
     cancelAutoRetry();
-    setHint('已取消自动重试。需要时可手动点 AI 分析。');
+    setHint('已取消自动重试。需要时可手动点批断分析。');
   }
   async function clearResultsOnly() {
     if (record.aiStatus === 'pending' || busy) return;
@@ -585,40 +630,40 @@ const sanitizeCopyLine = (line: string): string => {
     let cacheNote = '';
     try {
       const removed = await clearChartCache({ gender: record.gender, yearPillar: record.yearPillar, monthPillar: record.monthPillar, dayPillar: record.dayPillar, hourPillar: record.hourPillar }, record.id);
-      cacheNote = removed > 0 ? '，并清掉服务器上 ' + removed + ' 条命中缓存' : '（该盘在服务器上本无缓存）';
+      cacheNote = removed > 0 ? '，并清掉服务器上 ' + cnCount(removed) + ' 条命中缓存' : '，该盘在服务器上本无缓存';
     } catch { cacheNote = '，但服务器缓存没清掉：下次分析可能仍复用旧结果'; }
     onUpdated(cleared);
     setDisabledTasks(new Set()); setDisabledDims(new Set());
-    setHint('已清除该命盘的 AI 结果' + cacheNote + '（未重新调用 AI）。需要时请再点“AI 分析”。');
+    setHint('已清除该命盘的批断结果' + cacheNote + '，未重新调用模型。需要时请再点批断分析。');
   }
   useEffect(() => () => { if (noteTimer.current) clearTimeout(noteTimer.current); if (autoTimerRef.current) clearTimeout(autoTimerRef.current); }, []);
 
-  return <section className="detail-section" aria-labelledby="ai-title" aria-label="AI 分析">
-    <div className="section-heading"><div><p className="eyebrow">叁 · 批断结果</p><h2 id="ai-title">AI 分析</h2></div><div className="button-group"><button className="primary-button" type="button" onClick={() => void requestAnalysis()} disabled={record.aiStatus === 'pending' || busy}>{busy ? '分析中…' : 'AI 分析'}</button>{(record.aiStatus === 'pending' || busy) && <button className="danger-button stop-button" type="button" onClick={stopAnalysis}>立即停止</button>}<button className="text-button" type="button" onClick={() => void clearResultsOnly()} disabled={record.aiStatus === 'pending' || busy}>清除AI结果与缓存（只清除，不重算）</button></div></div>
+  return <section className="detail-section" aria-labelledby="ai-title" aria-label="批断分析">
+    <div className="section-heading"><div><p className="eyebrow">叁、批断结果</p><h2 id="ai-title">批断分析</h2></div><div className="button-group"><button className="primary-button" type="button" onClick={() => void requestAnalysis()} disabled={record.aiStatus === 'pending' || busy}>{busy ? '分析中，请稍候' : '批断分析'}</button>{(record.aiStatus === 'pending' || busy) && <button className="danger-button stop-button" type="button" onClick={stopAnalysis}>立即停止</button>}<button className="text-button" type="button" onClick={() => void clearResultsOnly()} disabled={record.aiStatus === 'pending' || busy}>清除批断结果与缓存，只清除不重算</button></div></div>
     <div className="tone-block" aria-label="分析语气">
       <span className="tone-label">措辞语气</span>
       <input id="tone-slider" type="range" min={0} max={100} step={5} value={tone} aria-valuetext={toneLabel(tone)} onChange={(event) => { const v = Number(event.target.value); setTone(v); saveRecordTone(record.id, v); }} />
-      <span className="tone-value">{toneLabel(tone)}{tone === 80 ? '（默认：八成好话 + 两成委婉点不足）' : ''}</span>
+      <span className="tone-value">{toneLabel(tone)}{tone === 80 ? '，这是默认档' : ''}</span>
       <span className="tone-scale"><em>犀利</em><em>中立</em><em>温柔夸夸</em></span>
     </div>
     <p className="ai-status" role="status">状态：{statusText[record.aiStatus]}</p>
     {hint && <p role="status">{hint}</p>}
     {autoWaiting && <div className="button-group"><button className="text-button" type="button" onClick={cancelAutoRetryFromHint}>取消自动重试</button></div>}
-    {(progress || busy || (record.aiStatus === 'pending' && !progress)) && <div className="progress-block" aria-label="AI 分析进度">
-      <p className="progress-text">任务 {progress ? progress.done + ' / ' + progress.total : '0'}：{progress?.label ?? '准备中…'}</p>
+    {(progress || busy || (record.aiStatus === 'pending' && !progress)) && <div className="progress-block" aria-label="批断分析进度">
+      <p className="progress-text">任务 {progress ? cnCount(progress.done) + '，共' + cnCount(progress.total) : '零'}：{progress?.label ?? '准备中'}</p>
       <div className="progress-track" role="progressbar" aria-valuenow={progress?.done ?? 0} aria-valuemin={0} aria-valuemax={progress?.total || queuedTotal() || 1}><div className="progress-fill" style={{ width: `${Math.round(((progress?.done ?? 0) / (progress?.total || queuedTotal() || 1)) * 100)}%` }} /></div>
     </div>}
-    {record.aiStatus === 'pending' && <p role="status">按任务逐个调用 AI（本命 → 每年流年 → 每月流月 → 大运 → 后天调整 → 全盘总结），每个任务数秒到数十秒；失败会自动重试一次，进度即时保存，中断后可随时继续。</p>}
-    {(record.aiStatus === 'not_configured' || hasUnconfiguredTask) && <p role="status">{keyMissingHint}<button type="button" className="text-button chat-settings-link" onClick={openSettings}>去设置 ›</button></p>}
+    {record.aiStatus === 'pending' && <p role="status">按任务逐个调用批断：本命、每年流年、每月流月、大运、后天调整、全盘总结。每个任务数秒到数十秒；失败会自动重试一次，进度即时保存，中断后可随时继续。</p>}
+    {(record.aiStatus === 'not_configured' || hasUnconfiguredTask) && <p role="status">{keyMissingHint}<button type="button" className="text-button chat-settings-link" onClick={openSettings}>去设置</button></p>}
     {record.aiStatus === 'failed' && <p role="status">{/未配置|没有可用的通道凭据/.test(record.aiError ?? '')
       // 一个凭据都没填时曾按 failed 上报(现已归为 not_configured)，此处兜住历史数据，
       // 别把「余额不足/限流」那串无关原因摆在一个根本没配密钥的用户面前。
       ? keyMissingHint
-      : '个别任务自动重试多轮后仍未成功。常见原因：余额不足或额度已用完 / 密钥无效 / 请求过于频繁（限流）/ 网络超时或不可达 / 所选服务不可用。请按下方原因处理后，再点 AI 分析（只补失败项，不重复花钱）。'}</p>}
+      : '个别任务自动重试多轮后仍未成功。常见原因是余额不足或额度已用完、密钥无效、请求过于频繁被限流、网络超时或不可达、所选服务不可用。请按下方原因处理后，再点批断分析，只补失败项，不重复花钱。'}</p>}
     {record.aiError && !/未配置|没有可用的通道凭据/.test(record.aiError) && <p role="alert">原因：{safeAiError(record.aiError)}</p>}
-    {record.aiAnalysis && <div className="long-text"><strong>格局与强弱</strong><p>{sanitizeAnalysisText(record.aiAnalysis.pattern || '') || '—'} · {sanitizeAnalysisText(record.aiAnalysis.strength || '') || '—'}</p><p>喜：{(record.aiAnalysis.usefulElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}　忌：{(record.aiAnalysis.avoidElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}</p><PointsView text={record.aiAnalysis.explanation} /></div>}
-    {/* 全盘总结正文(含古风标题)在下方「② 全盘总结」分组里完整展示；这里只留一处入口提示，避免同一段内容渲染两遍 */}
-    {record.aiOverview && <p className="long-text" aria-label="全盘总结提要"><strong>全盘总结已完成：</strong>值得关注的年份与机会/风险窗口见下方「② 全盘总结」段落。</p>}
+    {record.aiAnalysis && <div className="long-text"><strong>格局与强弱</strong><p>{sanitizeAnalysisText(record.aiAnalysis.pattern || '') || '暂无'}；{sanitizeAnalysisText(record.aiAnalysis.strength || '') || '暂无'}</p><p>喜：{(record.aiAnalysis.usefulElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '暂无'}，忌：{(record.aiAnalysis.avoidElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '暂无'}</p><PointsView text={record.aiAnalysis.explanation} /></div>}
+    {/* 全盘总结正文(含古风标题)在下方「全盘总结」分组里完整展示；这里只留一处入口提示，避免同一段内容渲染两遍 */}
+    {record.aiOverview && <p className="long-text" aria-label="全盘总结提要"><strong>全盘总结已完成：</strong>值得关注的年份与机会、风险窗口见下方全盘总结段落。</p>}
     {aiResults.length > 0 && <div className="ai-scopes">
       <div className="section-heading"><div><h3>各范围分析结果</h3></div><button className="text-button" type="button" onClick={() => void copyAll()}>复制全部</button></div>
 
@@ -635,11 +680,11 @@ const sanitizeCopyLine = (line: string): string => {
           <span className="chip-actions"><button type="button" className="text-button tiny" onClick={() => setDisabledTasks(new Set())}>全选</button><button type="button" className="text-button tiny" onClick={() => setDisabledTasks(new Set(allCompleted.map((item) => item.task.taskId)))}>清空</button></span>
         </div>
         <div className="copy-panel-row"><span className="copy-row-label">维度</span>
-          <div className="chip-list">{DIMS.map((dim) => { const enabled = !disabledDims.has(dim.key); return <button key={dim.key} type="button" className={enabled ? 'filter-chip selected' : 'filter-chip'} aria-pressed={enabled} title={dim.markers.join('/')} onClick={() => toggleDim(dim.key)}>{dim.label}</button>; })}</div>
+          <div className="chip-list">{DIMS.map((dim) => { const enabled = !disabledDims.has(dim.key); return <button key={dim.key} type="button" className={enabled ? 'filter-chip selected' : 'filter-chip'} aria-pressed={enabled} title={dim.markers.join('、')} onClick={() => toggleDim(dim.key)}>{dim.label}</button>; })}</div>
           <span className="chip-actions"><button type="button" className="text-button tiny" onClick={() => setDisabledDims(new Set())}>全选</button><button type="button" className="text-button tiny" onClick={() => setDisabledDims(new Set(DIM_KEYS as unknown as DimKey[]))}>清空</button></span>
         </div>
-        <div className="copy-actions"><button className="primary-button copy-selected" type="button" onClick={() => void copySelected()}>复制勾选内容（{selectedCount}/{totalCompleted} 项 · {disabledDims.size === 0 ? '全部' : enabledDims.length} 维度）</button>{copyNote && <span className="copy-note" role="status">{copyNote}</span>}</div>
-        <p className="copy-help">范围与维度都默认全勾。比如只勾“爱情”维度再复制，就只会得到各范围里的【爱情】正文；勾选内容排版带范围标题与【主题】标记，方便粘贴后检索。</p>
+        <div className="copy-actions"><button className="primary-button copy-selected" type="button" onClick={() => void copySelected()}>复制勾选内容，已选{cnCount(selectedCount)}项，共{cnCount(totalCompleted)}项，维度为{disabledDims.size === 0 ? '全部' : cnCount(enabledDims.length) + '类'}</button>{copyNote && <span className="copy-note" role="status">{copyNote}</span>}</div>
+        <p className="copy-help">范围与维度都默认全勾。比如只勾爱情维度再复制，就只会得到各范围里的爱情小节正文；勾选内容排版带范围标题与小节名，方便粘贴后检索。</p>
       </div>
 
       {scopeGroups.map((group) => {
@@ -648,10 +693,10 @@ const sanitizeCopyLine = (line: string): string => {
         return <section key={group.key} className="subsection scope-group" aria-label={group.title}><h4>{group.title}</h4>
           {items.map((item, idx) => {
             const analysis = item.analysis;
-            const lead = analysis && (analysis.pattern || analysis.strength) ? <p className="scope-lead">格局：{sanitizeAnalysisText(analysis.pattern || '') || '—'} · 强弱：{sanitizeAnalysisText(analysis.strength || '') || '—'}　喜：{(analysis.usefulElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}　忌：{(analysis.avoidElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '—'}</p> : null;
+            const lead = analysis && (analysis.pattern || analysis.strength) ? <p className="scope-lead">格局：{sanitizeAnalysisText(analysis.pattern || '') || '暂无'}，强弱：{sanitizeAnalysisText(analysis.strength || '') || '暂无'}，喜：{(analysis.usefulElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '暂无'}，忌：{(analysis.avoidElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '暂无'}</p> : null;
             return <details key={group.key + '-' + idx} className="scope-item" open={group.key === 'baseline' && item.status === 'completed'}>
-              <summary>{describeScope(item, record)}<span className="scope-status">　{statusText[item.status === 'completed' ? 'completed' : item.status === 'failed' ? 'failed' : 'not_configured']}</span></summary>
-              {item.status === 'completed' && analysis ? <div className="scope-body">{analysis.title ? <p className="scope-title"><strong>{sanitizeAnalysisText(analysis.title)}</strong></p> : null}{lead}<PointsView text={analysis.explanation} /></div> : item.status === 'failed' ? (busy ? <p className="retry-hint">该任务失败，正在自动重新调用 AI…</p> : <p className="form-error">自动重试多轮后仍失败：{safeAiError(item.error ?? '未知错误')}</p>) : item.status === 'not_configured' ? <p>未配置密钥，本项未生成。<button type="button" className="text-button chat-settings-link" onClick={openSettings}>去设置 ›</button></p> : null}
+              <summary>{describeScope(item, record)}<span className="scope-status">，{statusText[item.status === 'completed' ? 'completed' : item.status === 'failed' ? 'failed' : 'not_configured']}</span></summary>
+              {item.status === 'completed' && analysis ? <div className="scope-body">{analysis.title ? <p className="scope-title"><strong>{sanitizeAnalysisText(analysis.title)}</strong></p> : null}{lead}<PointsView text={analysis.explanation} /></div> : item.status === 'failed' ? (busy ? <p className="retry-hint">该任务失败，正在自动重新批断，请稍候</p> : <p className="form-error">自动重试多轮后仍失败：{safeAiError(item.error ?? '未知错误')}</p>) : item.status === 'not_configured' ? <p>未配置密钥，本项未生成。<button type="button" className="text-button chat-settings-link" onClick={openSettings}>去设置</button></p> : null}
             </details>;
           })}
         </section>;
@@ -672,7 +717,7 @@ export function PersonDetail({ personId, onBack, refreshKey = 0 }: PersonDetailP
   }, [personId, refreshKey]);
   // 排盘数据是读取时重算的(存储里已瘦身)，所以首帧先给加载态：直接拿旧数据显示会闪出
   // 「④ 未来大运」下早已走完的大运段，正是这次要修的那个假标题。
-  if (!record) return <main className="person-detail placeholder-page"><header className="page-heading"><h1>人物详情</h1></header><p role="status">正在读取命盘…</p><button className="text-button" type="button" onClick={onBack}>返回记录</button></main>;
+  if (!record) return <main className="person-detail placeholder-page"><header className="page-heading"><h1>人物详情</h1></header><p role="status">正在读取命盘，请稍候</p><button className="text-button" type="button" onClick={onBack}>返回记录</button></main>;
   const loadedRecord = record;
   const recordId = loadedRecord.id;
   async function remove() { await deleteBaziRecord(recordId); setConfirmDelete(false); onBack(); }
@@ -688,16 +733,16 @@ export function PersonDetail({ personId, onBack, refreshKey = 0 }: PersonDetailP
       // 「④未来大运」不同源 —— 已走完的那一运被当成必填槽位，每次点都整轮重算。
       setRecord(await refreshRecord(updated));
       // 这句承诺的是「重算了排盘数据」，顺手把 AI 结果一起清了反而与提示不符(而且用户没要求)。
-      setNotice('非 AI 已重新计算');
+      setNotice('排盘数据已重新计算');
     } catch (error) {
-      setNotice(`非 AI 计算失败：${error instanceof Error ? error.message : '计算失败'}`);
+      setNotice(`排盘重算失败：${error instanceof Error ? error.message : '计算失败'}`);
     }
   }
   return <main className="person-detail">
-    <header className="page-heading detail-top"><div><p className="eyebrow">本机命盘档案</p><h1>人物详情</h1><p className="page-description">{record.name} 的八字记录与 AI 分析</p></div><div>{confirmDelete
-      ? <div className="button-group" role="group" aria-label="确认删除"><span className="danger-hint">确定删除「{record.name}」？四柱、排盘数据与全部 AI 结果一并清除，无法撤销。</span><button className="danger-button" type="button" onClick={() => void remove()}>确认删除</button><button className="text-button" type="button" onClick={() => setConfirmDelete(false)}>取消</button></div>
+    <header className="page-heading detail-top"><div><p className="eyebrow">本机命盘档案</p><h1>人物详情</h1><p className="page-description">{record.name} 的八字记录与批断分析</p></div><div>{confirmDelete
+      ? <div className="button-group" role="group" aria-label="确认删除"><span className="danger-hint">确定删除{record.name}这个人吗？四柱、排盘数据与全部批断结果一并清除，无法撤销。</span><button className="danger-button" type="button" onClick={() => void remove()}>确认删除</button><button className="text-button" type="button" onClick={() => setConfirmDelete(false)}>取消</button></div>
       : <button className="text-button" type="button" onClick={onBack}>返回记录</button>}<button className="danger-button" type="button" onClick={() => setConfirmDelete(true)} hidden={confirmDelete}>删除数据</button></div></header>
     {notice && <p role="status">{notice}</p>}
-    <BasicInfo record={record} /><NonAiAnalysis result={record.nonAiResult} record={record} /><div className="section-actions"><button className="text-button" type="button" onClick={() => void recalculateNonAi()}>重新计算非 AI</button></div><AIAnalysis record={record} onUpdated={setRecord} />
+    <BasicInfo record={record} /><NonAiAnalysis result={record.nonAiResult} record={record} /><div className="section-actions"><button className="text-button" type="button" onClick={() => void recalculateNonAi()}>重新排盘</button></div><AIAnalysis record={record} onUpdated={setRecord} />
   </main>;
 }

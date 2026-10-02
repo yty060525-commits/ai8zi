@@ -37,30 +37,32 @@ describe('PersonDetail AI 复制筛选/清除交互', () => {
     await screen.findByRole('heading', { name: '人物详情' });
     await screen.findByRole('button', { name: /复制勾选内容/ });
 
-    // 默认全勾：范围(2) x 维度(全部) → 复制含【健康】【爱情】
+    // 默认全勾：范围(2) x 维度(全部) → 复制含健康、爱情两节
     fireEvent.click(screen.getByRole('button', { name: /复制勾选内容/ }));
     const first = writeText.mock.calls.at(-1)?.[0] as string;
-    expect(first).toContain('【健康】');
-    expect(first).toContain('【爱情】');
+    expect(first).toContain('健康');
+    expect(first).toContain('爱情');
     expect(first).toContain('本命命局');
     // 正式版口径：导出的文档整篇只许中文 —— 应用自己拼的分组表头/范围标题也不能留数字与半角符号。
     expect(first).not.toMatch(/[A-Za-z]/);
     expect(first).not.toMatch(/[0-9０-９•·()（）《》\/\\@#%&*+=<>{}|~^—\-]/);
+    // 【】是算法侧的切段标记，用户拿到的文档里一个都不该有
+    expect(first).not.toMatch(/[【】]/);
     expect(first).toContain('未来十年每年流年');
     // 「本命命局」那行带着清洗后的范围标题，末尾正好是「…格局喜忌」；断句判据要精确到行首。
     expect(first.split('\n')).not.toContain('年流年');
 
-    // 取消勾选“爱情”维度 → 复制不再含【爱情】
+    // 取消勾选“爱情”维度 → 复制不再含爱情小节
     fireEvent.click(screen.getAllByRole('button', { name: '爱情' })[0]);
     fireEvent.click(screen.getByRole('button', { name: /复制勾选内容/ }));
     const second = writeText.mock.calls.at(-1)?.[0] as string;
-    expect(second).toContain('【健康】');
-    expect(second).not.toContain('【爱情】');
+    expect(second).toContain('健康');
+    expect(second).not.toContain('爱情');
 
     // 范围全清 → 0 项提示
     fireEvent.click(screen.getAllByRole('button', { name: '清空' })[0]);
     fireEvent.click(screen.getByRole('button', { name: /复制勾选内容/ }));
-    await waitFor(() => expect(screen.getByText(/已复制 0 项结果/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/已复制零项结果/)).toBeTruthy());
   });
 
   it('带年份的范围标题复制出去翻成中文读法，不留阿拉伯数字与断句', async () => {
@@ -80,14 +82,14 @@ describe('PersonDetail AI 复制筛选/清除交互', () => {
     expect(out).not.toMatch(/[0-9]/);
     expect(out.split('\n')).not.toContain('年流年');
     // 屏幕上的 <summary> 仍按原样显示年份，两种写法各归各路：
-    expect(document.body.textContent).toContain('2026 年流年');
+    expect(document.body.textContent).toContain('二零二六年流年');
   });
 
   it('清除按钮只清除结果与缓存，不重新调用 AI', async () => {
     render(<PersonDetail personId="copy-person" onBack={vi.fn()} />);
     await screen.findByRole('heading', { name: '人物详情' });
-    fireEvent.click(screen.getByRole('button', { name: /清除AI结果与缓存/ }));
-    await waitFor(() => expect(screen.getByText(/已清除该命盘的 AI 结果/)).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /清除批断结果与缓存/ }));
+    await waitFor(() => expect(screen.getByText(/已清除该命盘的批断结果/)).toBeTruthy());
     const saved = await listBaziRecords();
     const record = saved.find((item) => item.id === 'copy-person');
     expect(record?.aiStatus).toBe('not_started');
@@ -97,7 +99,7 @@ describe('PersonDetail AI 复制筛选/清除交互', () => {
 });
 
 describe('大运标题去掉“起”前缀', () => {
-  it('renders decade item as 干支 大运段(区间) without “X 起” prefix', async () => {
+  it('renders decade item as 干支、大运段、区间 without “X 起” prefix', async () => {
     const withDecade: BaziRecord = { ...mockPersonDetails[0].record, createdAt: new Date(Date.UTC(2025, 0, 1)).toISOString(), nonAiResult: { ...mockPersonDetails[0].record.nonAiResult!, greatFortunes: [{ ganZhi: '庚子', startYear: 2020, endYear: 2029, relationships: { sanHe: [], liuHe: [], chong: [], xing: [], hai: [], po: [], ke: [] } }] }, aiTasks: { 'task-01': { task: { taskId: 'task-01', type: 'decade', year: 2020 }, status: 'completed', analysis: { pattern: '', strength: '', usefulElements: [], avoidElements: [], explanation: '【事业】顺遂。' } } } };
     initializeMockSession(
       [{ id: 'copy-person', name: '复制测试', nameInitial: 'C', gender: 'male', birthSummary: 'x' }],
@@ -105,7 +107,9 @@ describe('大运标题去掉“起”前缀', () => {
     );
     render(<PersonDetail personId="copy-person" onBack={vi.fn()} />);
     await screen.findByRole('heading', { name: '人物详情' });
-    await waitFor(() => expect(document.body.textContent).toContain('庚子 大运段(2026-2029)'));
+    // 标题区间与④栏同口径：本运 2020-2029 裁到「未来十年」窗口 [2026,2035] 的交集，
+    // 再逐位读成中文(见 decade-two-segments / findings-decade-heading 两处同判据)。
+    await waitFor(() => expect(document.body.textContent).toContain('庚子、大运段、二零二六至二零二九'));
     // 起止只显示「未来十年」窗口内的范围：本运 2020-2029 与窗口 [2026,2035] 的交集是 2026-2029。
     expect(document.body.textContent).not.toMatch(/大运：2020|2020 起|2020年起|起（约十年）/);
   });

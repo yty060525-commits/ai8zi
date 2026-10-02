@@ -10,6 +10,8 @@ import type { Gender } from '../types/domain';
 describe('本地查表与 lunar-javascript 等价', () => {
   const GENDERS: Gender[] = ['male', 'female'];
 
+  // 穷举护栏：单跑约一秒，但整套并行(几十个 jsdom 工作线程抢 CPU)时会压到五秒默认超时之外，
+  // 表现为「隔离全绿、合跑偶红」的假失败。这条自己放宽到二十秒。
   it('连续多年份、逐柱比对：藏干 / 纳音 / 十二长生 / 透干十神', () => {
     let checked = 0;
     for (let y = 1950; y <= 2030; y += 3) {
@@ -47,7 +49,7 @@ describe('本地查表与 lunar-javascript 等价', () => {
       }
     }
     expect(checked).toBeGreaterThan(300);
-  });
+  }, 20_000);
 
   it('藏干中与日主同干者标比肩而非日主(旧实现会误标)', () => {
     // 戊辰 丙辰 庚子 辛巳：日主庚，申宫藏庚 → 应为比肩

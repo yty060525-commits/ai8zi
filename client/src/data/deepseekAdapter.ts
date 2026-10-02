@@ -1,8 +1,9 @@
 import type { BaziRecord, BaziAIAnalysis, BaziAnalysisTask, BaziTaskResult, NonAiChart } from '../types/domain';
 import { invoke } from '@tauri-apps/api/core';
-import { getBrowserCredential } from './aiSettings';
+import { getBrowserCredential, PROVIDER_LABEL, type AiProvider } from './aiSettings';
 import { isServerMode, runTaskOnServer, ServerError } from './serverClient';
-import { countElements } from '../features/chart/elements';
+import { countElements, sanitizeChatText } from '../features/chart/elements';
+import { cnCode } from '../shared/chineseReadAloud';
 
 export type DeepSeekResult = { status: 'completed'; analysis: BaziAIAnalysis } | { status: 'not_configured' | 'failed'; error?: string };
 type SecureRunner = (record: BaziRecord, task?: BaziAnalysisTask, options?: AnalyzeOptions) => Promise<BaziTaskResult>;
@@ -10,21 +11,43 @@ let secureRunner: SecureRunner | undefined;
 export function configureAiTaskRunner(runner?: SecureRunner): void { secureRunner = runner; }
 
 const inTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-const abortResult = (): DeepSeekResult => ({ status: 'failed', error: 'cancelled' });
+const abortResult = (): DeepSeekResult => ({ status: 'failed', error: '已取消' });
 
-/** 失败原因分类(与服务器/桌面端口径一致)：网络延迟、余额不足、密钥无效、限流、模型不存在等。 */
+/** 通道在报错文本里的名字：必须与设置页显示的那三个中文通道名同源。
+ *  原先这里挂的是 CHANNELS[].label(DeepSeek / Kimi / Qwen3.8-Flash)，于是「原因：DeepSeek：余额不足」
+ *  这类串会带着拉丁字母进到 record.aiError 与进度提示里 —— 展示层过闸门时整段被删空，
+ *  用户只看到「未知错误」，反而不知道该给哪一条通道补凭据。 */
+const channelName = (id: ChannelSpec['id']): string => PROVIDER_LABEL[id as AiProvider] ?? id;
+
+/** 状态码读成中文数字(五零三)：正式版口径下正文不留阿拉伯数字，而「服务返回五零三」比
+ *  「HTTP 503」更容易看懂，也更不会被展示层的闸门整段删掉。词表在 shared/chineseReadAloud，
+ *  这里转出是为了让报错链路只认一个入口。 */
+export { cnCode } from '../shared/chineseReadAloud';
+
+/** fetch/库抛出的整句英文 → 一句中文。网络类错误按语义归类，其余残句一律过闸门；
+ *  判空时退回固定说法，保证拼接结果里不会出现半句英文或一串括号。 */
+export function readableTransportError(msg: string): string {
+  if (/abort|timeout|timed out/i.test(msg)) return '网络超时或不可达';
+  if (/failed to fetch|networkerror|econnrefused|econnreset|enotfound/i.test(msg)) return '网络不可达或延迟过高';
+  return sanitizeChatText(msg) || '该通道未返回可显示的原因';
+}
+
+/** 失败分类的中文说法：不带状态码数字，也不写「上游 5xx」这类过程术语。
+ *  状态码由调用方按「服务返回五百零三」的形式读出来，判定逻辑仍看数字本身。 */
 export function classifyFailure(status: number, bodyText?: string): string {
   const text = String(bodyText || '');
   const lower = text.toLowerCase();
   if (status === 402 || /insufficient|balance|quota|arrears|余额|额度|配额/i.test(text)) return '余额不足或额度已用完';
   if (status === 401 || status === 403 || /invalid.*(api.?key|token)|authentication|unauthorized|incorrect api key|密钥无效|鉴权/i.test(text)) return '密钥无效或无权限';
-  if (status === 429 || /rate.?limit|too many requests|限流|频繁/i.test(lower)) return '请求过于频繁（已被限流）';
+  if (status === 429 || /rate.?limit|too many requests|限流|频繁/i.test(lower)) return '请求过于频繁，已被限流';
   if (status === 404 || /model.*(not found|not exist)|no such model|模型不存在/i.test(lower)) return '模型名不存在或已下线';
   if (status === 400) return '请求参数不被接受';
-  if (status >= 500) return '服务端故障（上游 5xx）';
+  if (status >= 500) return '服务端故障';
   if (status === 0) return '网络不可达或延迟过高';
-  const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 160);
-  return snippet ? ('上游报错：' + snippet) : ('HTTP ' + status);
+  // 上游自述文本可能整句是英文：交给展示层的闸门判空等于没说，所以在这里就只留纯中文片段，
+  // 拿不到可用中文时退回一句固定说法，绝不把残句拼进报错。
+  const snippet = sanitizeChatText(text.replace(/\s+/g, ' ').trim().slice(0, 160));
+  return snippet ? '服务方说明：' + snippet : '服务未给出可显示的原因';
 }
 
 /** 客户端措辞语气提示(备用直连也遵循滑杆)。 */
@@ -61,7 +84,7 @@ export function buildAiRequestPayload(record: BaziRecord, task?: BaziAnalysisTas
 export async function analyzeTask(record: BaziRecord, task: BaziAnalysisTask, tone?: number): Promise<BaziTaskResult> {
   if (inTauri()) {
     try { return await invoke<BaziTaskResult>('run_ai_task', { record: toTauriRecord(record), task: { ...task, tone: tone } }); }
-    catch (error) { return { task, status: 'failed', error: error instanceof Error ? error.message : 'request failed' }; }
+    catch (error) { return { task, status: 'failed', error: readableTransportError(error instanceof Error ? error.message : '') }; }
   }
   if (secureRunner) return secureRunner(record, task);
   return { task, status: 'not_configured' };
@@ -78,11 +101,15 @@ export async function analyzeBazi(record: BaziRecord, task?: BaziAnalysisTask, o
       const r = await runTaskOnServer(record, task, options.tone, options.signal);
       if (r.status === 'completed' && r.analysis) return { status: 'completed', analysis: r.analysis as BaziAIAnalysis };
       if (r.status !== 'completed') return { status: r.status, error: r.error };
-      return { status: 'failed', error: 'invalid server reply' };
+      return { status: 'failed', error: '服务器返回的批断结果不完整' };
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return abortResult();
       const offline = error instanceof ServerError && error.status === 0;
-      if (!offline && error instanceof ServerError) return { status: 'failed', error: error.message };
+      // ServerError.message 可能是服务器自述的中文，也可能是兜底的「HTTP 503」；后者读成中文再上屏。
+      if (!offline && error instanceof ServerError) {
+        // serverFetch 的兜底已是「服务返回五零三」，服务器自述也过一遍闸门：残句不许进 aiError。
+        return { status: 'failed', error: readableTransportError(error.message) };
+      }
       // 服务器不可达 → 落到本机备用(见下方本地分支)
     }
   }
@@ -92,13 +119,13 @@ export async function analyzeBazi(record: BaziRecord, task?: BaziAnalysisTask, o
   if (inTauri()) {
     let result: BaziTaskResult;
     try { result = await invoke<BaziTaskResult>('run_ai_task', { record: toTauriRecord(record), task: { ...task, tone: options?.tone } }); }
-    catch (error) { return { status: 'failed', error: error instanceof Error ? error.message : 'request failed' }; }
+    catch (error) { return { status: 'failed', error: readableTransportError(error instanceof Error ? error.message : '') }; }
     if (result.status === 'completed' && result.analysis) return { status: 'completed', analysis: result.analysis };
     return { status: result.status === 'failed' ? 'failed' : 'not_configured', error: result.error };
   }
   if (secureRunner) {
     try { const result = await secureRunner(record, task, options); return result.status === 'completed' && result.analysis ? { status: 'completed', analysis: result.analysis } : { status: result.status === 'failed' ? 'failed' : 'not_configured', error: result.error }; }
-    catch (error) { return { status: 'failed', error: error instanceof Error ? error.message : 'request failed' }; }
+    catch (error) { return { status: 'failed', error: readableTransportError(error instanceof Error ? error.message : '') }; }
   }
   return { status: 'not_configured' };
 }
@@ -107,7 +134,7 @@ export async function analyzeBazi(record: BaziRecord, task?: BaziAnalysisTask, o
 export async function browserFallback(record: BaziRecord, task: BaziAnalysisTask | undefined, tone: number | undefined, secret: string | undefined, signal?: AbortSignal) {
   const result = await browserDirect(record, task, { signal, tone, secret });
   if (result.status === 'completed' && result.analysis) return { ok: true };
-  return { ok: false, reason: (result.status === 'failed' || result.status === 'not_configured') ? (result.error || '备用直连失败') : '备用直连失败' };
+  return { ok: false, reason: (result.status === 'failed' || result.status === 'not_configured') ? (result.error || '备用通道未成功') : '备用通道未成功' };
 }
 
 /** PWA/网页直连（密钥本机保存，仅作为无服务器时的备用通道）。 */
@@ -181,7 +208,7 @@ export const OUTPUT_RULES_TEXT = '1. 全篇一律使用简体中文(UTF-8)，禁
 export const SCOPE_PREFIX = '你是资深子平命理师，仅分析时段运势。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行或关系。'
   + '禁止输出注释或代码块/围栏标记，只给最终正文。本命格局与旺衰已由引擎算定并写在【事实数据】的「格局事实」「旺衰评分」里，你不得重判、不得改口径；本期吉凶只在既定喜忌下衡量该期干支的作用。'
   + '用 JSON(仅 JSON)返回，schema：{"title":"古风四字或对仗标题(可选)","explanation":长文}。'
-  + 'title 只能用干支+四字直书(如：卯戌六合·和合之象)或古典口诀风格，不得编造伪古文引文。'
+  + 'title 只能用干支+四字直书(如：卯戌六合和合之象)或古典口诀风格，不得编造伪古文引文；标题里也不要出现任何符号，只用汉字。'
   + 'explanation 必须依次各出现一次【健康】【事业】【财运】【爱情】【刑冲克害批注】，顺序一致，不得合并、省略或改名。'
   + '\n\n# 时段判断标准(硬性)\n'
   + '1. 先读【事实数据】里「旺衰评分」的档位与其中的喜忌方向：本期干支(含大运)属喜用则论顺、属忌神则论逆，生扶与克制关系以【事实数据】的「藏干」和「本期命中的刑冲合害」为准，禁止自造五行关系。\n'
@@ -265,7 +292,7 @@ export async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask,
   const errors: string[] = [];
   for (const channel of channelOrder()) {
     const secret = opts.secret ?? getBrowserCredential(channel.id);
-    if (!secret) { errors.push(channel.label + '：未配置凭据'); continue; }
+    if (!secret) { errors.push(channelName(channel.id) + '：未配置凭据'); continue; }
     const payload: Record<string, unknown> = { model: channel.model, max_tokens: 32768, messages: [
       { role: 'system', content: SYSTEM_SCOPE },
       // Qwen 显式缓存：从 messages 开头到此标记为止的前缀会被做成缓存块，命中部分按输入价一折
@@ -281,19 +308,20 @@ export async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask,
       const res = await fetch(channel.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + secret }, body: JSON.stringify(payload), signal: opts.signal });
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
-        errors.push(channel.label + '：' + classifyFailure(res.status, errText) + '（HTTP ' + res.status + '）');
+        // 状态码读成中文数字再拼：闸门会删掉「HTTP 503」这种写法，整段判空后原因就丢了。
+        errors.push(channelName(channel.id) + '：' + classifyFailure(res.status, errText) + '，服务返回' + cnCode(res.status));
         continue;
       }
       const body = await res.json();
       const raw = String(body?.choices?.[0]?.message?.content ?? '').trim();
-      if (!raw) { errors.push(channel.label + '：上游返回空正文（可能被内容过滤或达到输出上限）'); continue; }
+      if (!raw) { errors.push(channelName(channel.id) + '：上游返回空正文，可能被内容过滤或达到输出上限'); continue; }
       const cleaned = raw.replace(/^```json?\\s*/i, '').replace(/```\\s*$/, '');
       try { return { status: 'completed', analysis: JSON.parse(cleaned) as BaziAIAnalysis }; }
-      catch { errors.push(channel.label + '：输出不是合法 JSON'); continue; }
+      catch { errors.push(channelName(channel.id) + '：正文格式不符合约定，无法解析'); continue; }
     } catch (error) {
       if (opts.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) return abortResult();
       const msg = error instanceof Error ? error.message : '请求失败';
-      errors.push(channel.label + '：' + (/abort|timeout|timed out/i.test(msg) ? '网络超时或不可达' : msg));
+      errors.push(channelName(channel.id) + '：' + readableTransportError(msg));
     }
   }
   // 三个通道一个都没填凭据：这是「未配置」，不是「分析失败」。旧实现在这里也返回
@@ -426,7 +454,7 @@ export async function chatDirect(messages: Array<{ role: string; content: string
   // 与任务通道同一回退顺序：当前使用通道 → 其余已配置通道
   for (const channel of channelOrder()) {
     const secret = getBrowserCredential(channel.id);
-    if (!secret) { errors.push(channel.label + '：未配置凭据'); continue; }
+    if (!secret) { errors.push(channelName(channel.id) + '：未配置凭据'); continue; }
     hasCredential = true;
     const payload: Record<string, unknown> = { model: channel.model, max_tokens: 8192, messages: messages.map((m) => (
       m.role === 'user' ? { ...m, content: qwenCacheableContent(channel, String(m.content ?? '')) } : m
@@ -438,17 +466,17 @@ export async function chatDirect(messages: Array<{ role: string; content: string
       const res = await fetch(channel.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + secret }, body: JSON.stringify(payload), signal: opts.signal });
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
-        errors.push(channel.label + '：' + classifyFailure(res.status, errText) + '（HTTP ' + res.status + '）');
+        errors.push(channelName(channel.id) + '：' + classifyFailure(res.status, errText) + '，服务返回' + cnCode(res.status));
         continue;
       }
       const body = await res.json();
       const raw = String(body?.choices?.[0]?.message?.content ?? '').trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim();
-      if (!raw) { errors.push(channel.label + '：上游返回空正文'); continue; }
+      if (!raw) { errors.push(channelName(channel.id) + '：上游返回空正文'); continue; }
       return { status: 'completed', answer: raw };
     } catch (error) {
       if (opts.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) return { status: 'failed', error: '已取消' };
       const msg = error instanceof Error ? error.message : '请求失败';
-      errors.push(channel.label + '：' + (/abort|timeout|timed out/i.test(msg) ? '网络超时或不可达' : msg));
+      errors.push(channelName(channel.id) + '：' + readableTransportError(msg));
     }
   }
   return { status: hasCredential ? 'failed' : 'not_configured', error: errors.join('；') || '没有可用的通道凭据，请先在设置里配置' };

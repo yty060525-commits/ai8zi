@@ -82,6 +82,19 @@ pub enum AiProvider { Deepseek, Kimi, Qwen }
 
 impl AiProvider {
     fn key(&self) -> &'static str { match self { Self::Deepseek => "deepseek", Self::Kimi => "kimi", Self::Qwen => "qwen" } }
+    /// 对外(会进正文)的通道名：必须与 aiSettings.PROVIDER_LABEL、server/ai.mjs 同一份口径。
+    /// key() 是协议层标识(deepseek/kimi/qwen)，一旦拼进报错文本，客户端那道「只能中文」闸门
+    /// 就把整段判空 —— 用户只剩「未知错误」，反而不知道该给哪条通道补凭据。
+    /// 名字里不带「·」：闸门白名单没有中点，带上只会被静默删掉一格(实测)。
+    pub(crate) fn label(&self) -> &'static str {
+        match self { Self::Deepseek => "通道一深思", Self::Kimi => "通道二克米", Self::Qwen => "通道三千问" }
+    }
+}
+
+/// 状态码逐位读：503 → 五零三(不能读成五百零三)。与两端 cnCode 同算法。
+pub(crate) fn cn_code(status: u16) -> String {
+    const CN: [char; 10] = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+    status.to_string().chars().map(|d| CN[d as usize - '0' as usize]).collect()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -314,7 +327,9 @@ pub(crate) fn cache_key(record: &BaziRecord, task: &AiTaskInput, model: &str) ->
     // v8: 本命事实再增「调候参考」(tiaohouFacts)，通则第 5 条改为按此判喜忌；旧缓存里的结论未含调候口径，作废重算。
     // v9: 输出硬性要求改写为「正文限死纯中文 + 禁止引用出处」(通则 5/6)，并与另两端合并为同一份常量；
     //     旧缓存正文里带着英文字段名、阿拉伯数字与出处说明，不符合新展示口径，整体作废重写。
-    format!("v9|{model}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", record.gender,
+    // v10: 时段指令的标题示例去掉「·」并明写「标题不用任何符号」，与另两端同步；提示词字节变了，
+    //      旧缓存里那些带中点的标题是另一版提示词的产物，作废重算。
+    format!("v10|{model}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", record.gender,
         record.year_pillar, record.month_pillar, record.day_pillar, record.hour_pillar,
         task.task_type, task.year.unwrap_or(0), task.month.unwrap_or(0), record.birth_year, tone_bucket(task.tone))
 }
@@ -353,7 +368,7 @@ const SCOPE_PREFIX: &str = concat!(
     "你是资深子平命理师，仅分析时段运势。严格依据下方【事实数据(JSON)】作答，禁止自行推算干支、十神、五行或关系。",
     "禁止输出注释或代码块/围栏标记，只给最终正文。本命格局与旺衰已由引擎算定并写在【事实数据】的「格局事实」「旺衰评分」里，你不得重判、不得改口径；本期吉凶只在既定喜忌下衡量该期干支的作用。",
     "用 JSON(仅 JSON)返回，schema：{\"title\":\"古风四字或对仗标题(可选)\",\"explanation\":长文}。",
-    "title 只能用干支+四字直书(如：卯戌六合·和合之象)或古典口诀风格，不得编造伪古文引文。",
+    "title 只能用干支+四字直书(如：卯戌六合和合之象)或古典口诀风格，不得编造伪古文引文；标题里也不要出现任何符号，只用汉字。",
     "explanation 必须依次各出现一次【健康】【事业】【财运】【爱情】【刑冲克害批注】，顺序一致，不得合并、省略或改名。",
     "\n\n# 时段判断标准(硬性)\n",
     "1. 先读【事实数据】里「旺衰评分」的档位与其中的喜忌方向：本期干支(含大运)属喜用则论顺、属忌神则论逆，生扶与克制关系以【事实数据】的「藏干」和「本期命中的刑冲合害」为准，禁止自造五行关系。\n",
@@ -439,29 +454,19 @@ fn pick_decade(rows: &Value, year: i32) -> Value {
 
 const OVERVIEW_PROMPT: &str = "你是资深子平命理师，现在做「全盘总结」。下面给出的是【已经算好的结论】：本命喜忌、以及未来十年的大运/流年/流月逐段批断要点。你的任务不是重新推算，也不是复述每一段，而是横向比较这些结论，挑出真正值得当事人注意的时间节点并说明理由。严格依据给定材料作答，禁止自行补充材料里没有的干支或事件；禁止输出注释或代码块/围栏标记，只给最终正文。用 JSON(仅 JSON)返回，schema：{\"title\":\"古风四字或对仗标题(可选)\",\"explanation\":长文}。explanation 必须依次各出现一次【核心结论】【值得关注的时间节点】【行动建议】，顺序一致，不得合并、省略或改名。其中【值得关注的时间节点】是本文重点，要求：1. 按重要程度排序，每条单独一行、行首用 1. 2. 3. 编号；2. 每条写成「年份(或大运段) + 干支 + 为什么值得关注(引材料中的刑冲克害/喜忌依据) + 一句话怎么办」；3. 至少区分「机会窗口」与「风险窗口」两类，各自点明；4. 材料里若某年标注了六冲/三刑/六害等重大作用，必须纳入；5. 只写材料支持得起的结论，宁少勿滥，不要逐年流水账。【核心结论】用 2-4 条概括命局主线与该十年大势；【行动建议】用 2-4 条给出跨年份可执行的通用做法(贴合喜用五行，不重复时间节点里的原话)。全篇简体中文，每个主题内部一条一句，禁止整段连排。";
 
-/// 输出硬性要求的完整一段(标题 + 六条规则 + 语气段标题)，任务路与全盘总结路共用同一份常量：
+/// 输出硬性要求的完整一段(标题 + 六条规则)，任务路与全盘总结路共用同一份常量：
 /// 桌面端曾各写一份且已分叉(总结有「禁止围栏」那条、任务路没有)，同一命盘在不同通道会拿到
 /// 不同口径的正文。文本与 server/ai.mjs、deepseekAdapter.ts 的 OUTPUT_RULES_TEXT 逐字节一致，
 /// 由 client/src/__tests__/prompt-parity.test.ts 比对；改这里必须同步另两端并升缓存键。
-const TONE_TAIL: &str = "\n\n# 语气要求\n";
-const OUTPUT_RULES_HEAD: &str = concat!(
-    "\n\n# 输出硬性要求(违反即整篇作废重写)\n",
-    "1. 全篇一律使用简体中文(UTF-8)，禁止任何繁体字、异体字混入。\n",
-    "2. explanation 的【】小节必须按本任务规定逐段出现、各只出现一次，顺序一致，不得合并、省略或改名。\n",
-    "3. 每个小节至少 1 条编号要点；每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。\n",
-    "4. 禁止输出注释、代码块或任何围栏标记，只给最终正文。\n",
-    "5. 【正文只许中文】限死为纯中文：不得出现任何英文单词、英文字母缩写、拼音；不得出现阿拉伯数字(年份与数量一律写成中文，如「二零二七年」「三十岁」)；",
-    "不得出现括号、引号、书名号、连字符、下划线、百分号等半角或全角符号，只用汉字与顿号、逗号、冒号、句号、问号。",
-    "事实数据里凡是形如拉丁字母连写的键名，都只是数据结构的内部代号，你要做的是把它对应的「数值与含义」用中文讲出来，绝不可把这个代号本身抄进正文。",
-    "凡是描述「是否得令」「月支藏干有无印比」「助身方得分」「克泄耗方得分」「净分」「档位」这类结论，一律用中文词组直接表述：",
-    "得令与否写成「月支是/不是日主禄刃之地，得令/不得令」；月支藏干有无印比写成「月支藏干中见/未见印比，有/无通根之助」；",
-    "不能用英文词加上括号注音，也不能在中文后面缀上英文取值。\n",
-    "6. 【禁止引用出处】正文不得标注某句话来自哪条批断、哪个小节、哪份数据或哪个字段，也不得写「依据」「根据」「引用」「材料显示」之类出处说明；",
-    "直接给结论和理由本身，全篇不留任何参考与引用的痕迹。",
-    TONE_TAIL,
-);
+/// 「标题 + 规则」段：必须逐字节等于提示词里语气标题之前的部分。
+/// 写成普通字符串字面量而不是 concat!(..., 语气标题)：concat! 只接受字面量参数，
+/// 传标识符在本机 rustc 1.98 直接报「expected a literal」，整个桌面端编译不过(实测踩到)。
+/// 语气标题由调用处的 format! 写出；本常量与其不得重叠，由 lib.rs 末尾单测用等值判断守住
+/// (不做字节切片 —— 切错长度会静默截掉正文，等值判断才会红)。
+const OUTPUT_RULES_HEAD: &str = "\n\n# 输出硬性要求(违反即整篇作废重写)\n1. 全篇一律使用简体中文(UTF-8)，禁止任何繁体字、异体字混入。\n2. explanation 的【】小节必须按本任务规定逐段出现、各只出现一次，顺序一致，不得合并、省略或改名。\n3. 每个小节至少 1 条编号要点；每条单独一行、行首用 1. 2. 3. 编号，一句话一条，禁止整段连排。\n4. 禁止输出注释、代码块或任何围栏标记，只给最终正文。\n5. 【正文只许中文】限死为纯中文：不得出现任何英文单词、英文字母缩写、拼音；不得出现阿拉伯数字(年份与数量一律写成中文，如「二零二七年」「三十岁」)；不得出现括号、引号、书名号、连字符、下划线、百分号等半角或全角符号，只用汉字与顿号、逗号、冒号、句号、问号。事实数据里凡是形如拉丁字母连写的键名，都只是数据结构的内部代号，你要做的是把它对应的「数值与含义」用中文讲出来，绝不可把这个代号本身抄进正文。凡是描述「是否得令」「月支藏干有无印比」「助身方得分」「克泄耗方得分」「净分」「档位」这类结论，一律用中文词组直接表述：得令与否写成「月支是/不是日主禄刃之地，得令/不得令」；月支藏干有无印比写成「月支藏干中见/未见印比，有/无通根之助」；不能用英文词加上括号注音，也不能在中文后面缀上英文取值。\n6. 【禁止引用出处】正文不得标注某句话来自哪条批断、哪个小节、哪份数据或哪个字段，也不得写「依据」「根据」「引用」「材料显示」之类出处说明；直接给结论和理由本身，全篇不留任何参考与引用的痕迹。";
 
-/// 失败原因分类：把上游 HTTP 状态码 + 响应体文案翻译成可读原因(与服务器端口径一致)。
+/// 失败原因分类：把上游 HTTP 状态码 + 响应体文案翻译成可读原因(与服务器/浏览器直连端口径一致)。
+/// 返回的句子会写进 record.aiError 并进进度提示，所以正文里不许出现数字、括号或「5xx」这类过程术语。
 pub(crate) fn classify_failure(status: u16, body: &str) -> String {
     let lower = body.to_lowercase();
     let has = |pat: &str| lower.contains(pat);
@@ -469,16 +474,18 @@ pub(crate) fn classify_failure(status: u16, body: &str) -> String {
     if quota { return "余额不足或额度已用完".into(); }
     let auth = status == 401 || status == 403 || has("invalid api key") || has("incorrect api key") || has("unauthorized") || has("authentication") || body.contains("密钥无效") || body.contains("鉴权");
     if auth { return "密钥无效或无权限".into(); }
-    if status == 429 || has("rate limit") || has("too many requests") || body.contains("限流") || body.contains("频繁") { return "请求过于频繁（已被限流）".into(); }
+    if status == 429 || has("rate limit") || has("too many requests") || body.contains("限流") || body.contains("频繁") { return "请求过于频繁，已被限流".into(); }
     if status == 404 || has("model not found") || has("no such model") || body.contains("模型不存在") { return "模型名不存在或已下线".into(); }
     if status == 400 { return "请求参数不被接受".into(); }
-    if status >= 500 { return "服务端故障（上游 5xx）".into(); }
-    let snippet: String = body.replace(['\n', '\r'], " ").trim().chars().take(160).collect();
-    if snippet.is_empty() { format!("HTTP {status}") } else { format!("上游报错：{snippet}") }
+    if status >= 500 { return "服务端故障".into(); }
+    // 上游自述多半整句是英文：残句拼进报错等于让闸门删掉全句，所以只留纯中文片段(逐字过滤)，
+    // 一个汉字都剩不下时退回固定说法，绝不拿 HTTP 数字凑数。
+    let snippet: String = body.chars().filter(|c| matches!(c, '\u{4e00}'..='\u{9fff}' | '、' | '。' | '，' | '：' | '；' | '？' | '！')).take(160).collect();
+    if snippet.is_empty() { "服务未给出可显示的原因".into() } else { format!("服务方说明：{snippet}") }
 }
 
 pub(crate) fn final_ai_status(errors: &[String]) -> (&'static str, Option<String>) {
-    ("failed", Some(if errors.is_empty() { "AI request failed".into() } else { errors.join("; ") }))
+    ("failed", Some(if errors.is_empty() { "各通道都未返回可显示的原因，请检查本机凭据".into() } else { errors.join("；") }))
 }
 
 /// 只打包“本次任务需要的最小上下文”：本命要点 + 该年/该月/所处大运单行，
@@ -608,9 +615,10 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
             .unwrap_or_else(|| "（暂无本命结论）".into());
         let findings_text = task.findings.as_ref().map(|v| serde_json::to_string(v).unwrap_or_default()).unwrap_or_else(|| "{}".into());
         // 与 OUTPUT_RULES_HEAD(任务路)逐字节同一份规则：全盘总结不得有第二套口径。
-        let output_rules_ov = String::from(&OUTPUT_RULES_HEAD[..OUTPUT_RULES_HEAD.len() - TONE_TAIL.len()]);
-        let content = format!("# 本命事实数据(JSON，只依据此数据)\n{}\n{}{}\n\n# 语气要求\n{}\n\n# 各时段分析要点(JSON)\n{}\n\n# 当前分析目标\n全盘总结：未来十年中值得关注的节点",
-            natal_text, OVERVIEW_PROMPT, output_rules_ov, tone_instruction(clamp_tone(task.tone)), findings_text);
+        // OUTPUT_RULES_HEAD 现在就是「标题 + 规则」本体(不含语气标题)，直接取用，不再按长度切片。
+        let output_rules_ov = OUTPUT_RULES_HEAD;
+        let content = format!("# 本命事实数据(JSON，只依据此数据)\n{}\n{}{}\n\n# 语气要求\n{}\n\n# 本命结论(引擎已定，必须沿用，不得重算)\n{}\n\n# 各时段分析要点(JSON)\n{}\n\n# 当前分析目标\n全盘总结：未来十年中值得关注的节点",
+            natal_text, OVERVIEW_PROMPT, output_rules_ov, tone_instruction(clamp_tone(task.tone)), baseline_text, findings_text);
         return Ok(serde_json::json!({
             "model": "deepseek-flash", "promptVersion": "ctx-v8", "thinking": true, "effort": "high",
             "taskId": task.task_id, "type": task.task_type, "year": task.year, "month": task.month,
@@ -701,7 +709,7 @@ pub async fn run_ai_task(state: State<'_, Database>, record: BaziRecord, task: A
         }
         let secret = match credential_entry(&provider)?.get_password() {
             Ok(secret) => secret,
-            Err(_) => { errors.push(format!("{} credential unavailable", provider.key())); continue; }
+            Err(_) => { errors.push(format!("{}：本机未保存访问凭据", provider.label())); continue; }
         };
         let endpoint = match provider { AiProvider::Deepseek => "https://api.deepseek.com/chat/completions", AiProvider::Kimi => "https://api.moonshot.cn/v1/chat/completions", AiProvider::Qwen => "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions" };
         let payload = build_ai_request_payload(&record, &task)?;
@@ -728,7 +736,7 @@ pub async fn run_ai_task(state: State<'_, Database>, record: BaziRecord, task: A
                 Ok(response) if response.status().is_success() => {
                     match response.json::<Value>().await {
                         Ok(parsed) => { body = parsed; transport_ok = true; break; }
-                        Err(_) => { request_failed = "上游返回内容无法解析".into(); break; }
+                        Err(_) => { request_failed = format!("{}：服务器返回的内容无法解析", provider.label()); break; }
                     }
                 }
                 Ok(response) => {
@@ -736,23 +744,26 @@ pub async fn run_ai_task(state: State<'_, Database>, record: BaziRecord, task: A
                     let err_text = response.text().await.unwrap_or_default();
                     // 限流/上游抖动重试一次
                     if attempt == 0 && (code == 429 || code >= 500) { continue; }
-                    request_failed = format!("{}（HTTP {} · {}）", classify_failure(code, &err_text), code, provider.key());
+                    // 状态码逐位读成中文；耗时与原始英文残句只进日志，不进正文(否则闸门整段判空)。
+                    eprintln!("[通道调用] {} 非成功响应 {} {}", provider.key(), code, err_text);
+                    request_failed = format!("{}：{}，服务返回{}", provider.label(), classify_failure(code, &err_text), cn_code(code));
                     break;
                 }
                 Err(err) => {
                     if attempt == 0 { continue; }
                     let secs = started_at.elapsed().as_secs();
+                    eprintln!("[通道调用] {} 网络失败 {}s {}", provider.key(), secs, err);
                     request_failed = if err.is_timeout() {
-                        format!("网络超时：上游 {secs} 秒未响应（{}）", provider.key())
+                        format!("{}：网络超时或不可达", provider.label())
                     } else {
-                        format!("网络不可达或延迟过高（{}）：{err}", provider.key())
+                        format!("{}：网络不可达或延迟过高", provider.label())
                     };
                     break;
                 }
             }
         }
         if !transport_ok { errors.push(request_failed); continue; }
-        let content = match body["choices"][0]["message"]["content"].as_str() { Some(content) => content, None => { errors.push("上游返回空正文（可能被内容过滤或达到输出上限）".into()); continue; } };
+        let content = match body["choices"][0]["message"]["content"].as_str() { Some(content) => content, None => { errors.push(format!("{}：上游返回空正文，可能被内容过滤或达到输出上限", provider.label())); continue; } };
         let content = content.trim().trim_start_matches("```json").trim_end_matches("```").trim();
         match serde_json::from_str::<Value>(content) {
             Ok(analysis) => {
@@ -761,7 +772,7 @@ pub async fn run_ai_task(state: State<'_, Database>, record: BaziRecord, task: A
                 }
                 return Ok(AiTaskOutput { task, status: "completed".into(), analysis: Some(analysis), error: None });
             }
-            Err(_) => errors.push("invalid response".into()),
+            Err(_) => errors.push(format!("{}：正文格式不符合约定，无法解析", provider.label())),
         }
     }
     let (status, error) = final_ai_status(&errors);
@@ -815,7 +826,7 @@ pub async fn run_ai_chat(state: State<'_, Database>, chat: ChatRequest, messages
         }
         let secret = match credential_entry(&provider)?.get_password() {
             Ok(secret) => secret,
-            Err(_) => { errors.push(format!("{} credential unavailable", provider.key())); continue; }
+            Err(_) => { errors.push(format!("{}：本机未保存访问凭据", provider.label())); continue; }
         };
         let endpoint = match provider { AiProvider::Deepseek => "https://api.deepseek.com/chat/completions", AiProvider::Kimi => "https://api.moonshot.cn/v1/chat/completions", AiProvider::Qwen => "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions" };
         let mut api_payload = serde_json::json!({ "model": model, "messages": messages, "max_tokens": 8192 });
@@ -831,29 +842,31 @@ pub async fn run_ai_chat(state: State<'_, Database>, chat: ChatRequest, messages
                 Ok(response) if response.status().is_success() => {
                     match response.json::<Value>().await {
                         Ok(parsed) => { body = parsed; transport_ok = true; break; }
-                        Err(_) => { request_failed = "上游返回内容无法解析".into(); break; }
+                        Err(_) => { request_failed = format!("{}：服务器返回的内容无法解析", provider.label()); break; }
                     }
                 }
                 Ok(response) => {
                     let code = response.status().as_u16();
                     let err_text = response.text().await.unwrap_or_default();
                     if attempt == 0 && (code == 429 || code >= 500) { continue; }
-                    request_failed = format!("{}（HTTP {} · {}）", classify_failure(code, &err_text), code, provider.key());
+                    eprintln!("[聊天通道] {} 非成功响应 {} {}", provider.key(), code, err_text);
+                    request_failed = format!("{}：{}，服务返回{}", provider.label(), classify_failure(code, &err_text), cn_code(code));
                     break;
                 }
                 Err(err) => {
                     if attempt == 0 { continue; }
-                    request_failed = format!("网络不可达或延迟过高（{}）：{err}", provider.key());
+                    eprintln!("[聊天通道] {} 网络失败 {}", provider.key(), err);
+                    request_failed = format!("{}：网络不可达或延迟过高", provider.label());
                     break;
                 }
             }
         }
         if !transport_ok { errors.push(request_failed); continue; }
         let content = match body["choices"][0]["message"]["content"].as_str() {
-            Some(content) => content.trim().trim_start_matches("```json").trim_end_matches("```").trim().to_string(),
-            None => { errors.push("上游返回空正文（可能被内容过滤或达到输出上限）".into()); continue; }
+            Some(content) => content.trim().trim_start_matches("```json").trim_end_matches("```").trim(),
+            None => { errors.push(format!("{}：上游返回空正文，可能被内容过滤或达到输出上限", provider.label())); continue; }
         };
-        if content.is_empty() { errors.push("上游返回空正文".into()); continue; }
+        if content.is_empty() { errors.push(format!("{}：上游返回空正文", provider.label())); continue; }
         if want_cache {
             if let Ok(connection) = state.0.lock() { let _ = write_cache(&connection, &cache, &content); }
         }
@@ -981,13 +994,45 @@ mod tests {
         assert_eq!(commands::classify_failure(400, "{\"message\":\"quota exceeded\"}"), "余额不足或额度已用完");
         // 密钥
         assert_eq!(commands::classify_failure(401, "Incorrect API key provided"), "密钥无效或无权限");
-        // 限流
-        assert_eq!(commands::classify_failure(429, ""), "请求过于频繁（已被限流）");
+        // 限流：这句会进 record.aiError 再过「只能中文」闸门，全角括号会被整段判空，所以用顿号式写法
+        assert_eq!(commands::classify_failure(429, ""), "请求过于频繁，已被限流");
         // 模型名
         assert_eq!(commands::classify_failure(404, "model not found"), "模型名不存在或已下线");
-        // 上游故障 / 未知文案带原文
-        assert_eq!(commands::classify_failure(503, ""), "服务端故障（上游 5xx）");
-        assert!(commands::classify_failure(418, "teapot").contains("teapot"));
+        // 上游故障：不再写「上游 5xx」这种过程术语
+        assert_eq!(commands::classify_failure(503, ""), "服务端故障");
+    }
+
+    /// 返回句必须过得了客户端那道「只能中文」闸门：只要混进拉丁字母、数字或半角符号，
+    /// 展示层就把整句删空，用户只剩「未知错误」—— 那等于把「宁缺毋滥」做成「全缺」。
+    fn gate_clean(text: &str) -> bool {
+        !text.chars().any(|c| c.is_ascii_alphanumeric()
+            || matches!(c, '(' | ')' | '@' | '#' | '%' | '&' | '*' | '+' | '=' | '~' | '^' | '_' | '|'
+                | '·' | '/' | '＼' | '｜' | '（' | '）' | '「' | '」' | '“' | '”' | '…' | '—' | '㊣'))
+    }
+
+    #[test]
+    fn failure_reasons_survive_the_chinese_gate() {
+        for status in [0u16, 400, 401, 402, 403, 404, 429, 500, 503, 599] {
+            let r = commands::classify_failure(status, "");
+            assert!(gate_clean(&r), "状态 {} 的原因不可上屏：{}", status, r);
+        }
+        // 整句英文的上游自述：一个汉字都剩不下 ⇒ 退回固定说法，绝不把原文或 HTTP 数字拼进去。
+        assert_eq!(commands::classify_failure(418, "teapot I am a teapot"), "服务未给出可显示的原因");
+        // 反向钉子：纯中文残句仍要保留(否则清洗过头会把有用的原因也丢掉)。
+        assert_eq!(commands::classify_failure(418, "网关暂时不可用"), "服务方说明：网关暂时不可用");
+        // 中英混排只留中文部分
+        assert_eq!(commands::classify_failure(418, "upstream 繁忙，请稍后 retry"), "服务方说明：繁忙，请稍后");
+        // 逐位读：503 是「五零三」，不是「五百零三」
+        assert_eq!(commands::cn_code(503), "五零三");
+        assert_eq!(commands::cn_code(429), "四二九");
+        // 对外通道名不得带协议层标识(deepseek/kimi/qwen)
+        for p in [commands::AiProvider::Deepseek, commands::AiProvider::Kimi, commands::AiProvider::Qwen] {
+            assert!(gate_clean(p.label()), "通道名不可上屏：{}", p.label());
+        }
+        assert_eq!(commands::AiProvider::Qwen.label(), "通道三千问");
+        // 终态兜底句同样要干净
+        let (_, Some(fallback)) = commands::final_ai_status(&[]) else { panic!("空错误列表必须有兜底原因") };
+        assert!(gate_clean(&fallback), "兜底原因不可上屏：{}", fallback);
     }
 
     #[test]

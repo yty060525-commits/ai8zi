@@ -24,6 +24,11 @@ function realChart(): BaziRecord {
   } as unknown as BaziRecord;
 }
 
+/** 界面与要点标题里的年份一律逐位读成汉字(正式版口径：可见文案不留阿拉伯数字)，
+ *  判据要用同一套读法拼期望值，不能拿阿拉伯年份去比。 */
+const CN = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+const cnYearOf = (n: number): string => String(n).split('').map((d) => CN[+d] ?? d).join('');
+
 const done = (task: BaziTaskResult['task']): BaziTaskResult =>
   ({ task, status: 'completed', analysis: { pattern: '', strength: '', usefulElements: [], avoidElements: [], explanation: '【事业】顺遂。' } } as unknown as BaziTaskResult);
 
@@ -63,8 +68,8 @@ describe('未来十年被连续两运盖住(当前运 + 下一运都在④栏)',
     const aiTasks: Record<string, BaziTaskResult> = {};
     for (const t of tasks) aiTasks[t.taskId] = done(t);
     const headings = collectFindings(full, aiTasks, tasks).decades.map((d) => d.heading);
-    expect(headings).toContain(`${current.ganZhi} 大运段(${y}-${current.endYear})`);
-    expect(headings).toContain(`${next.ganZhi} 大运段(${next.startYear}-${y + 9})`);
+    expect(headings).toContain(`${current.ganZhi}、大运段、${cnYearOf(y)}至${cnYearOf(current.endYear)}`);
+    expect(headings).toContain(`${next.ganZhi}、大运段、${cnYearOf(next.startYear)}至${cnYearOf(y + 9)}`);
   });
 
   it('界面④栏真的摆出这两段(空手而归即视为未渲染)', async () => {
@@ -81,8 +86,8 @@ describe('未来十年被连续两运盖住(当前运 + 下一运都在④栏)',
     const y = new Date().getFullYear();
     await waitFor(() => {
       const text = document.body.textContent ?? '';
-      expect(text).toContain(`${current.ganZhi} 大运段(${y}-${current.endYear})`);
-      expect(text).toContain(`${next.ganZhi} 大运段(${next.startYear}-${y + 9})`);
+      expect(text).toContain(`${current.ganZhi}、大运段、${cnYearOf(y)}至${cnYearOf(current.endYear)}`);
+      expect(text).toContain(`${next.ganZhi}、大运段、${cnYearOf(next.startYear)}至${cnYearOf(y + 9)}`);
     });
   });
 

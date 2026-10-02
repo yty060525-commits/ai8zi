@@ -46,9 +46,9 @@ async function openDetail() {
 }
 
 describe('未配置态的每一处都要给出可点的出路', () => {
-  it('详情页：提示「AI 尚未可用」并带「去设置」入口，点击真的打开设置页', async () => {
+  it('详情页：提示「批断尚未可用」并带「去设置」入口，点击真的打开设置页', async () => {
     await openDetail();
-    const hint = await screen.findByText(/AI 尚未可用/);
+    const hint = await screen.findByText(/批断尚未可用/);
     expect(hint.textContent).toContain('任一服务');
     // 「设置」按钮实际在页面右上角(.settings-entry 用 margin-left:auto 顶到行尾，窄屏同样靠右)。
     // 曾经三处文案都写「左上角」，让人在屏幕左边找一圈 —— 方位词必须跟界面一致。
@@ -57,12 +57,12 @@ describe('未配置态的每一处都要给出可点的出路', () => {
     // 通道名要跟设置页上印的一样：设置页第三条叫「Qwen3.8-Flash」，写「通义」用户找不到。
     expect(hint.textContent, '指向了设置页上不存在的通道名').not.toContain('通义');
     expect(screen.queryByText(/原因：未配置/), '重复一遍没有信息量的「原因：未配置 AI 服务」').toBeNull();
-    const links = await screen.findAllByRole('button', { name: '去设置 ›' });
+    const links = await screen.findAllByRole('button', { name: '去设置' });
     expect(screen.queryByText(/未配置凭据；/), '通道原始报错串不该直接摆给用户').toBeNull();
     expect(screen.queryByText(/额度已用完/), '根本没配密钥时不该摆「余额不足」那串原因').toBeNull();
-    expect(screen.queryByText('AI 通道（三条可同时配置）')).toBeNull();
+    expect(screen.queryByText('批断通道，三条可同时配置')).toBeNull();
     fireEvent.click(links[0]);
-    expect(await screen.findByText('AI 通道（三条可同时配置）')).toBeTruthy();
+    expect(await screen.findByText('批断通道，三条可同时配置')).toBeTruthy();
   });
 
   it('结果列表里某一项未配置时，整条记录即便显示已完成也要给出去设置入口', async () => {
@@ -75,9 +75,9 @@ describe('未配置态的每一处都要给出可点的出路', () => {
     }]);
     await openDetail();
     expect(await screen.findByText('状态：已完成')).toBeTruthy();
-    expect(screen.getByText(/AI 尚未可用/)).toBeTruthy();
-    fireEvent.click(screen.getAllByRole('button', { name: '去设置 ›' })[0]);
-    expect(await screen.findByText('AI 通道（三条可同时配置）')).toBeTruthy();
+    expect(screen.getByText(/批断尚未可用/)).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('button', { name: '去设置' })[0]);
+    expect(await screen.findByText('批断通道，三条可同时配置')).toBeTruthy();
   });
 
   it('未配置的那一条展开后也带着同一个入口，不再是一句没有下文的死话', async () => {
@@ -88,6 +88,6 @@ describe('未配置态的每一处都要给出可点的出路', () => {
     const before = document.querySelectorAll('details.scope-item').length;
     expect(before).toBeGreaterThan(0);
     act(() => { window.dispatchEvent(new Event('mingli:open-settings')); });
-    expect(await screen.findByText('AI 通道（三条可同时配置）')).toBeTruthy();
+    expect(await screen.findByText('批断通道，三条可同时配置')).toBeTruthy();
   });
 });
