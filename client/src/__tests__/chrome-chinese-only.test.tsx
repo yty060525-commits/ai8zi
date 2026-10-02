@@ -5,6 +5,7 @@ import { BUILD_ID } from '../utils/buildInfo';
 import { initializeMockSession, resetMockSession } from '../data/clientRepository';
 import { mockPeople, mockPersonDetails } from './fixtures/mockData';
 import { analyzeBazi } from '../data/deepseekAdapter';
+import { readableName } from '../data/chatEngine';
 import '../features/chart/nonAiCalculator'; // 预载引擎(缓存)，让页面内的按需加载立即命中
 
 vi.mock('../data/deepseekAdapter', () => ({ analyzeBazi: vi.fn(), beginAiSession: vi.fn(), cancelAiSession: vi.fn() }));
@@ -58,6 +59,26 @@ describe('界面正文纯中文(整树穷举)', () => {
       return el!;
     });
     expect(dirtyOf(container)).toEqual([]);
+    fireEvent.click(open);
+    await waitFor(() => expect(container.querySelector('h1')?.textContent).toBe('人物详情'));
+    expect(dirtyOf(container)).toEqual([]);
+  });
+
+  it('存量脏姓名：测试期建的拉丁/数字名(如 T_SOL_01)也必须读成中文，不得原样上屏', async () => {
+    // 记录页/详情页/聊天建议过去直读 record.name，本机库里若存着带字母数字的旧名就会违反纯中文口径。
+    // 这里用真实脏形态重建会话，扫整树 —— readableName 兜底若不生效，判据当场红。
+    initializeMockSession(
+      [{ id: 'dirty-1', name: 'T_SOL_01', nameInitial: 'T', gender: 'male', birthSummary: '甲子年' } as never],
+      [{ person: { id: 'dirty-1', name: 'T_SOL_01' } as never, record: { id: 'dirty-1', name: 'T_SOL_01', gender: 'male', birthYear: 1990, birthMonth: 1, createdAt: '2025-01-01T00:00:00.000Z', yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午', aiStatus: 'not_started' } as never, aiAnalysis: { status: 'not_started' } as never }],
+    );
+    const { container } = render(<App />);
+    fireEvent.click(container.querySelector<HTMLButtonElement>('.bottom-nav .nav-item:nth-child(2)')!);
+    await waitFor(() => expect(container.querySelector('button.person-open')).toBeTruthy());
+    expect(dirtyOf(container)).toEqual([]);
+    // 反向钉子：确认真渲染了这条盘(而不是列表空导致「没东西可脏」的假绿)，且用的是共享读法。
+    const open = container.querySelector<HTMLButtonElement>('button.person-open')!;
+    expect(open.getAttribute('aria-label')).toBe('查看' + readableName('T_SOL_01'));
+    expect(readableName('T_SOL_01')).not.toBe('T_SOL_01'); // 兜底确实改写了原串
     fireEvent.click(open);
     await waitFor(() => expect(container.querySelector('h1')?.textContent).toBe('人物详情'));
     expect(dirtyOf(container)).toEqual([]);

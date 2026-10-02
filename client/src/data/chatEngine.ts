@@ -456,20 +456,21 @@ export function readableChannelError(raw?: string): string {
   return sanitizeChatText(masked) || '该通道未返回可显示的原因';
 }
 
-/** 账号名读法：用户名是登录时自填的机器串(常见形态带字母、数字或下划线)，直接印进正文就违反
- *  「只能中文」口径。纯中文名原样显示；含非中文字符时逐位读成中文(字母按近似读音，数字逐位)，
- *  至少界面这一行不留拉丁字母 —— 原始账号仍放进悬浮说明里供管理员核对。 */
+/** 姓名/账号名的统一读法(账号名与命主姓名共用)：两者都可能是登录或录入时的机器串
+ *  (带字母、数字或下划线，如测试期建的 T_SOL_01)，直接印进正文就违反「只能中文」口径。
+ *  纯中文名原样显示；含非中文字符时逐位读成中文(字母按近似读音，数字逐位)，界面这一行不留拉丁字母；
+ *  原始串仍由调用方放进悬浮说明(title)供机主核对。空名回落「未命名」而非空白。 */
 const LATIN_READ: Record<string, string> = {
   a: '阿', b: '比', c: '西', d: '地', e: '伊', f: '艾夫', g: '吉', h: '艾尺', i: '艾', j: '杰', k: '开',
   l: '艾勒', m: '艾姆', n: '恩', o: '欧', p: '皮', q: '克优', r: '阿', s: '艾斯', t: '提', u: '优',
   v: '维', w: '达不溜', x: '艾克斯', y: '外', z: '贼德',
 };
-export function readableAccount(name?: string): string {
+export function readableName(name?: string): string {
   const raw = String(name ?? '').trim();
   if (!raw) return '未命名';
   if (/^[一-鿿]+$/.test(raw)) return raw;
   const read = [...raw.toLowerCase()].map((ch) => (/[0-9]/.test(ch) ? cnCode(ch) : LATIN_READ[ch] ?? '')).join('');
-  return sanitizeChatText(read) || '该账号名无法用中文念出，详见悬浮说明';
+  return sanitizeChatText(read) || '该名称无法用中文念出，详见悬浮说明';
 }
 
 function serverOnlyReason(detail?: string): string {

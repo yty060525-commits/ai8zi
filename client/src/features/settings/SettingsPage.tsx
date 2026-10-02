@@ -6,7 +6,7 @@ import { reloadLocalForSession } from '../../data/clientRepository';
 import { importRecords, parseBackupFile, type ImportMode } from '../../data/sqlImport';
 import { apiAuth, getServerSession, getServerUrl, setServerSession, setServerUrl, type ServerSession } from '../../data/serverClient';
 import { BUILD_ID, GIT_VERSION, buildLabel, cacheLabel, cnVersion, cacheReadout } from '../../utils/buildInfo';
-import { readableAccount } from '../../data/chatEngine';
+import { readableName } from '../../data/chatEngine';
 import { readableTransportError } from '../../data/deepseekAdapter';
 
 type DisplayStatus = '已配置' | '未配置' | '保存中' | '保存失败';
@@ -176,7 +176,7 @@ export function SettingsPage() {
       const data = await apiAuth.login(srvUser.trim(), srvPw);
       setServerSession({ token: data.token, username: data.user.username, role: data.user.role });
       syncAfterLoginChange();
-      setSrvMsg('登录成功：' + readableAccount(data.user.username) + (data.user.role === 'admin' ? '，管理员，可看全部记录并管理访问凭据' : '，只能看到自己的客户') + '。本设备已记住，下次打开自动登录。');
+      setSrvMsg('登录成功：' + readableName(data.user.username) + (data.user.role === 'admin' ? '，管理员，可看全部记录并管理访问凭据' : '，只能看到自己的客户') + '。本设备已记住，下次打开自动登录。');
     } catch (error) { setSrvMsg('登录失败：' + readableTransportError(error instanceof Error ? error.message : String(error))); }
     finally { setSrvBusy(false); }
   }
@@ -188,7 +188,7 @@ export function SettingsPage() {
       const data = await apiAuth.register(srvUser.trim(), srvPw);
       setServerSession({ token: data.token, username: data.user.username, role: data.user.role });
       syncAfterLoginChange();
-      setSrvMsg('注册并登录成功：' + readableAccount(data.user.username) + (data.user.role === 'admin' ? '，本机首个账号为管理员' : ''));
+      setSrvMsg('注册并登录成功：' + readableName(data.user.username) + (data.user.role === 'admin' ? '，本机首个账号为管理员' : ''));
     } catch (error) { setSrvMsg('注册失败：' + readableTransportError(error instanceof Error ? error.message : String(error))); }
     finally { setSrvBusy(false); }
   }
@@ -256,7 +256,7 @@ export function SettingsPage() {
         {!session && <><label>账号<input aria-label="服务器账号" value={srvUser} onChange={(e) => setSrvUser(e.target.value)} autoComplete="username" /></label>
           <label>密码<input aria-label="服务器密码" type="password" value={srvPw} onChange={(e) => setSrvPw(e.target.value)} autoComplete="current-password" /></label>
           <div className="button-group"><button className="primary-button" type="button" disabled={srvBusy} onClick={() => void doLogin()}>{srvBusy ? '处理中' : '登录并记住此设备'}</button><button className="text-button" type="button" disabled={srvBusy} onClick={() => void doRegister()}>注册新账号</button></div></>}
-        {session && <p className="ai-status" title={'账号：' + session.username}>已连接：{readableAccount(session.username)}，{session.role === 'admin' ? '管理员' : '普通用户'}。本设备自动登录</p>}
+        {session && <p className="ai-status" title={'账号：' + session.username}>已连接：{readableName(session.username)}，{session.role === 'admin' ? '管理员' : '普通用户'}。本设备自动登录</p>}
         {session && <div className="button-group"><button className="text-button" type="button" disabled={srvBusy} onClick={() => void doLogout()}>退出登录</button></div>}
         {srvMsg && <p role="status">{srvMsg}</p>}
       </div>

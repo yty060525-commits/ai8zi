@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { deleteBaziRecord, getBaziRecord, refreshRecord, saveBaziRecord } from '../../data/clientRepository';
 import { ABORTED_MESSAGE, analysisHorizon, buildBaziTasks, expectedTaskIds, isRetryableFailure, orchestrateBaziAnalysis, DEFAULT_TONE } from '../../data/baziOrchestrator';
-import { readableChannelError } from '../../data/chatEngine';
+import { readableChannelError, readableName } from '../../data/chatEngine';
 import { beginAiSession, cancelAiSession } from '../../data/deepseekAdapter';
 import { clearChartCache } from '../../data/storageInfo';
 import { sanitizeAnalysisText } from '../chart/elements';
@@ -142,7 +142,7 @@ export const toneLabel = (v: number): string => {
 };
 
 const getBasicFields = (record: BaziRecord): [string, string][] => [
-  ['姓名', record.name], ['性别', record.gender === 'male' ? '男' : '女'],
+  ['姓名', readableName(record.name)], ['性别', record.gender === 'male' ? '男' : '女'],
   // 出生年/月读成中文：这条数组既铺在「基础信息」表上，也是「复制基础信息」的正文来源。
   ['出生年', cnYear(record.birthYear)], ['出生月', cnCount(record.birthMonth)],
   ['年柱', record.yearPillar], ['月柱', record.monthPillar], ['日柱', record.dayPillar], ['时柱', record.hourPillar],
@@ -739,8 +739,8 @@ export function PersonDetail({ personId, onBack, refreshKey = 0 }: PersonDetailP
     }
   }
   return <main className="person-detail">
-    <header className="page-heading detail-top"><div><p className="eyebrow">本机命盘档案</p><h1>人物详情</h1><p className="page-description">{record.name} 的八字记录与批断分析</p></div><div>{confirmDelete
-      ? <div className="button-group" role="group" aria-label="确认删除"><span className="danger-hint">确定删除{record.name}这个人吗？四柱、排盘数据与全部批断结果一并清除，无法撤销。</span><button className="danger-button" type="button" onClick={() => void remove()}>确认删除</button><button className="text-button" type="button" onClick={() => setConfirmDelete(false)}>取消</button></div>
+    <header className="page-heading detail-top"><div><p className="eyebrow">本机命盘档案</p><h1>人物详情</h1><p className="page-description">{readableName(record.name)} 的八字记录与批断分析</p></div><div>{confirmDelete
+      ? <div className="button-group" role="group" aria-label="确认删除"><span className="danger-hint">确定删除{readableName(record.name)}这个人吗？四柱、排盘数据与全部批断结果一并清除，无法撤销。</span><button className="danger-button" type="button" onClick={() => void remove()}>确认删除</button><button className="text-button" type="button" onClick={() => setConfirmDelete(false)}>取消</button></div>
       : <button className="text-button" type="button" onClick={onBack}>返回记录</button>}<button className="danger-button" type="button" onClick={() => setConfirmDelete(true)} hidden={confirmDelete}>删除数据</button></div></header>
     {notice && <p role="status">{notice}</p>}
     <BasicInfo record={record} /><NonAiAnalysis result={record.nonAiResult} record={record} /><div className="section-actions"><button className="text-button" type="button" onClick={() => void recalculateNonAi()}>重新排盘</button></div><AIAnalysis record={record} onUpdated={setRecord} />

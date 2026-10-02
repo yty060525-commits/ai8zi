@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { askChat, type ChatMessage, type ChatReply } from '../../data/chatEngine';
+import { askChat, readableName, type ChatMessage, type ChatReply } from '../../data/chatEngine';
 import { listBaziRecords } from '../../data/clientRepository';
 import { cancelAiSession } from '../../data/deepseekAdapter';
 import { isServerMode } from '../../data/serverClient';
@@ -149,12 +149,12 @@ export function ChartChat() {
 
   /** 空会话时的示例提问：按已存命主给出可一键发送的检索示范。 */
   const suggestions = people.length && messages.length === 0
-    ? [`${people[0].name}的喜用五行是什么？`, ...(people.length > 1 ? [`${people[1].name}今年事业运如何？`] : ['明年运势整体如何？'])]
+    ? [`${readableName(people[0].name)}的喜用五行是什么？`, ...(people.length > 1 ? [`${readableName(people[1].name)}今年事业运如何？`] : ['明年运势整体如何？'])]
     : [];
 
   return <section className="chat-panel" aria-label="问问批断">
     <h2>问问批断</h2>
-    <p className="chat-hint">基于已入库的命盘与已算批断作答，例如：张三的喜用五行是什么？明年事业运如何？。{selected ? <span>当前命主：<button type="button" className="link-button chat-current-person" aria-expanded={pickOpen} aria-label="切换当前命主" onClick={() => setPickOpen((open) => !open)}>{selected.name}</button>，点姓名可切换</span> : null}</p>
+    <p className="chat-hint">基于已入库的命盘与已算批断作答，例如：张三的喜用五行是什么？明年事业运如何？。{selected ? <span>当前命主：<button type="button" className="link-button chat-current-person" aria-expanded={pickOpen} aria-label="切换当前命主" onClick={() => setPickOpen((open) => !open)}>{readableName(selected.name)}</button>，点姓名可切换</span> : null}</p>
     {messages.length === 0 ? <p className="chat-empty">支持追问：先问本命，再问某年某月，会引用数据库里已算好的流年、流月批断。</p> : null}
     {suggestions.length ? <div className="chat-people" aria-label="示例提问">{suggestions.map((suggestion) => <button type="button" key={suggestion} className="choice-button" disabled={busy} onClick={() => void ask(suggestion)}>{suggestion}</button>)}</div> : null}
     {messages.length > 0 ? <div className="chat-log" role="log" ref={logRef}>
@@ -165,9 +165,9 @@ export function ChartChat() {
       {busy ? <div className="chat-msg chat-assistant"><span className="chat-role">批断</span><div className="chat-body chat-thinking">正在查库思考，请稍候</div></div> : null}
     </div> : null}
     {messages.length > 0 ? <p className="chat-tools"><button type="button" className="text-button chat-clear" onClick={clearChatThread}>清空对话</button></p> : null}
-    {pending ? <div className="chat-people" aria-label="选择命主">{pending.options.map((option) => <button type="button" key={option.id} className="choice-button" onClick={() => { publish({ selected: option }); void ask(pending.question, option.id); }}>{option.name}</button>)}</div> : null}
+    {pending ? <div className="chat-people" aria-label="选择命主">{pending.options.map((option) => <button type="button" key={option.id} className="choice-button" onClick={() => { publish({ selected: option }); void ask(pending.question, option.id); }}>{readableName(option.name)}</button>)}</div> : null}
     {!pending && people.length > 1 && (!selected || pickOpen) ? <div className="chat-people" aria-label="已存命主">
-      {people.map((person) => <button type="button" key={person.id} className={'choice-button' + (person.id === selected?.id ? ' selected' : '')} title="指定该命主后提问" onClick={() => { publish({ selected: person }); setPickOpen(false); }}>{person.name}</button>)}
+      {people.map((person) => <button type="button" key={person.id} className={'choice-button' + (person.id === selected?.id ? ' selected' : '')} title={person.name} onClick={() => { publish({ selected: person }); setPickOpen(false); }}>{readableName(person.name)}</button>)}
       {selected ? <button type="button" className="text-button chat-clear-person" onClick={() => { publish({ selected: null }); setPickOpen(false); }}>取消指定</button> : null}
     </div> : null}
     {error ? <p className="form-error" role="alert">{error}{needKey ? <button type="button" className="text-button chat-settings-link" onClick={openSettings}>去设置</button> : null}</p> : null}

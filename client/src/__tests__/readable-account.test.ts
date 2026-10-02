@@ -9,7 +9,7 @@
  *  2) 原串确实还在 DOM 里可取回 —— 只断言「正文没英文」会放过「直接把账号删掉」这种实现。
  * ========================================================================= */
 import { describe, expect, it } from 'vitest';
-import { readableAccount } from '../data/chatEngine';
+import { readableName } from '../data/chatEngine';
 import { cnCode } from '../shared/chineseReadAloud';
 
 describe('账号名与状态码的中文读法', () => {
@@ -21,22 +21,22 @@ describe('账号名与状态码的中文读法', () => {
   });
 
   it('纯中文账号原样显示，不替用户改写名字', () => {
-    expect(readableAccount('张三')).toBe('张三');
-    expect(readableAccount(' 李四 ')).toBe('李四');
+    expect(readableName('张三')).toBe('张三');
+    expect(readableName(' 李四 ')).toBe('李四');
   });
 
   it('含拉丁字母或数字的账号读成中文，正文不留一个拉丁字母', () => {
-    const read = readableAccount('admin');
+    const read = readableName('admin');
     expect(/[A-Za-z]/.test(read), '读法里仍含英文：' + read).toBe(false);
     expect(/[0-9]/.test(read), '读法里仍含数字：' + read).toBe(false);
     // 逐位读 ⇒ 长度只会变长不会丢字符；空读法说明映射表漏了某字母被静默吞掉。
     expect(read.length).toBeGreaterThan(1);
-    expect(readableAccount('user01')).not.toBe(readableAccount('user02'));
+    expect(readableName('user01')).not.toBe(readableName('user02'));
   });
 
   it('空账号与完全念不出的账号都退回固定说法，不会渲染成空白', () => {
-    expect(readableAccount('')).not.toBe('');
-    expect(readableAccount(undefined)).not.toBe('');
-    expect(readableAccount('🙂🙂')).not.toBe('');
+    expect(readableName('')).not.toBe('');
+    expect(readableName(undefined)).not.toBe('');
+    expect(readableName('🙂🙂')).not.toBe('');
   });
 });

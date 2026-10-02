@@ -24,6 +24,7 @@ const stamp = () => new Date().toISOString().slice(0, 10);
    算法痕迹，与英文字段名同级。cnCount 只覆盖到二十(人数/序号够用)，年份走逐位读。
    词表在 shared/chineseReadAloud，与详情页/设置页同源，不再各抄一份。 */
 import { cnCount, cnYear } from '../../shared/chineseReadAloud';
+import { readableName } from '../../data/chatEngine';
 
 /** 「1990-01-01」→「一九九〇年一月一日」；不是这个形态就原样返回。 */
 const cnDate = (iso: string): string => {
@@ -161,10 +162,10 @@ export function RecordsPage({ onOpenPerson, refreshKey = 0 }: RecordsPageProps) 
             return (
               <div className="person-item" key={record.id}>
                 <label className="records-check" title={checked ? '取消勾选' : '勾选后可按导出'}>
-                  <input type="checkbox" aria-label={'选择' + record.name} checked={checked} onChange={() => toggleSelected(record.id)} />
+                  <input type="checkbox" aria-label={'选择' + readableName(record.name)} checked={checked} onChange={() => toggleSelected(record.id)} />
                 </label>
-                <button className="person-open" type="button" onClick={() => onOpenPerson(record.id)} aria-label={'查看' + record.name}>
-                  <strong>{record.name}</strong>
+                <button className="person-open" type="button" onClick={() => onOpenPerson(record.id)} aria-label={'查看' + readableName(record.name)} title={record.name}>
+                  <strong>{readableName(record.name)}</strong>
                   <span className={'gender gender-' + record.gender}>{record.gender === 'male' ? '男' : '女'}</span>
                   <span className="birth-summary">{cnYear(record.birthYear)}年{cnCount(record.birthMonth)}月；{record.yearPillar}年、{record.monthPillar}月、{record.dayPillar}日、{record.hourPillar}时</span>
                   {/* 管理员看的是全服务器所有账号的盘：不标所属账号，同名记录分不清是谁的。
@@ -200,8 +201,8 @@ export function RecordsPage({ onOpenPerson, refreshKey = 0 }: RecordsPageProps) 
                 return (
                   <li key={record.id}>
                     <label className="checkbox-label">
-                      <input type="checkbox" aria-label={'包含' + record.name} checked={on} onChange={() => setIncludedIds((current) => { const next = new Set(current); if (next.has(record.id)) next.delete(record.id); else next.add(record.id); return next; })} />
-                      <span><strong>{record.name}</strong>，{cnYear(record.birthYear)}年{cnCount(record.birthMonth)}月，{record.yearPillar}、{record.monthPillar}、{record.dayPillar}、{record.hourPillar}，批断{record.aiStatus === 'completed' ? '已完成' : record.aiStatus === 'not_configured' ? '未配置' : record.aiStatus === 'failed' ? '失败' : record.aiStatus === 'pending' ? '分析中' : '未开始'}</span>
+                      <input type="checkbox" aria-label={'包含' + readableName(record.name)} checked={on} onChange={() => setIncludedIds((current) => { const next = new Set(current); if (next.has(record.id)) next.delete(record.id); else next.add(record.id); return next; })} />
+                      <span><strong>{readableName(record.name)}</strong>，{cnYear(record.birthYear)}年{cnCount(record.birthMonth)}月，{record.yearPillar}、{record.monthPillar}、{record.dayPillar}、{record.hourPillar}，批断{record.aiStatus === 'completed' ? '已完成' : record.aiStatus === 'not_configured' ? '未配置' : record.aiStatus === 'failed' ? '失败' : record.aiStatus === 'pending' ? '分析中' : '未开始'}</span>
                     </label>
                   </li>
                 );
