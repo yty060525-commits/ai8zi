@@ -41,9 +41,10 @@ Windows 桌面端( Tauri 2 + React + TypeScript + Rust/SQLite )。原则：**程
 - 设置页：服务一/服务二 = DeepSeek/Kimi，密钥存 Windows 凭据管理器(不落盘)；有“AI 连通自检(微小消耗)”。
 
 ## 测试
-- 前端：`client` 内 `npm test`(37 文件 206 项，含聊天引擎/三通道分流/问问 AI UI(示例提问、去设置引导、会话常驻、依据标注)/服务器-客户端提示词一致性)；服务器：`server` 内 `node --test`(39 项，含 EXPLAIN 索引命中断言、chart_sig 迁移回填、缓存优先于密钥检查、/api/chat 越权校验)；Rust：`client\src-tauri` 内 `cargo test --lib`。
+- 前端：`client` 内 `npm test`(63 文件 438 项，含聊天引擎/三通道分流/问问 AI UI(示例提问、去设置引导、会话常驻、依据标注)/服务器-客户端提示词一致性/整屏纯中文穷举)；服务器：`server` 内 `node --test`(103 项，含 EXPLAIN 索引命中断言、chart_sig 迁移回填、缓存优先于密钥检查、/api/chat 越权校验)；Rust：`client\src-tauri` 内 `cargo test --lib`(21 项)。各测试分别守哪条不变量，见 [docs/wiki/51-测试矩阵.md](docs/wiki/51-测试矩阵.md)。
 
 ## 目录速览
+- **模块化导览与知识库目录在 `docs/wiki/`**(入口 [docs/wiki/README.md](docs/wiki/README.md))：架构总览、客户端特性层/数据层、跨端共享与三端一致性、服务器端、桌面端 Tauri、类型契约、构建与发布、工具脚本、测试矩阵，页页互链并直连源码。
 - `client/src/features/chart` 非AI引擎(nonAiCalculator/shenSha/称骨等) 与 排盘输入；`data/` AI编排/适配/仓库/知识库；`person/` 详情展示；
 - `client/src-tauri` Rust：SQLite、密钥、AI 请求(最小上下文+缓存+reasoner 参数)；`docs/` 设计文档。
 
@@ -59,4 +60,4 @@ Windows 桌面端( Tauri 2 + React + TypeScript + Rust/SQLite )。原则：**程
 - 古风标题引用语料在 Rust prompt 内(仅允许所列古籍原文，禁止模型自创)。
 
 ## 版本
-v0.1.0 · Tauri 2 / React / Vite 8 / Rust / SQLite
+v1.0.0(与 `client/package.json` 一致) · Tauri 2 / React / Vite 8 / Rust / SQLite。线上产物另带构建戳「第 N 版，校验码…」，以构建戳为准(见 [docs/wiki/41-构建与发布.md](docs/wiki/41-构建与发布.md))。
