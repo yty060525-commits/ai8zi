@@ -21,7 +21,7 @@ const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../../../');
 async function openExportPanel() {
   render(<RecordsPage onOpenPerson={vi.fn()} />);
   await waitFor(() => expect(screen.getAllByRole('button', { name: /查看/ })).toHaveLength(3));
-  const boxes = screen.getAllByRole('checkbox', { name: /^选择/ });
+  const boxes = screen.getAllByRole('checkbox', { name: /^选择/ }) as HTMLInputElement[];
   expect(boxes, '夹具前提：列表应有三个人可勾').toHaveLength(3);
   for (const box of boxes) if (!box.checked) fireEvent.click(box);
   fireEvent.click(screen.getByRole('button', { name: /导出勾选/ }));
@@ -38,8 +38,12 @@ function panelOrder(): string[] {
   return order;
 }
 
+/** RTL 的 getByRole 返回 HTMLElement，读 .disabled / .checked 要收窄类型。 */
+const box = (name: RegExp | string): HTMLInputElement => screen.getByRole('checkbox', { name }) as HTMLInputElement;
+const button = (name: RegExp | string): HTMLButtonElement => screen.getByRole('button', { name }) as HTMLButtonElement;
+
 function includeBox(index: number): HTMLInputElement {
-  return screen.getByRole('checkbox', { name: '包含' + panelOrder()[index] });
+  return box('包含' + panelOrder()[index]);
 }
 
 describe('导出面板：取消勾选真的不带入文件', () => {
@@ -51,7 +55,7 @@ describe('导出面板：取消勾选真的不带入文件', () => {
 
     /* ⚠ 人数走 cnCount(整体读法)：CN_NUMERALS[3]='三'、[2]='二'，
        而列表行的「两人」是另一处措辞 —— 别照着「两人」写断言(实测红过一次)。 */
-    const primary = screen.getByRole('button', { name: /导出数据库文件/ });
+    const primary = button(/导出数据库文件/);
     expect(primary.textContent, '全选时按钮人数不对').toContain('共三人');
 
     /* 逐个取消要按姓名取元素：React 重排后 getAllByRole(...)[0] 可能还是同一个人，
@@ -68,8 +72,8 @@ describe('导出面板：取消勾选真的不带入文件', () => {
        (第一版断言「面板自己关闭」是凭空猜的实现形态，实测红过一次 —— 这里钉的是读到的真实行为。)
        钉禁用态而不是钉面板存在性：承诺「不带入文件」的可观察保证就是「这时点不动」。 */
     await waitFor(() => expect(primary.disabled, '全部取消后主按钮仍可点击').toBe(true));
-    expect(screen.getByRole('button', { name: '导出结构化文本' }).disabled).toBe(true);
-    expect(screen.getByRole('button', { name: '导出备份文件' }).disabled).toBe(true);
+    expect(button('导出结构化文本').disabled).toBe(true);
+    expect(button('导出备份文件').disabled).toBe(true);
     /* disabled 的按钮收不到 click，doExport 里那句「请先勾选至少一位人物」在界面上永远走不到。
        实测点它没有任何 role=status 提示 —— 这不是缺陷(灰按钮本身就是反馈)，
        但要把「没有额外话术」这个事实钉住：将来若有人去掉 disabled 却忘了话术，这里会红。 */
@@ -97,9 +101,9 @@ describe('导出面板：取消勾选真的不带入文件', () => {
       const dropped = panelOrder()[0];
       expect(includeBox(0).checked, '夹具前提：被取消那人本来在名单里').toBe(true);
       fireEvent.click(includeBox(0));
-      await waitFor(() => expect(screen.getByRole('button', { name: /导出数据库文件/ }).textContent).toContain('共二人'));
+      await waitFor(() => expect(button(/导出数据库文件/).textContent).toContain('共二人'));
 
-      fireEvent.click(screen.getByRole('button', { name: '导出备份文件' }));
+      fireEvent.click(button('导出备份文件'));
       /* FileReader.onload 是异步的，等它落进 parsed；同时 doExport 前面有 await。 */
       await waitFor(() => expect(parsed, '没解析到下载内容').toBeTruthy(), { timeout: 4000 });
 
