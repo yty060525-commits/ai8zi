@@ -260,7 +260,11 @@ export function configureBaziRepository(repository: BaziRepositoryPort) {
  *  SQLite 镜像)才是「这台设备上有哪些盘」的唯一依据(loadLocal / sqlMirror.readAll)。
  *  端口层同样要有这条 adopt：否则一次落盘之后视图被清空(换页面/换账号)，下一轮普通读取
  *  拿服务器清单把存储里那些本机盘一概看不见 —— 删除标记、幽灵判定、待推送补推全都没有参照。
- *  只在视图为空时采纳，避免把本轮同步刚剔掉的盘又捞回来。 */
+ *  只在视图为空时采纳，避免把本轮同步刚剔掉的盘又捞回来。
+ *  那道 `!saveView` 在现有两条真实端口上都是空转：内存库那条没有 saveView(它读写的就是视图本身)，
+ *  带存储的那条有 saveView —— 删掉这半全量 472 条照旧全绿(实测)。留着它的理由与 persistView 同源：
+ *  测试桩可以只声明 mirrorsView 又带上 saveView(本文件「镜像视图的端口不该被整体落盘」那条就是)，
+ *  那种端口的 listBaziRecords 读的是自己那份存储，把它当「本机有哪些盘」采纳进视图等于凭空造数据。 */
 async function ensureViewLoaded(): Promise<void> {
   if (baziRecords.length || !baziRepository.saveView) return;
   loadOwners();                                  // 归属表是「这条盘是谁的」的第二份依据(存储里那份可能没带标签)
@@ -583,11 +587,11 @@ async function saveLocalRecord(record: BaziRecord): Promise<BaziRecord> {
 }
 
 async function persistView(): Promise<void> {
-  // persistView 里不再判「端口是否镜像视图」：那条判断是死代码 —— 当场取证(在函数入口打印端口形状)
-  // 显示整组用例跑下来每次调用都是 sv=function、mv=undefined，产品路径从不会把镜像端口送到这里
-  // (内存库那条根本没有 saveView)，删掉它全量照旧全绿。真正拦住跨账号视图整体落盘的是下面这道
-  // 「端口没有 saveView 就直接返回」；带账号标签的跨账号视图交给**有** saveView 的端口时，
-  // storageBackedBaziRepository 会把别人的盘另存到它自己账号的命名空间(KEY.客户甲)，不写进本账号键。
+  // 这里不判「端口是否镜像视图」：那条判断是死代码 —— 当场取证(在函数入口打印端口形状)显示整组用例
+  // 跑下来每次调用都是 sv=function、mv=undefined，产品路径从不会把镜像端口送到这里(内存库那条根本
+  // 没有 saveView)，删掉它全量照旧全绿。真正拦住跨账号视图整体落盘的是下面这道「端口没有 saveView
+  // 就直接返回」；带账号标签的跨账号视图交给**有** saveView 的端口时，storageBackedBaziRepository
+  // 会把别人的盘另存到它自己账号的命名空间(KEY.客户甲)，不写进本账号键。
   // 这条落盘本身必需：漏掉它，上一轮同步引进/剔掉的盘只活在当前内存里，下一次读取先采纳存储再合并，
   // 跨账号视图当场塌回自己那几条(实测：删掉下面那行 saveView 调用，两条用例当场红)。
   persistLocal();
