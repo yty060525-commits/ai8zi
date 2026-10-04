@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import './netGuard.mjs'; // import 即上闸：本文件不连任何外部服务
 import { openDatabase, insertRecord, getRecordById } from '../db.mjs';
-import { extractWhen, analyzeQuestion, collectEvidence, SCAN_YEARS } from '../chat.mjs';
+import { extractWhen, analyzeQuestion, applyFollowUp, collectEvidence, SCAN_YEARS } from '../chat.mjs';
 
 /* =============================================================================
  * 服务端「本月/今年」按北京口径取值 —— 宿主时区不该改变答案
@@ -146,6 +146,20 @@ describe('服务端相对时间锚点走北京口径', () => {
       assert.equal(scan.from, 2026, '扫年起点退到了主机本地年');
       const plan = analyzeQuestion('我什么时候能发财', []);
       assert.equal(plan.scanFrom, 2026, '检索计划带出的窗口起点不是北京年');
+    });
+  });
+
+  test('跨年那一刻，UTC 主机上追问继承仍锚到北京年月', () => {
+    /* applyFollowUp 在继承上一轮「本月/今年」时调用 whenOfQuestion(prevUser?.content, now)。
+       这一分支的 now 必须与主分析同源，否则 UTC 主机在跨年那一刻会把继承来的月份答成上个月。 */
+    asUtcHost(() => {
+      const plan = applyFollowUp(
+        { recordId: null, personName: null, matchedCount: 0, topics: [], question: '那财运呢' },
+        [{ role: 'user', content: '本月注意什么' }],
+        [],
+      );
+      assert.equal(plan.year, 2026, '追问继承年份在 UTC 主机上锚到了本地年');
+      assert.equal(plan.month, 1, '追问继承月份在 UTC 主机上锚到了本地月');
     });
   });
 

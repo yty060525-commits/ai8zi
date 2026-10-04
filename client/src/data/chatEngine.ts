@@ -158,7 +158,7 @@ function personFromText(text: string, records: Array<Pick<BaziRecord, 'id' | 'na
 /** 追问继承上文语境：上一轮问的是 2026 年爱情，这轮一句「那我明年呢」不该退化成全新问题。
  *  只做「有历史且本轮自己没说时间/主题」时的补全，本轮若已明说就以本轮为准。
  *  records 传入时会做人名继承/切换：本轮自己点了别的名字 → 换人；只说「那她呢」→ 沿用上一个人。 */
-export function applyFollowUp(plan: ChatPlan, history: ChatMessage[], records: Array<Pick<BaziRecord, 'id' | 'name'>> = []): ChatPlan {
+export function applyFollowUp(plan: ChatPlan, history: ChatMessage[], records: Array<Pick<BaziRecord, 'id' | 'name'>> = [], now = new Date()): ChatPlan {
   if (!Array.isArray(history) || history.length === 0) return plan;
   // 往前找到最近一条**点过人名**的用户消息，而不是只看上一条(「那她呢」这种短追问本身不含名字)。
   const userTurns = history.filter((m) => m?.role === 'user' && typeof m.content === 'string');
@@ -179,7 +179,7 @@ export function applyFollowUp(plan: ChatPlan, history: ChatMessage[], records: A
     else next.general = plan.general === true && GENERAL_QUESTION_RE.test(source);
   }
   if (next.year === undefined && !next.scan) {
-    const inheritedWhen = whenOfQuestion(prevUser?.content ?? '', new Date());
+    const inheritedWhen = whenOfQuestion(prevUser?.content ?? '', now);
     if (inheritedWhen.year !== undefined) { next.year = inheritedWhen.year; next.month = inheritedWhen.month; }
     else if (inheritedWhen.scan) { next.scan = true; next.scanFrom = inheritedWhen.from; }
   }

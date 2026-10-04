@@ -406,7 +406,7 @@ function personFromText(text, summaries) {
 /** 追问继承上文语境：上一轮问的是 2026 年爱情，这轮一句「那我明年呢」不该退化成全新问题。
  *  只做「有历史且本轮自己没说时间/主题」时的补全，本轮若已明说就以本轮为准。
  *  summaries 传入时会做人名继承/切换：本轮自己点了别的名字 → 换人；只说「那她呢」→ 沿用上一个人。 */
-export function applyFollowUp(plan, history, summaries = []) {
+export function applyFollowUp(plan, history, summaries = [], now = new Date()) {
   if (!Array.isArray(history) || history.length === 0) return plan;
   const asksClarify = /^[?？唔嗯哦啊这那]+$/.test(String(plan.question ?? '').trim());
   if (asksClarify) return plan;
@@ -429,7 +429,7 @@ export function applyFollowUp(plan, history, summaries = []) {
     else next.general = plan.general === true && GENERAL_QUESTION_RE.test(source);
   }
   if (next.year === undefined && !next.scan) {
-    const inheritedWhen = whenOfQuestion(prevUser?.content ?? '', new Date());
+    const inheritedWhen = whenOfQuestion(prevUser?.content ?? '', now);
     if (inheritedWhen.year !== undefined) { next.year = inheritedWhen.year; next.month = inheritedWhen.month; }
     else if (inheritedWhen.scan) { next.scan = true; next.scanFrom = inheritedWhen.from; }
   }
@@ -449,7 +449,7 @@ export async function runChat(db, user, body = {}) {
   // 目标命盘一律从「本人名下」的轻列表里解析(recordId 也必须命中)，杜绝越权读取他人记录。
   const history = Array.isArray(body.history) ? body.history : [];
   // summaries 传进 applyFollowUp：追问时才能认出「那她呢」该沿用上一个人、「换成李四呢」该换人。
-  const plan = applyFollowUp(analyzeQuestion(question, summaries), history, summaries);
+  const plan = applyFollowUp(analyzeQuestion(question, summaries), history, summaries, new Date());
   let target = null;
   if (body.recordId) {
     target = summaries.find((s) => s.id === String(body.recordId)) || null;
