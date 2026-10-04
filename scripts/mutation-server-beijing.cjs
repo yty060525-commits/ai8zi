@@ -36,12 +36,23 @@ const TOK = [
 const expand = (s) => TOK.reduce((acc, [k, v]) => acc.split(k).join(v), s);
 
 /* S1/S2 打在 monthFromText / extractWhen 的两个锚点上；S3 打在取证层的 ?? 兜底上；
-   S4 整体把 chinaParts 换成宿主本地实现(等价于「导入口径没换过来」)。 */
+   S4 整体把 chinaParts 换成宿主本地实现(等价于「导入口径没换过来」)。
+   S5/S6 打在追问继承 applyFollowUp 的取时刻上。这两条是「修好之后还留下的接缝」，
+   实测差异如下(UTC 主机桩、北京 2026-01 那一刻)：
+     - 删掉形参默认值(S5)：now 变 undefined，下游 extractWhen 自己的默认参把它救回来了，
+       读数仍是 [2026,1] —— 所以 S5 **必然存活**，它不是缺陷也不是判据空白，别当靶子用。
+     - 继承分支改读宿主本地钟(S6)：读数是 [2025,12]，与北京的 [2026,1] 分叉，
+       chat-timezone.test.mjs 里那条「不传 now」的用例必须红 —— 这才是这一格的真靶。
+   结论：真正保护这条接缝的是「继承分支不许自己造宿主本地钟」，而不是形参默认值。 */
 const mutants = [
   { name: 'S1 「本月」退回设备本地月', from: 'const cm = chinaParts(now).month;', to: 'const cm = now.getMonth() + 1;' },
   { name: 'S2 「今年」锚年退回本地 getFullYear', from: 'const nowYear = chinaParts(now).year;', to: 'const nowYear = now.getFullYear();' },
   { name: 'S3 取证扫年兜底退回本地年', from: `Number(plan.scanFrom ?? chinaParts(new Date()).year)`, to: `Number(plan.scanFrom ?? new Date().getFullYear())` },
   { name: 'S4 chinaParts 整体退化为宿主本地读数', from: `  return { year: shifted.getUTCFullYear(), month: shifted.getUTCMonth() + 1 };`, to: `  return { year: d.getFullYear(), month: d.getMonth() + 1 };` },
+  { name: 'S5 追问继承形参默认值被删(预期存活：下游默认参兜住)', from: `applyFollowUp(plan, history, summaries = [], now = new Date()) {`, to: `applyFollowUp(plan, history, summaries = [], now) {` },
+  /* S6 打在追问继承的取时刻上(原缺陷形态)。锚点用 @Q@ 占位符拼空串字面量，
+     不在源码里直接写连续两个引号 —— 上一版那样写被编辑时吃掉一个引号，锚点命中 0 次。 */
+  { name: 'S6 追问继承改读宿主本地钟(原缺陷形态)', from: `?.content ?? @Q@@Q@, now)`, to: `?.content ?? @Q@@Q@, new Date())` },
 ];
 mutants.forEach((m) => { m.from = expand(m.from); m.to = expand(m.to); });
 
@@ -50,10 +61,11 @@ function apply(m) {
   const to = m.to.split('\n').join(EOL);
   const hits = orig.split(from).length - 1;
   if (hits !== 1) throw new Error(`锚点命中 ${hits} 次(需 1): ${m.name}`);
-  fs.writeFileSync(SRC, orig.replace(from, to), { encoding: 'utf8' });
+  fs.writeFileSync(SRC, orig.replace(from, () => to), { encoding: 'utf8' });
   /* 落地回读：确认磁盘上确实是变异体，防止写入被编辑器/钩子改回去。 */
   const back = fs.readFileSync(SRC, 'utf8');
   if (!back.includes(to)) throw new Error('落地回读失败(变异没进文件): ' + m.name);
+  if (from !== to && back.split(from).length - 1 !== 0) throw new Error('旧锚点仍在(替换没生效): ' + m.name);
 }
 function restore() { fs.writeFileSync(SRC, orig, { encoding: 'utf8' }); }
 
@@ -71,6 +83,13 @@ function runTest() {
 }
 
 const preflight = [];
+/* 诊断：把每条变异「展开后、换行尾后」的锚点原样打出来，命中数当场核对。
+   上一版 S6 连撞三次「命中 0」，我先后怀疑占位符、CRLF、shell 引号，全是猜 ——
+   环境类判据必须自证读数，别让我拿别人的实验结果当自己代码的结论。 */
+for (const m of mutants) {
+  const f = m.from.split('\n').join(EOL);
+  console.log('  ANCHOR %s hits=%d from=%s', m.name.slice(0, 2), orig.split(f).length - 1, JSON.stringify(f));
+}
 for (const m of mutants) { try { apply(m); } catch (e) { preflight.push(m.name + ' → ' + e.message.slice(0, 90)); } restore(); }
 if (preflight.length) { console.log('PREFLIGHT BAD:\n' + preflight.join('\n')); process.exit(2); }
 console.log(`preflight: ${mutants.length}/${mutants.length} 锚点唯一命中且替换可落地`);

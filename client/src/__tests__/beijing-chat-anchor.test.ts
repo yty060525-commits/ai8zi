@@ -122,16 +122,19 @@ describe('聊天引擎的相对时间锚点按北京口径取值', () => {
     expect(ev.missing.join('\n'), '窗口里混进了本地年的读数').not.toContain('2025年');
   });
 
-  it('追问继承分支也按北京口径锚定上一轮时间', () => {
+  it('追问继承分支给出的仍是北京年月(行为回归，非跨时区读数判据)', () => {
     /* applyFollowUp 在继承上一轮「本月/今年」时调用 whenOfQuestion(prevUser?.content, now)。
-       这一分支的 now 必须与主分析同源，否则 UTC 设备会在跨年那一刻把继承来的月份答成上个月。 */
+       ⚠ 服务端同构用例(chat-timezone.test.mjs)实测：把这一处换成 new Date()(S6 变异)本用例仍全绿，
+       因为下游 chinaYear/chinaDateParts 走 +8h→getUTC*，喂进来的时钟是本地还是 UTC 都会折回北京值；
+       而进程内桩抵消不了这一步。所以这里钉的是「继承分支确实跑了并输出北京年月」这条行为，
+       不能读成「已验证跨时区读数」。读数级判据见 TZ 子进程探针与服务端 readings 电池。 */
     const plan = onUtcDevice(() => applyFollowUp(
       { recordId: null, personName: null, matchedCount: 0, topics: [], question: '那财运呢' } as ChatPlan,
       [{ role: 'user', content: '本月注意什么' }],
       [],
     ));
-    expect(plan.year, '追问继承年份在 UTC 设备上锚到了本地年').toBe(2026);
-    expect(plan.month, '追问继承月份在 UTC 设备上锚到了本地月').toBe(1);
+    expect(plan.year, '追问继承年份不是北京年').toBe(2026);
+    expect(plan.month, '追问继承月份不是北京月').toBe(1);
   });
 
   it('源码层钉子：chatEngine 不再直接读本地时区字段，且真的导入共享模块', () => {

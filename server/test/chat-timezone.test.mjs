@@ -13,9 +13,13 @@ import { extractWhen, analyzeQuestion, applyFollowUp, collectEvidence, SCAN_YEAR
  *   「本月」答成上个月、「今年」答成去年，扫年窗口整体前移一年。
  * 详情页与浏览器端已收口到 utils/date 的北京口径，这里是同一类缺陷的服务端一处。
  *
- * 判据怎么做到「与时区无关地验证时区」：把全局 Date 的本地读数换成 UTC 读数
- * (等价于一台 UTC 设备)，再走真实导出函数。桩自带落地自检，没生效就抛错，
- * 绝不让断言静默恒真。 */
+ * ⚠ 2026-10-04 实测订正：本文件的进程内「UTC 设备桩」对 chinaParts **不是**一把能分叉的尺。
+ *   chinaParts(d) = new Date(d.getTime() + 8h).getUTC*()，而那个 shifted 对象继承自桩，
+ *   于是「本地 getter(返回 UTC 值)」与「getUTC*」两条路给出同一个数 —— +8h 被抵消，
+ *   加不加都读出北京值。实测基线与 S1/S2/S4 在该桩下 9 种问法全部 same。
+ *   下面这些用例真正钉住的是：**源码不许出现宿主本地字段读法**(源码层钉子)、以及
+ *   取证串里的年份文本；读数级的跨时区判据在 tz-probe.test.mjs(真换宿主时区的子进程)，
+ *   由 scripts/mutation-server-beijing-readings.cjs 做裁决。别把这里的绿读成「读数已验证」。 */
 
 const CROSS_YEAR_UTC = '2025-12-31T16:00:00Z';   // 北京 2026-01-01；UTC 主机读出 2025-12-31
 const CROSS_MONTH_UTC = '2026-01-31T16:00:00Z';  // 北京 2026-02-01；UTC 主机读出 2026-01-31
@@ -151,7 +155,11 @@ describe('服务端相对时间锚点走北京口径', () => {
 
   test('跨年那一刻，UTC 主机上追问继承仍锚到北京年月', () => {
     /* applyFollowUp 在继承上一轮「本月/今年」时调用 whenOfQuestion(prevUser?.content, now)。
-       这一分支的 now 必须与主分析同源，否则 UTC 主机在跨年那一刻会把继承来的月份答成上个月。 */
+       ⚠ 这一条**杀不掉**「继承分支自己造宿主本地钟」：实测把那一处改成 new Date()(S6)，
+       本用例仍全绿 —— 因为下游 chinaParts 走 +8h→getUTC*，无论喂进来的时钟读数是本地还是
+       UTC，最终都折回北京值；进程内桩又抵消不了这一步(见文件头订正)。
+       所以这里钉的是「继承分支确实跑了、并给出了北京年月」这一行为本身(回归护栏)，
+       不是跨时区读数判据。读数级由 tz-probe 子进程 + mutation-server-beijing-readings 覆盖。 */
     asUtcHost(() => {
       const plan = applyFollowUp(
         { recordId: null, personName: null, matchedCount: 0, topics: [], question: '那财运呢' },
