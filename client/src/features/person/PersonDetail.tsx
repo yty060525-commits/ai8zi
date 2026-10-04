@@ -8,6 +8,7 @@ import { sanitizeAnalysisText } from '../chart/elements';
 import { isServerMode } from '../../data/serverClient';
 import type { BaziRecord, BaziTaskResult, NonAiChart } from '../../types/domain';
 import { interpersonalZodiac, zodiacOfBranch } from '../../utils/interpersonal';
+import { chinaDateParts, chinaYmd, chinaYear } from '../../utils/date';
 
 export interface PersonDetailProps { personId: string; onBack: () => void; refreshKey?: number }
 const copy = (text: string) => navigator.clipboard?.writeText(text);
@@ -169,7 +170,9 @@ export const findCurrentFortune = (result: NonAiChart, nowYear: number, todayYmd
 };
 
 /** 起运文案：几岁起运 + 当前正走哪一运。老记录没算过起运时如实说「未记录」，
- *  引导去点「重新排盘」，而不是悄悄沿用旧的十年边界对齐结果。 */
+ *  引导去点「重新排盘」，而不是悄悄沿用旧的十年边界对齐结果。
+ *  nowYear 只在大运段没有 onsetDate/endDate 的存量记录里才用到；调用方一律传北京口径的年，
+ *  否则跨年那一刻(UTC 16:00 之后)整数年回退会用设备本地年，与同页大运表差一柱。 */
 export const luckStartText = (result: NonAiChart, nowYear: number): string => {
   const start = result.luckStart;
   if (!start?.date) return '未记录，点下方重新排盘可补算';
@@ -177,7 +180,7 @@ export const luckStartText = (result: NonAiChart, nowYear: number): string => {
      大运段的十年展示(startYear/endYear)仍与库 getDaYun 同源不动；但交运日几乎不在 1/1，
      用「startYear ≤ 今 ≤ endYear」判当前运会让整条段相对真太阳历前漂近一年(实测约 4% 的人
      报错一柱)。老记录无 onsetDate 时退回整数年区间，至少不丢这一句。 */
-  const today = new Date(); const todayYmd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const todayYmd = chinaYmd(new Date());
   const current = findCurrentFortune(result, nowYear, todayYmd);
   const age = `${cnCount(start.years)}岁${start.months ? cnCount(start.months) + '个月' : ''}`;
   /* 交运日优先用引擎自算的 luckOnset(与库逐日一致且口径可控)，老记录没这个字段才退回库值。 */
@@ -225,7 +228,7 @@ function NonAiAnalysis({ result, record }: { result?: NonAiChart; record: BaziRe
     ['公历日期', solarDateText(result, record)],
     ['五行', mapText(result.elements)], ['五行比例', formatElementRatio(result.elementRatio)],
     ['日主', result.dayMaster], ['十二长生', listText(result.twelveLongevity)],
-    ['起运', luckStartText(result, new Date().getFullYear())],
+    ['起运', luckStartText(result, chinaYear(new Date()))],
     ['袁天罡称骨', result.chenggu ? `${result.chenggu.totalText}，年${result.chenggu.parts.year}、月${result.chenggu.parts.month}、日${result.chenggu.parts.day}、时${result.chenggu.parts.hour}` : '暂无'],
   ];
   const columns: [string, string][] = [['四柱', fields[0][1]], ['藏干', listText(result.hiddenStems)], ['藏干十神', result.tenGodDetails.hidden.map((items) => items.map((item) => `${item.stem}${item.tenGod}`).join('、')).join('；') || '暂无'], ['十神', listText(result.tenGods)], ['纳音', listText(result.naYin)]];
@@ -233,8 +236,8 @@ function NonAiAnalysis({ result, record }: { result?: NonAiChart; record: BaziRe
   /* 完整大运表：把九步运的干支、十年区间、精确交运日全部列出，并高亮「今年所在」那一柱。
      AI 分析区的「④未来大运」只排起运晚于今年的运(避免整轮重算)，于是眼前正在走的那步运在
      那里看不到——这张表补的就是这一格，且它读的是本地排盘数据、不触发任何 AI 请求。 */
-  const today0 = new Date(); const todayYmd0 = `${today0.getFullYear()}-${String(today0.getMonth() + 1).padStart(2, '0')}-${String(today0.getDate()).padStart(2, '0')}`;
-  const currentGz = findCurrentFortune(result, today0.getFullYear(), todayYmd0)?.ganZhi;
+  const today0 = chinaDateParts(new Date()); const todayYmd0 = `${today0.year}-${String(today0.month).padStart(2, '0')}-${String(today0.day).padStart(2, '0')}`;
+  const currentGz = findCurrentFortune(result, today0.year, todayYmd0)?.ganZhi;
   const luckRows = result.greatFortunes ?? [];
   const yb = record.yearPillar?.[1] ?? '';
   const zs = yb && '子丑寅卯辰巳午未申酉戌亥'.includes(yb) ? interpersonalZodiac(yb) : null;

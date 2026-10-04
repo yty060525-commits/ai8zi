@@ -9,3 +9,16 @@ export function chinaYearMonth(value: string | Date): { year: number; month: num
   const shifted = new Date(date.getTime() + 8 * 60 * 60 * 1000);
   return { year: shifted.getUTCFullYear(), month: shifted.getUTCMonth() + 1 };
 }
+/** 北京时间下的年月日，month/day 为 1 基。界面里凡是要和排盘结果(流年、交运日)比「今天」的，
+ *  都必须走这里：设备时区不是东八区时，直接读本地 getFullYear/getMonth/getDate 会在
+ *  「UTC 16:00 之后北京已是次日」那一整天里错一天，年末交运的人会被整段报成上一柱。 */
+export function chinaDateParts(value: string | Date): { year: number; month: number; day: number } {
+  const date = typeof value === 'string' ? new Date(value) : value;
+  const shifted = new Date(date.getTime() + 8 * 60 * 60 * 1000);
+  return { year: shifted.getUTCFullYear(), month: shifted.getUTCMonth() + 1, day: shifted.getUTCDate() };
+}
+/** 北京时间下的 ISO 日期「YYYY-MM-DD」，月日补零 —— 与存量 onsetDate/endDate 同形态可直接比较。 */
+export function chinaYmd(value: string | Date): string {
+  const { year, month, day } = chinaDateParts(value);
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
