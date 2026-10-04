@@ -17,6 +17,17 @@ export function chinaDateParts(value: string | Date): { year: number; month: num
   const shifted = new Date(date.getTime() + 8 * 60 * 60 * 1000);
   return { year: shifted.getUTCFullYear(), month: shifted.getUTCMonth() + 1, day: shifted.getUTCDate() };
 }
+/** 北京时间下的年月日时分，month/day 为 1 基、hour 0–23、minute 0–59。
+ *  buildLabel 这类要把时刻读成人话的地方必须走它：本地 getHours()/getDate() 在非 +08
+ *  设备上会比北京早若干小时，跨午夜那一刻日期还会差一天。 */
+export function chinaDateTimeParts(value: string | Date): { year: number; month: number; day: number; hour: number; minute: number } {
+  const date = typeof value === 'string' ? new Date(value) : value;
+  const shifted = new Date(date.getTime() + 8 * 60 * 60 * 1000);
+  return {
+    year: shifted.getUTCFullYear(), month: shifted.getUTCMonth() + 1, day: shifted.getUTCDate(),
+    hour: shifted.getUTCHours(), minute: shifted.getUTCMinutes(),
+  };
+}
 /** 北京时间下的 ISO 日期「YYYY-MM-DD」，月日补零 —— 与存量 onsetDate/endDate 同形态可直接比较。 */
 export function chinaYmd(value: string | Date): string {
   const { year, month, day } = chinaDateParts(value);

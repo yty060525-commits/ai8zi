@@ -1,6 +1,8 @@
 /** 当前构建版本：与 sw.js 的缓存号同源(同一次构建生成的同一个时间戳)。
  *  构建时由 vite.config.ts 的 define 注入；测试/开发环境无注入时回退为 unknown，
  *  不至于让 UI 崩掉。 */
+import { chinaDateTimeParts } from './date';
+
 export const BUILD_ID: string = typeof __BUILD_ID__ === 'string' ? __BUILD_ID__ : 'unknown';
 
 const CN_DIGITS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
@@ -14,14 +16,18 @@ function cnSmall(n: number): string {
 
 /** 构建时间戳 → 中文读法。界面正文在正式版口径下不许出现阿拉伯数字与半角符号，
  *  所以版本号也翻成汉字：「二零二六年九月二十二日九时五分」。年逐位读、月日时按中文数读。
- *  同一次构建里 UI 显示与 SW 缓存号是同一个 id，所以看到哪个时间就是哪一版。 */
+ *  同一次构建里 UI 显示与 SW 缓存号是同一个 id，所以看到哪个时间就是哪一版。
+ *  ⚠ 年月日时分一律按北京口径取(chinaDateTimeParts)：这里原先直接读本地字段，
+ *  非 +08 设备会把同一版构建读成「前一天/前几小时」——而底部版本戳正是用来判断
+ *  「手机是不是旧版」的依据，读数差一天就会把人引向错误的结论。 */
 export function buildLabel(id: string = BUILD_ID): string {
   if (!/^\d{10,}$/.test(id)) return id;
   const at = new Date(Number(id));
   if (Number.isNaN(at.getTime())) return id;
+  const p = chinaDateTimeParts(at);
   // 年份逐位读，补到四位(闰年/极早年份不会短一位)。
-  const y = [...String(at.getFullYear()).padStart(4, '0')].map((d) => CN_DIGITS[+d]).join('');
-  return `${y}年${cnSmall(at.getMonth() + 1)}月${cnSmall(at.getDate())}日${cnSmall(at.getHours())}时${cnSmall(at.getMinutes())}分`;
+  const y = [...String(p.year).padStart(4, '0')].map((d) => CN_DIGITS[+d]).join('');
+  return `${y}年${cnSmall(p.month)}月${cnSmall(p.day)}日${cnSmall(p.hour)}时${cnSmall(p.minute)}分`;
 }
 
 /** SW 缓存号(mingli-<id>)：这是给运维核对用的机器标识，不参与展示 ——
