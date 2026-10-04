@@ -21,7 +21,11 @@ pub struct BaziRecord {
 }
 
 fn initialize(connection: &Connection) -> Result<(), String> {
-    connection.execute_batch("CREATE TABLE IF NOT EXISTS bazi_records (id TEXT PRIMARY KEY, name TEXT NOT NULL, gender TEXT NOT NULL, birth_year INTEGER NOT NULL, birth_month INTEGER NOT NULL, created_at TEXT NOT NULL, year_pillar TEXT NOT NULL, month_pillar TEXT NOT NULL, day_pillar TEXT NOT NULL, hour_pillar TEXT NOT NULL, non_ai_result TEXT, ai_status TEXT NOT NULL, ai_analysis TEXT, ai_overview TEXT, ai_error TEXT, ai_tasks TEXT)").map_err(|e| e.to_string())?;
+    // 建表语句必须与浏览器镜像(offlineSql.ts)、服务器(db.mjs)列集一致：三条整行读取 SQL 都是
+    // 按下标取值(row.get(16)=tone_used)，把新列只交给 ALTER 补的话，一旦那次迁移没跑到
+    // (引擎不支持 pragma_table_info 时 prepare 直接返回 Err，initialize 整个失败)，
+    // 桌面端每一次读列表都会报「index out of range」。老库仍靠下面 has_tone_used 那条 ALTER 升级。
+    connection.execute_batch("CREATE TABLE IF NOT EXISTS bazi_records (id TEXT PRIMARY KEY, name TEXT NOT NULL, gender TEXT NOT NULL, birth_year INTEGER NOT NULL, birth_month INTEGER NOT NULL, created_at TEXT NOT NULL, year_pillar TEXT NOT NULL, month_pillar TEXT NOT NULL, day_pillar TEXT NOT NULL, hour_pillar TEXT NOT NULL, non_ai_result TEXT, ai_status TEXT NOT NULL, ai_analysis TEXT, ai_overview TEXT, ai_error TEXT, ai_tasks TEXT, tone_used INTEGER)").map_err(|e| e.to_string())?;
     // 命中缓存：同一八字+性别+任务+年份的 AI 结果只算一次(成本优化)。
     // chart_sig = 键内「性别|四柱」段(第 2..6 列)，清盘缓存由 LIKE 全表扫描改为索引精确匹配。
     connection.execute("CREATE TABLE IF NOT EXISTS ai_cache (cache_key TEXT PRIMARY KEY, chart_sig TEXT, payload TEXT NOT NULL, created_at TEXT NOT NULL)", []).map_err(|e| e.to_string())?;
