@@ -40,7 +40,12 @@ describe('本机存储键的跨模块契约', () => {
     const cred = src(AI_SETTINGS);
     expect(count(cred, "'mingli.cred.'")).toBe(2);           // credKey() 定义 + 测试复位
     const repo = src(REPO);
-    expect(count(repo, "'mingli.pwa.records'")).toBe(3);      // nsKey 回退 / catch 回退 / 共享键认领
+    // 共享命名空间只许有**一处字面量**(SHARED_NS 的定义)：记录列表、待推送名单、换账号认领
+    // 三处都从它派生。旧版这里是 3(nsKey 的两个分支 + 认领逻辑各抄一份)，那正是这个键最危险
+    // 的形态 —— 任何一次「顺手改前缀」只会改掉其中一处，老用户的盘仍在设备上、列表却空了。
+    expect(count(repo, "'mingli.pwa.records'")).toBe(1);
+    expect(repo).toMatch(/const sharedDirtyKey = \(\): string => SHARED_NS \+ '\.dirty'/);
+    expect(repo).toMatch(/const dirtyKey = \(\) => nsKey\(\) \+ '\.dirty'/);
     expect(count(repo, "'mingli.records.'")).toBe(1);         // 账号命名空间前缀，只有 nsKey 一处
     expect(count(repo, "'mingli.record.owners'")).toBe(1);
   });
