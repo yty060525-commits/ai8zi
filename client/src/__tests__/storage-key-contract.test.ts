@@ -52,4 +52,24 @@ describe('本机存储键的跨模块契约', () => {
     expect(repo).not.toContain("'mingli.pwa.records.dirty'");
     expect(repo).toMatch(/const dirtyKey = \(\) => nsKey\(\) \+ '\.dirty'/);
   });
+
+  /* 中文读法词表(chineseReadAloud)的文件注释里写着它存在的理由：三处各抄一份时出现过
+     「已配置 零 条」这种空格分词与连写混着来的脏文案。实测详情页仍有两处复发
+     (自动重试第 N 次、清掉服务器 N 条缓存)，所以这里加一条源码层扫描：
+     拼接中文计数两侧不许留空格(模板串里的 ${} 本来就没有引号，不受影响)。 */
+  it('界面正文里的中文计数一律连写，不留「第 三 次」这种空格', () => {
+    const files = ['../features/person/PersonDetail.tsx', '../features/records/RecordsPage.tsx', '../features/settings/SettingsPage.tsx', '../data/chatEngine.ts'];
+    /* 判据只看中文串内部：闭合式写法「服务器上' + cnCount(n) + '条」两侧都没有空格，
+       而脏文案是「服务器上 ' … ' 条」—— 空格紧贴着汉字。引号与加号不参与匹配
+       (上一版拿 "' +" 当模式，把每一条正确写法都扫成了违规)。
+       注释里也不许留这种形状 —— 它本身就会被自己的判据扫到，所以整行跳过注释。 */
+    const spaced = /[\u4e00-\u9fff] ' \+ cnCount|cnCount\([^)]*\) \+ ' [\u4e00-\u9fff]/;
+    for (const rel of files) {
+      const hits = src(rel).split('\n')
+        .map((line, i) => [i + 1, line])
+        .filter(([, line]) => !/^\s*(\/\/|\*|\/\*)/.test(String(line)))
+        .filter(([, line]) => spaced.test(String(line)));
+      expect([rel, hits]).toEqual([rel, []]);
+    }
+  });
 });

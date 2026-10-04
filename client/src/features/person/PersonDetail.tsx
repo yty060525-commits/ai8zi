@@ -530,7 +530,7 @@ const sanitizeCopyLine = (line: string): string => {
     autoRetryCountRef.current += 1;
     const n = autoRetryCountRef.current;
     setAutoWaiting(true);
-    setHint('分析失败：将在十二秒后自动重新分析，这是第 ' + cnCount(n) + ' 次，共两次。也可以现在手动点批断分析，或取消自动重试。');
+    setHint('分析失败：将在十二秒后自动重新分析，这是第' + cnCount(n) + '次，共两次。也可以现在手动点批断分析，或取消自动重试。');
     autoTimerRef.current = setTimeout(() => {
       autoTimerRef.current = undefined;
       setAutoWaiting(false);
@@ -630,7 +630,7 @@ const sanitizeCopyLine = (line: string): string => {
     let cacheNote = '';
     try {
       const removed = await clearChartCache({ gender: record.gender, yearPillar: record.yearPillar, monthPillar: record.monthPillar, dayPillar: record.dayPillar, hourPillar: record.hourPillar }, record.id);
-      cacheNote = removed > 0 ? '，并清掉服务器上 ' + cnCount(removed) + ' 条命中缓存' : '，该盘在服务器上本无缓存';
+      cacheNote = removed > 0 ? '，并清掉服务器上' + cnCount(removed) + '条命中缓存' : '，该盘在服务器上本无缓存';
     } catch { cacheNote = '，但服务器缓存没清掉：下次分析可能仍复用旧结果'; }
     onUpdated(cleared);
     setDisabledTasks(new Set()); setDisabledDims(new Set());
