@@ -151,7 +151,7 @@ export function RecordsPage({ onOpenPerson, refreshKey = 0 }: RecordsPageProps) 
           {'导出勾选，已选' + cnCount(selectedIds.size) + '人'}
         </button>
         {selectedIds.size > 0 && <button className="text-button tiny" type="button" onClick={() => setSelectedIds(new Set())}>清空勾选</button>}
-        <span className="copy-help">提示：点小方格左上角的小方框勾选人物，可多选，再点导出勾选在弹出的面板里确认后导出。</span>
+        <span className="copy-help">提示：点小方格左侧的小方框勾选人物，可多选，再点导出勾选在弹出的面板里确认后导出。</span>
       </div>
       {exportNote && <p role="status">{exportNote}</p>}
 
