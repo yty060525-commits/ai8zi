@@ -15,11 +15,24 @@ const inTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in 
 const credKey = (provider: AiProvider) => 'mingli.cred.' + provider;
 const isProdBrowser = () => !inTauri() && import.meta.env.MODE !== 'test';
 export function getBrowserCredential(provider: AiProvider): string | undefined {
-  try { return localStorage.getItem(credKey(provider)) ?? undefined; } catch { return undefined; }
+  try {
+    // 读取侧同样要 trim，否则「保存/显示」与「真正发请求」用的不是同一份值：
+    // 改动前只有写入侧去空白，而存量脏值(带空格或纯空白)仍会被下面的 truthiness 报成
+    // 「已配置」，设置页四格亮着灯，deepseekAdapter 却把那份带空白的串发给上游 ⇒ 必失败。
+    // trim 后为空就返回 undefined，等于「这条通道没配」，与桌面端、服务器同口径。
+    const raw = localStorage.getItem(credKey(provider));
+    const trimmed = raw?.trim();
+    return trimmed ? trimmed : undefined;
+  } catch { return undefined; }
 }
 export async function saveAiCredential(provider: AiProvider, secret: string): Promise<CredentialStatus> {
-  if (isProdBrowser()) { localStorage.setItem(credKey(provider), secret); return 'configured'; }
-  return invoke<CredentialStatus>('save_ai_credential', { provider, secret });
+  // 与另两端同口径：桌面端 save_ai_credential 见空密钥直接报「密钥不能为空」，服务器 saveProviderKey
+  // 要求 key.trim()。网页版过去照原样落库，粘贴时多带一个空格就显示「已配置」，
+  // 而那份串发给上游必失败 —— 所以这里既拒绝空白，也顺手去掉首尾空白再存。
+  const trimmed = (secret ?? '').trim();
+  if (!trimmed) return 'not_configured';
+  if (isProdBrowser()) { localStorage.setItem(credKey(provider), trimmed); return 'configured'; }
+  return invoke<CredentialStatus>('save_ai_credential', { provider, secret: trimmed });
 }
 
 export async function clearAiCredential(provider: AiProvider): Promise<CredentialStatus> {
