@@ -4,6 +4,9 @@ import { cnCode } from '../shared/chineseReadAloud';
 
 /* ---------------- 服务器与账号会话(设备记住) ---------------- */
 export interface ServerSession { token: string; username: string; role: 'admin' | 'user' }
+/** 这两个键是**跨文件契约**：设置页/测试用同一串字面量读写它们(storage-key-contract 那条判据钉住)，
+ *  而 clientRepository 的 nsKey() 靠 getServerSession() 的结果决定本机数据放哪一份命名空间。
+ *  改任何一串都不会报错，只会让老用户的盘、服务器地址和登录态在设备上「凭空消失」。 */
 const K_URL = 'mingli.server.url';
 const K_SESSION = 'mingli.server.session';
 const safeStorage = {

@@ -17,6 +17,18 @@ const SERVER_CLIENT = '../data/serverClient.ts';
 const CHAT_ENGINE = '../data/chatEngine.ts';
 const REPO = '../data/clientRepository.ts';
 
+/** 从真实模块的源码里读出它写死的那个 localStorage 键名，**不在本文件抄第二份字面量**：
+ *  判据要比的是「A 文件写的键」和「B 文件读的键」是不是同一个名字 —— 若这里写死字符串，
+ *  两处一起改名就测不出来了(实测：K_SESSION 改名后 settings-page 三条用例红，而写死字面量的
+ *  扫描照旧绿)。读不到定义就当契约断了，因为下一个分支就是「有人新抄了一份」。 */
+const keyLiteralFromSource = (rel: string, decl: RegExp): string => {
+  const hit = src(rel).match(decl);
+  if (!hit) throw new Error(`${rel} 里找不到 ${decl.source} —— 键名定义被挪走或删掉了`);
+  return hit[1];
+};
+const K_URL = keyLiteralFromSource(SERVER_CLIENT, /const K_URL = '([^']+)'/);
+const K_SESSION = keyLiteralFromSource(SERVER_CLIENT, /const K_SESSION = '([^']+)'/);
+
 describe('本机存储键的跨模块契约', () => {
   it('「当前使用通道」这一键：写侧与三个读侧用的是同一串字面量', () => {
     const KEY = "'mingli.provider'";
@@ -56,6 +68,24 @@ describe('本机存储键的跨模块契约', () => {
     const repo = src(REPO);
     expect(repo).not.toContain("'mingli.pwa.records.dirty'");
     expect(repo).toMatch(/const dirtyKey = \(\) => nsKey\(\) \+ '\.dirty'/);
+  });
+
+  /* 登录态与服务器地址这两个键决定两件事：设置页重启后还认不认得出「已登录」，以及
+     clientRepository 把本机数据放进哪一份命名空间(nsKey() 读 getServerSession())。
+     键名只许在 serverClient 定义一次；测试与界面若各抄一份，改了产品那份就等于把老用户的
+     登录态和盘一起留在设备上、界面上却什么都看不见。 */
+  it('服务器地址与会话键只在 serverClient 定义一处，测试与界面都从它派生', () => {
+    const sc = src(SERVER_CLIENT);
+    expect(count(sc, "'mingli.server.url'")).toBe(1);
+    expect(count(sc, "'mingli.server.session'")).toBe(1);
+    // 读写两侧都走常量，不许出现裸字面量(那正是「顺手改一处」会漏掉的第二份)
+    expect(sc).toMatch(/const getServerUrl[\s\S]{0,80}safeStorage\.get\(K_URL\)/);
+    expect(sc).toMatch(/const getServerSession[\s\S]{0,80}safeStorage\.get\(K_SESSION\)/);
+    // 上面两个常量就是从这份源码里读出来的；读不到就直接抛错，所以这里断言的是「名字仍是那一串」
+    expect([K_URL, K_SESSION]).toEqual(['mingli.server.url', 'mingli.server.session']);
+    // 测试侧(settings-page)写的会话键必须与产品读的是同一个：它写的是字面量，所以拿真实模块比对
+    const settingsTest = src('../__tests__/settings-page.test.tsx');
+    expect(count(settingsTest, "'" + K_SESSION + "'"), '测试里另抄了一份会话键 → 改名时两边不会一起红').toBeGreaterThan(0);
   });
 
   /* 中文读法词表(chineseReadAloud)的文件注释里写着它存在的理由：三处各抄一份时出现过
