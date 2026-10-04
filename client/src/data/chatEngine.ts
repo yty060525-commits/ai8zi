@@ -19,6 +19,10 @@ import { isServerMode, serverFetch, ServerError } from './serverClient';
 import { chatDirect, toneInstructionText } from './deepseekAdapter';
 import { getBrowserCredential } from './aiSettings';
 import { countElements, sanitizeChatText } from '../features/chart/elements';
+/* 「本月/今年」这类相对时间锚点必须按北京口径读，不能用设备本地字段：机器时区不是东八区时，
+   UTC 16:00–24:00 那段本地日期比北京早一天，「本月」会答成上个月、「今年」会答成去年。
+   与详情页起运文案/大运表同一套收口(utils/date)，见 beijing-date-caliber.test.ts。 */
+import { chinaDateParts, chinaYear } from '../utils/date';
 
 export interface ChatMessage { role: 'user' | 'assistant'; content: string }
 export interface ChatPlan { recordId: string | null; personName: string | null; matchedCount: number; year?: number; month?: number; topics: string[]; question?: string; scan?: boolean; scanFrom?: number; general?: boolean }
@@ -73,9 +77,11 @@ function monthFromText(text: string, now: Date): number | undefined {
     const m = /^\d/.test(hit[1]) ? Number(hit[1]) : CN_MONTHS[hit[1]];
     if (m !== undefined && m >= 1 && m <= 12) return m;
   }
-  if (/本月|这个月|当月|这月/.test(q)) return now.getMonth() + 1;
-  if (/下个月|下月|来月/.test(q)) return now.getMonth() + 2 > 12 ? 1 : now.getMonth() + 2;
-  if (/上个月|上月/.test(q)) return now.getMonth() === 0 ? 12 : now.getMonth();
+  /* 这里只取北京月份：本地 getMonth() 在非 +08 设备上会比北京早一个月(跨年那一刻还跨年)。 */
+  const cm = chinaDateParts(now).month;
+  if (/本月|这个月|当月|这月/.test(q)) return cm;
+  if (/下个月|下月|来月/.test(q)) return cm + 1 > 12 ? 1 : cm + 1;
+  if (/上个月|上月/.test(q)) return cm === 1 ? 12 : cm - 1;
   return undefined;
 }
 
@@ -85,6 +91,8 @@ function monthFromText(text: string, now: Date): number | undefined {
 export function extractWhen(question: string, now = new Date()): { year?: number; month?: number; scan?: boolean; from?: number } {
   const q = String(question || '');
   let year: number | undefined; let month: number | undefined;
+  /* 「今年/明年/去年」的锚点年份同样走北京口径(chinaYear)，理由见文件头的导入注释。 */
+  const nowYear = chinaYear(now);
   const abs = q.match(/(20\d{2})\s*年/) || q.match(/(?:^|[^\d.])(\d{2})\s*年(?![\d])/);
   if (abs) {
     const raw = Number(abs[1]);
@@ -92,15 +100,15 @@ export function extractWhen(question: string, now = new Date()): { year?: number
   }
   if (year === undefined) {
     for (const [word, delta] of Object.entries(RELATIVE_YEAR)) {
-      if (q.includes(word)) { year = now.getFullYear() + delta; break; }
+      if (q.includes(word)) { year = nowYear + delta; break; }
     }
   }
   month = monthFromText(q, now);
-  if (month !== undefined && year === undefined) year = now.getFullYear(); // 月份必然锚定在某一年
+  if (month !== undefined && year === undefined) year = nowYear; // 月份必然锚定在某一年
   // 年份与月份都没落地、且句子确实在开放式问时机 → 才转扫年。「明年什么时候」有年份锚点，不走这里。
   if (year === undefined && month === undefined && OPEN_TIMING_RE.test(q)) {
     const rel = Object.entries(RELATIVE_YEAR).find(([word]) => q.includes(word));
-    return { year: undefined, month: undefined, scan: true, from: now.getFullYear() + (rel ? rel[1] : 0) };
+    return { year: undefined, month: undefined, scan: true, from: nowYear + (rel ? rel[1] : 0) };
   }
   return { year, month };
 }
@@ -313,7 +321,7 @@ export function buildEvidence(record: BaziRecord, plan: ChatPlan): ChatEvidence 
   if (wantsScan) {
     // 开放式时机提问：把未来若干年的流年批断逐条列成时间线，让模型在证据里挑年限
     const labels = topics.length ? topics : ['健康', '事业', '财运', '爱情', '刑冲克害批注'];
-    const from = Number(plan.scanFrom ?? new Date().getFullYear());
+    const from = Number(plan.scanFrom ?? chinaYear(new Date()));
     const lines: string[] = []; const gaps: number[] = []; const uncovered: number[] = [];
     for (let y = from; y < from + SCAN_YEARS; y += 1) {
       const annual = findCompleted(tasks, 'annual', y);

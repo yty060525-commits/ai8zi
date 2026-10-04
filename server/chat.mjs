@@ -20,6 +20,17 @@ import { natalFactsOf, providerOrder, providerKey, clampTone, toneInstruction, c
 /* 正文中文闸门：与浏览器端共用的唯一一份实现(features/chart/elements.ts 再导出同一模块)。 */
 import { FIELD_NAME_ZH, isChineseOnly, nonChineseKinds, enforceChinese, sanitizeChatText } from '../client/src/shared/chineseGate.ts';
 
+/* 「本月/今年」这类相对时间锚点按北京口径读，不用宿主时区的本地字段。
+   服务端从未设置 process.env.TZ，于是读数取决于部署机：机器不在东八区时，
+   UTC 16:00–24:00 这一整天里「本月」会答成上个月、「今年」会答成去年，
+   递给模型的证据整段换到另一个年份。与客户端 chatEngine / PersonDetail 同一套收口，
+   判据见 client/src/__tests__/beijing-chat-anchor.test.ts 与 server/test/chat-timezone.test.mjs。 */
+const chinaParts = (value) => {
+  const d = typeof value === 'string' ? new Date(value) : value;
+  const shifted = new Date(d.getTime() + 8 * 60 * 60 * 1000);
+  return { year: shifted.getUTCFullYear(), month: shifted.getUTCMonth() + 1 };
+};
+
 /* ---------- 提问理解(检索计划) ---------- */
 /** 主题规则：命中即作为检索的节标签/证据范围。顺序即展示优先级。 */
 export const TOPIC_RULES = [
@@ -55,9 +66,12 @@ function monthFromText(text, now) {
     const m = /^\d/.test(hit[1]) ? Number(hit[1]) : CN_MONTHS[hit[1]];
     if (m >= 1 && m <= 12) return m;
   }
-  if (/本月|这个月|当月|这月/.test(q)) return now.getMonth() + 1;
-  if (/下个月|下月|来月/.test(q)) return now.getMonth() + 2 > 12 ? 1 : now.getMonth() + 2;
-  if (/上个月|上月/.test(q)) return now.getMonth() === 0 ? 12 : now.getMonth();
+  /* 北京月份只算一次：下面三个相对月说法共用它(原先「本月」分支自己 return 了一次，
+     紧接着又声明同值的 cm —— 那行是永远走不到的死代码)。 */
+  const cm = chinaParts(now).month;
+  if (/本月|这个月|当月|这月/.test(q)) return cm;
+  if (/下个月|下月|来月/.test(q)) return cm + 1 > 12 ? 1 : cm + 1;
+  if (/上个月|上月/.test(q)) return cm === 1 ? 12 : cm - 1;
   return undefined;
 }
 
@@ -68,6 +82,8 @@ function monthFromText(text, now) {
 export function extractWhen(question, now = new Date()) {
   const q = String(question || '');
   let year; let month;
+  /* 「今年/明年/去年」的锚年与「本月」同源，都走北京口径(见文件头 chinaParts 注释)。 */
+  const nowYear = chinaParts(now).year;
   const abs = q.match(/(20\d{2})\s*年/) || q.match(/(?:^|[^\d.])(\d{2})\s*年(?![\d])/);
   if (abs) {
     const raw = Number(abs[1]);
@@ -78,15 +94,15 @@ export function extractWhen(question, now = new Date()) {
   }
   if (year === undefined) {
     for (const [word, delta] of Object.entries(RELATIVE_YEAR)) {
-      if (q.includes(word)) { year = now.getFullYear() + delta; break; }
+      if (q.includes(word)) { year = nowYear + delta; break; }
     }
   }
   month = monthFromText(q, now);
-  if (month !== undefined && year === undefined) year = now.getFullYear(); // 月份必然锚定在某一年
+  if (month !== undefined && year === undefined) year = nowYear; // 月份必然锚定在某一年
   // 年份与月份都没落地、且句子确实在开放式问时机 → 才转扫年。「明年什么时候」有年份锚点，不走这里。
   if (year === undefined && month === undefined && OPEN_TIMING_RE.test(q)) {
     const rel = Object.entries(RELATIVE_YEAR).find(([word]) => q.includes(word));
-    return { year: undefined, month: undefined, scan: true, from: now.getFullYear() + (rel ? rel[1] : 0) };
+    return { year: undefined, month: undefined, scan: true, from: nowYear + (rel ? rel[1] : 0) };
   }
   return { year, month };
 }
@@ -246,7 +262,7 @@ export function collectEvidence(db, record, plan, { tone = 80, periodFacts, prov
     // 开放式时机提问：把未来若干年的流年批断逐条列成时间线，让模型在证据里挑年限，
     // 而不是被迫回答「数据库里没有」。缺哪一年就逐个点名，别再笼统说「没有数据」。
     const labels = wantTopics.length ? wantTopics : ['健康', '事业', '财运', '爱情', '刑冲克害批注'];
-    const from = Number(plan.scanFrom ?? new Date().getFullYear());
+    const from = Number(plan.scanFrom ?? chinaParts(new Date()).year);
     const lines = [];
     const gaps = [];
     const uncovered = [];

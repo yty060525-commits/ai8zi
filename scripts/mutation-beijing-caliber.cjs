@@ -19,8 +19,14 @@ const ROOT = 'C:/Users/yty06/Documents/ai/bbazi/ai 8zi/ai 8zi/ai 8zi';
 const FILES = {
   date: 'client/src/utils/date.ts',
   detail: 'client/src/features/person/PersonDetail.tsx',
+  chat: 'client/src/data/chatEngine.ts',
 };
-const TEST = 'src/__tests__/beijing-date-caliber.test.ts';
+/* 两套判据、一条链：详情页的「今天」与聊天引擎的「本月/今年」都必须走北京口径。
+   电池把两组变异分别喂给对应的判据文件，任一漏判都报 SURVIVED。 */
+const TESTS = {
+  detail: 'src/__tests__/beijing-date-caliber.test.ts',
+  chat: 'src/__tests__/beijing-chat-anchor.test.ts',
+};
 const Q = String.fromCharCode(39); // 单引号，靠码位拼出来，别在字面量里嵌转义
 
 const originals = {};
@@ -37,6 +43,7 @@ const TOK = new Map([
   ['@SQstr@', `${Q}string${Q}`],
   ['@SQ70@', `${Q}1970-01-01${Q}`],
   ['@SLASH@', `${Q}../../utils/date${Q}`],
+  ['@CHATSLASH@', `${Q}../utils/date${Q}`],
 ]);
 const expand = (s) => s.replace(/@[A-Z0-9_]+@/g, (m) => {
   if (!TOK.has(m)) throw new Error('未知占位符 ' + m);
@@ -75,6 +82,24 @@ const mutants = [
   { name: 'B8 起运那一栏传给文案的年份退回本地 getFullYear', file: 'detail',
     from: 'luckStartText(result, chinaYear(new Date()))',
     to: 'luckStartText(result, new Date().getFullYear())' },
+  /* —— C 组：聊天引擎的相对时间锚点(判据文件 = beijing-chat-anchor.test.ts) ——
+     这一组是详情页修完之后扫「同类缺陷」扫出来的第二处消费点：monthFromText/extractWhen
+     原本直接读 now.getMonth()/now.getFullYear()，UTC 设备上「本月」答成上个月。 */
+  { name: 'C1 「本月」退回设备本地月(原缺陷形态)', file: 'chat', suite: 'chat',
+    from: 'const cm = chinaDateParts(now).month;',
+    to: 'const cm = now.getMonth() + 1;' },
+  { name: 'C2 「今年/明年/去年」的锚年退回本地 getFullYear', file: 'chat', suite: 'chat',
+    from: 'const nowYear = chinaYear(now);',
+    to: 'const nowYear = now.getFullYear();' },
+  { name: 'C3 扫年起点退回本地年(buildEvidence 兜底分支)', file: 'chat', suite: 'chat',
+    from: 'Number(plan.scanFrom ?? chinaYear(new Date()))',
+    to: 'Number(plan.scanFrom ?? new Date().getFullYear())' },
+  { name: 'C4 扫年窗口里 plan.year 没落地时退回本地年', file: 'chat', suite: 'chat',
+    from: 'from: nowYear + (rel ? rel[1] : 0) };',
+    to: 'from: now.getFullYear() + (rel ? rel[1] : 0) };' },
+  { name: 'C5 聊天引擎不再导入北京口径(改成同名本地桩)', file: 'chat', suite: 'chat',
+    from: 'import { chinaDateParts, chinaYear } from @CHATSLASH@;',
+    to: 'const chinaDateParts = (d: any) => ({ year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate() });\nconst chinaYear = (d: any) => d.getFullYear();' },
 ];
 
 /** 应用一条变异：单锚点、命中数须恰好 1，落地后回读自证(新串在场且旧锚点消失)。 */
@@ -94,12 +119,12 @@ function apply(m) {
 }
 const restore = () => { for (const [f, text] of Object.entries(originals)) writeFileSync(resolve(ROOT, f), text); };
 
-function runTest() {
+function runTest(suite) {
   /* npx 在 Windows 上是 .cmd，execFileSync 不带 shell 会 ENOENT —— 上一版把它当成
      「判据本身没通过」(BASELINE RED)，差点把环境问题读成测试问题。走 shell:true，
      并且区分「跑失败」与「跑出红」：连 json 都没产出就报 BAD-RUN，不算杀掉。 */
   const outName = 'bj-mut.json';
-  const r = spawnSync('npx vitest run ' + TEST + ' --reporter=json --outputFile=' + outName,
+  const r = spawnSync('npx vitest run ' + TESTS[suite] + ' --reporter=json --outputFile=' + outName,
     { cwd: resolve(ROOT, 'client'), shell: true, encoding: 'utf8' });
   if (r.error) return { bad: true, why: 'SPAWN ' + r.error.message.slice(0, 60) };
   let j;
@@ -130,20 +155,21 @@ console.log(`preflight: ${mutants.length}/${mutants.length} 锚点唯一命中�
 const baselineNet = execFileSync('git', ['-C', ROOT, 'diff', '--numstat', '--', ...Object.values(FILES)], { encoding: 'utf8' }).trim();
 console.log(`进入电池前的基线 git diff --numstat:\n${baselineNet || '(empty)'}\n`);
 
-/* 基线自证：未变异时必须全绿，否则后面的 KILLED 只是「本来就红」。跑不起来(rc/无 json)
+/* 基线自证：未变异时两套判据都必须全绿，否则后面的 KILLED 只是「本来就红」。跑不起来(rc/无 json)
    与跑出红是两回事，分开报，别把环境问题读成判据问题。 */
-{
-  const base = runTest();
-  if (base.bad) { console.log('BASELINE BAD-RUN(测试没跑成，不算红): ' + base.why); process.exit(4); }
-  if (base.killed) { console.log('BASELINE RED(判据本身就没通过，先修它): ' + base.why); process.exit(3); }
-  console.log('baseline: all green\n');
+for (const suite of Object.keys(TESTS)) {
+  const base = runTest(suite);
+  if (base.bad) { console.log(`BASELINE BAD-RUN(${suite}，测试没跑成，不算红): ` + base.why); process.exit(4); }
+  if (base.killed) { console.log(`BASELINE RED(${suite}，判据本身就没通过，先修它): ` + base.why); process.exit(3); }
+  console.log(`baseline ${suite}: all green`);
 }
+console.log('');
 
 let killed = 0;
 const rows = [];
 for (const m of mutants) {
   let r;
-  try { apply(m); r = runTest(); }
+  try { apply(m); r = runTest(m.suite || 'detail'); }
   catch (e) { r = { bad: true, why: 'APPLY FAILED ' + e.message.slice(0, 80) }; }
   restore();
   if (r.bad) { console.log('BAD-RUN ' + m.name + ' → ' + r.why); process.exit(4); }
