@@ -5,6 +5,7 @@ import { cancelAiSession } from '../../data/deepseekAdapter';
 import { isServerMode } from '../../data/serverClient';
 import { sanitizeAnalysisText } from '../chart/elements';
 import { recordTone } from '../person/PersonDetail';
+import { cnCount, cnYear } from '../../shared/chineseReadAloud';
 
 /** 聊天语气与「AI 分析」滑杆同一把尺：按当前这条盘取本机偏好(选过→上次跑→全局默认)。 */
 
@@ -37,15 +38,14 @@ function publish(patch: Partial<ChatState>) {
 let sharedAbort: AbortController | null = null;
 
 /** 标注这条回答查的是谁、命中的是哪段时间(多命主时尤其需要)。
- *  年份逐位读成中文：界面正文里不许留阿拉伯数字与间隔号这类算法痕迹。 */
-const CN_DIGITS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
-const cnYear = (n: number): string => String(n).split('').map((d) => CN_DIGITS[+d] ?? d).join('');
+ *  数字读法走 shared/chineseReadAloud 单一词表：年份逐位、月份整体读，
+ *  与详情页任务卡同口径(「二零二六年十月」)，界面正文里不许留阿拉伯数字与间隔号这类算法痕迹。 */
 function aboutOf(reply: ChatReply): string {
   const evidence = reply.evidence;
   if (!evidence?.personName) return '';
   const year = evidence.plan?.year;
   const month = evidence.plan?.month;
-  return '依据：' + evidence.personName + (year ? '，' + cnYear(year) + '年' + (month ? cnYear(month) + '月' : '') : '，本命');
+  return '依据：' + evidence.personName + (year ? '，' + cnYear(year) + '年' + (month ? cnCount(month) + '月' : '') : '，本命');
 }
 
 /** 清空对话：中断在途请求并回到空会话。 */

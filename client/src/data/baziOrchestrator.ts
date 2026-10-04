@@ -5,6 +5,7 @@ import { readableTransportError } from './deepseekAdapter';
 import { chinaYearMonth } from '../utils/date';
 import { ELEMENT_GUIDES, primaryElement, type ElementGuide } from './elementKnowledge';
 import { sanitizeAnalysisText } from '../features/chart/elements';
+import { cnCount, cnYear } from '../shared/chineseReadAloud';
 export type TaskRunner = (task: BaziAnalysisTask, payload: { nonAiResult: BaziRecord['nonAiResult']; task: BaziAnalysisTask }) => Promise<BaziTaskResult>;
 export interface AiProgress { done: number; total: number; label: string; record: BaziRecord; }
 export type ProgressFn = (progress: AiProgress) => void | Promise<void>;
@@ -108,17 +109,15 @@ export async function fixedMapLimit<T>(items: T[], concurrency: number, worker: 
 }
 
 /** 进度条上的任务名：界面文案在正式版口径下不许出现阿拉伯数字与半角括号，
- *  所以年份逐位读成汉字(补零到两位，「零九」不会读成「九」)。工具函数放这一层，
- *  客户端两条通道(编排器进度与详情页展示)共用。 */
-const CN_DIGITS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
-const cnDigits = (n: number): string => String(n).split('').map((d) => CN_DIGITS[Number(d)] ?? d).join('');
-const readYear = (n: number): string => cnDigits(n);
-const readPadded = (n: number): string => cnDigits(Number(String(n).padStart(2, '0')));
+ *  所以年份逐位读成汉字。读法一律走 shared/chineseReadAloud 那一份单一词表：
+ *  月份与详情页 scopeLabel 同用 cnCount(「十月」而非「一零月」)，否则同一屏里
+ *  进度条和任务卡对同一个任务会念出两种名字。 */
+const readYear = (n: number): string => cnYear(n);
 
 const taskLabel = (task: BaziAnalysisTask): string => {
   if (task.type === 'baseline') return '本命命局分析';
   if (task.type === 'annual') return task.year !== undefined ? readYear(task.year) + '年流年' : '流年';
-  if (task.type === 'monthly') return task.year !== undefined && task.month !== undefined ? readYear(task.year) + '年' + readPadded(task.month) + '月' : '流月';
+  if (task.type === 'monthly') return task.year !== undefined && task.month !== undefined ? readYear(task.year) + '年' + cnCount(task.month) + '月' : '流月';
   if (task.type === 'decade') return task.year !== undefined ? '大运段、' + readYear(task.year) : '大运段';
   if (task.type === 'adjustment') return '后天调整与职业适配，按喜用五行';
   if (task.type === 'overview') return '全盘总结，值得关注的时间节点';
@@ -259,7 +258,7 @@ export function collectFindings(record: BaziRecord, aiTasks: Record<string, Bazi
       const range = typeof start === 'number' && typeof end === 'number' ? '大运段、' + readYear(start) + '至' + readYear(end) : '大运段';
       return (gf?.ganZhi ? gf.ganZhi + '、' : '') + range;
     }
-    if (task.type === 'monthly') return readYear(task.year ?? 0) + '年' + readPadded(task.month ?? 0) + '月' + (task.monthly?.ganZhi ? '，干支' + task.monthly.ganZhi : '');
+    if (task.type === 'monthly') return readYear(task.year ?? 0) + '年' + cnCount(task.month ?? 0) + '月' + (task.monthly?.ganZhi ? '，干支' + task.monthly.ganZhi : '');
     return readYear(task.year ?? 0) + '年' + (task.annual?.ganZhi ? '，干支' + task.annual.ganZhi : '');
   };
   const bucket = (type: BaziTaskType) => tasks
@@ -465,7 +464,7 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
   if (stillFailed.length > 0 && !signal?.aborted) {
     const waitMs = isTest ? 0 : REPAIR_WAIT_MS;
     if (waitMs > 0) await sleep(waitMs);
-    if (!signal?.aborted) await onProgress?.({ done, total: tasks.length, label: '自动重试失败任务，共' + cnDigits(stillFailed.length) + '条', record: snapshot() });
+    if (!signal?.aborted) await onProgress?.({ done, total: tasks.length, label: '自动重试失败任务，共' + cnCount(stillFailed.length) + '条', record: snapshot() });
     const repairStep = async (task: BaziAnalysisTask): Promise<BaziTaskResult> => {
       ensureLive();
       const sanitizeDone = (r: BaziTaskResult): BaziTaskResult => r.status === 'completed' && r.analysis ? { ...r, analysis: sanitizeAnalysis(r.analysis) } : r;
