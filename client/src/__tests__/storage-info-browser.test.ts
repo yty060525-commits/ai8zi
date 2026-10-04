@@ -49,10 +49,10 @@ afterEach(() => {
 
 describe('storageInfo 的浏览器路径(整模块桩掉时永远走不到)', () => {
   it('桌面版标记存在时一律转给 Tauri 命令，且参数按名传过去', async () => {
-    const invoke = vi.fn(async (cmd: string) => (cmd === 'get_storage_stats'
+    const invoke = vi.fn(async (cmd: string, args?: Record<string, unknown>) => (cmd === 'get_storage_stats'
       ? { records: 7, cacheEntries: 3, dbBytes: 4096 }
       : cmd === 'compact_records' ? { changedRecords: 2 }
-        : cmd === 'clear_chart_cache' ? 9 : { ok: true, provider: 'qwen' }));
+        : cmd === 'clear_chart_cache' ? ((void args), 9) : { ok: true, provider: 'qwen' }));
     (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = { invoke };
     try {
       const storageInfo = await import('../data/storageInfo');
