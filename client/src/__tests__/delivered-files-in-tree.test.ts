@@ -102,6 +102,40 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
       expect(paths, `${tag} 的树里没有 scopeNotes.ts`).toContain('client/src/data/scopeNotes.ts');
     }
   });
+
+  /* 特征串账本：纯改行为的功能没有新文件可登记(比如「大运段覆盖十年窗口」只是把已有函数改了判据)，
+     于是钉在它**留在源码里的那句人话**上。这些串都是先逐条在 HEAD 树里实测过才登记的 ——
+     没核实过的串会把闸门写成永红，下次改动时被人当成噪音直接删掉，闸门就废了。 */
+  const MARKERS: Array<{ task: string; file: string; text: string }> = [
+    { task: '#79 大运段覆盖未来十年窗口', file: 'client/src/data/baziOrchestrator.ts', text: '与十年窗口有交集' },
+    { task: '#34 大运「覆盖年」检索', file: 'client/src/features/chart/nonAiCalculator.ts', text: '覆盖年' },
+    { task: '#36 小节检索兜底收紧', file: 'client/src/data/chatEngine.ts', text: 'sliceSections' },
+    { task: '#41 默认通道=通道三千问', file: 'client/src/data/aiSettings.ts', text: '通道三千问' },
+    { task: '#92 详情页勾选式复制入口', file: 'client/src/features/person/PersonDetail.tsx', text: '复制勾选内容' },
+    { task: '#91 记录页全选入口', file: 'client/src/features/records/RecordsPage.tsx', text: '全选当前' },
+    { task: '#59/#60 早子时换日', file: 'client/src/features/chart/nonAiCalculator.ts', text: '早子时' },
+    { task: '#42 农历/闰月输入', file: 'client/src/features/chart/ChartPage.tsx', text: '闰月' },
+    /* #78「网页版连通自检如实说明」的落点在 storageInfo.ts，但那句中文文案后来被改写过(实测：
+       按原话登记会红)。这里钉的是**仍然在树上的**函数名而不是文案 —— 特征串必须是当场核实过的，
+       否则这条闸门会在下一次正常改动里被当成噪音删掉。 */
+    { task: '#78 AI 连通自检入口', file: 'client/src/data/storageInfo.ts', text: 'runAiSelfTest' },
+    { task: '#83 wiki 知识库', file: 'docs/wiki/README.md', text: '#' },
+    { task: '#16/#81 gh-pages 发布脚本', file: 'scripts/deploy-pages2.mjs', text: 'gh-pages' },
+  ];
+
+  it.each(MARKERS)('任务 $task 的特征串必须在 $file 里', ({ task, file, text }) => {
+    const inTree = git(['show', `HEAD:${file}`]);
+    expect(inTree, `HEAD 上 ${file} 里找不到「${text}」—— $task 的实现可能已不在当前分支`).toContain(text);
+  });
+
+  it('特征串账本非空且每条都真能在树上取到(防止登记被掏空后全绿)', () => {
+    /* 反向钉子：it.each 遇到空数组会「零条通过」而整块变绿，所以这里显式钉住登记数量下限。
+       实测：把 MARKERS 清空，上面那组一条都不生成，只有这一句会红。 */
+    expect(MARKERS.length, '特征串账本被掏空了').toBeGreaterThanOrEqual(8);
+    for (const m of MARKERS) {
+      expect(git(['show', `HEAD:${m.file}`]), `树上取不到 ${m.file}`).toContain(m.text);
+    }
+  });
 });
 
 /* ============================================================================
