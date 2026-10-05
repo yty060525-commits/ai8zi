@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { PersonDetail } from '../features/person/PersonDetail';
 import { initializeMockSession, resetMockSession } from '../data/clientRepository';
-import type { BaziRecord, BaziTaskResult } from '../types/domain';
+import type { BaziRecord, BaziTaskResult, Person } from '../types/domain';
 
 const task = (taskId: string, type: BaziTaskResult['task']['type'], explanation: string): BaziTaskResult => ({
   task: { taskId, type },
@@ -26,7 +26,7 @@ const record: BaziRecord = {
     'task-02': task('task-02', 'annual', '【事业】宜守成。\n【财运】稳中进财。'),
   },
 };
-const person = [{ id: 'chip-person', name: '芯片测试', nameInitial: 'J', gender: 'male', birthSummary: '甲子年' }];
+const person: Person[] = [{ id: 'chip-person', name: '芯片测试', nameInitial: 'J', gender: 'male', birthSummary: '甲子年' }];
 
 /** 两行各有「全选」「清空」，按 DOM 顺序取：第 0 组是范围行，第 1 组是维度行。
  *  顺序判据先自证(见第一个用例的夹具前提)，之后才敢用它取按钮。 */

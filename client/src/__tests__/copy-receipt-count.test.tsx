@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { PersonDetail } from '../features/person/PersonDetail';
 import { initializeMockSession, resetMockSession } from '../data/clientRepository';
-import type { BaziRecord, BaziTaskResult } from '../types/domain';
+import type { BaziRecord, BaziTaskResult, Person } from '../types/domain';
 
 const task = (taskId: string, type: BaziTaskResult['task']['type'], explanation: string): BaziTaskResult => ({
   task: { taskId, type },
@@ -32,7 +32,7 @@ const record: BaziRecord = {
   },
 };
 
-const person = [{ id: 'count-person', name: '计数测试', nameInitial: 'J', gender: 'male', birthSummary: '甲子年' }];
+const person: Person[] = [{ id: 'count-person', name: '计数测试', nameInitial: 'J', gender: 'male', birthSummary: '甲子年' }];
 
 let writeText: ReturnType<typeof vi.fn>;
 
