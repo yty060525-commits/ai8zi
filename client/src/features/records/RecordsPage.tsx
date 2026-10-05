@@ -76,7 +76,17 @@ export function RecordsPage({ onOpenPerson, refreshKey = 0 }: RecordsPageProps) 
     noteTimer.current = setTimeout(() => setExportNote(undefined), 4000);
   };
   const toggleSelected = (id: string) => setSelectedIds((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
-  const toggleAll = () => setSelectedIds((current) => current.size === records.length ? new Set() : new Set(records.map((r) => r.id)));
+  /* 「全选」的范围必须是**当前看得见的那几条**，不是 records(全部)。
+     旧实现按 records.length 判满、按 records 增删：搜索框留着关键字时按钮写着「全选当前一条」，
+     点下去却把没显示的两个人也一起选进导出名单 —— 文案与实现相反(缺陷 #91，实测读数见
+     records-select-all-scope.test.tsx)。可见集是 records 的子集，所以「可见的全在选中里」
+     就是这一轮该取消的满态；不可见的勾选原样保留。 */
+  const visibleIds = useMemo(() => visibleRecords.map((record) => record.id), [visibleRecords]);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
+  const toggleAll = () => setSelectedIds((current) => {
+    if (allVisibleSelected) { const next = new Set(current); for (const id of visibleIds) next.delete(id); return next; }
+    return new Set([...current, ...visibleIds]);
+  });
   const selectedRecords = useMemo(() => records.filter((r) => selectedIds.has(r.id)), [records, selectedIds]);
   const chosenRecords = useMemo(() => records.filter((r) => includedIds.has(r.id)), [records, includedIds]);
 
@@ -137,9 +147,11 @@ export function RecordsPage({ onOpenPerson, refreshKey = 0 }: RecordsPageProps) 
           <button className="sort-button" type="button" onClick={() => setDescending((value) => !value)}>
             按姓名{descending ? '倒序' : '正序'}
           </button>
-          {/* 搜索框里留着关键字时，「全选」只勾得到当前可见的几条，但按钮说的是「全选」。
-              这里把范围写进标签，免得用户以为选中了全部记录却只导出了一小撮。 */}
-          <button className="text-button tiny" type="button" onClick={toggleAll}>{selectedIds.size === records.length && records.length > 0 ? '取消全选' : query.trim() && visibleRecords.length ? '全选当前' + cnCount(visibleRecords.length) + '条' : '全选'}</button>
+          {/* 搜索框里留着关键字时，「全选」只勾得到当前可见的几条，所以把范围写进标签，
+              免得用户以为选中了全部记录却只导出了一小撮。满态判断同样按可见集(allVisibleSelected)：
+              以前这里比的是 selectedIds.size === records.length，过滤态永远等不到「取消全选」，
+              于是按钮一直说「全选当前一条」而点下去是在清空 —— 同一处缺陷的另一半。 */}
+          <button className="text-button tiny" type="button" onClick={toggleAll}>{allVisibleSelected && visibleIds.length > 0 ? '取消全选' : query.trim() && visibleRecords.length ? '全选当前' + cnCount(visibleRecords.length) + '条' : '全选'}</button>
         </div>
       </div>
 

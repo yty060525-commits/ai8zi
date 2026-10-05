@@ -86,7 +86,7 @@ describe('复制回执的项数必须等于正文里真的有几项', () => {
     expect(text).not.toContain('身强身弱');
   });
 
-  it('缺陷：取消某范围后点「复制全部」，回执说共四项，正文里却没有那一节', async () => {
+  it('取消某范围后点「复制全部」：回执共四项，正文也确有四节', async () => {
     await openPage();
     fireEvent.click(screen.getByRole('button', { name: '本命命局' }));
     fireEvent.click(screen.getByRole('button', { name: '复制全部' }));
@@ -95,13 +95,12 @@ describe('复制回执的项数必须等于正文里真的有几项', () => {
     const text = String(writeText.mock.calls.at(-1)?.[0]);
     /* 回执照报「共四项」(读 allCompleted.length，不看勾选)。 */
     expect(note()).toContain('已复制全部，共四项');
-    /* 但 copyAll → buildCopyText(null) 里的 `!disabledTasks.has(taskId)` 与传 null 无关，
-       被取消勾选的「本命」整节根本没进剪贴板 ⇒ 用户拿到三项内容却被告知四项全在里面。
+    /* 缺陷 #92 已修：copyAll → buildCopyText(null, true) 忽略范围勾选，被取消勾选的那一节
+       必须照样进剪贴板 —— 否则用户拿到三项内容却被告知四项全在里面。
+       修复前的实测读数是 not.toContain('身强身弱') 且只有三个分组。
        夹具前提自证：不取消勾选时这一节确实在正文里(见上一个用例的反向路径)。 */
-    expect(text, '现状读数：勾掉的范围被「复制全部」静默漏掉').not.toContain('身强身弱');
-    expect(text.split('\n\n\n'), '现状：只剩三个范围分组').toHaveLength(3);
-    /* ⚠ 这条钉的是**当前缺陷行为**(缺陷 #92)，不是承诺。修法是给 buildCopyText 加 ignoreDisabled
-       参数、copyAll 传 true；修好后请把本用例翻成 toContain('身强身弱')/toHaveLength(4) 并保留说明。 */
+    expect(text, '「复制全部」按范围勾选漏节 ⇒ 回执与内容不符').toContain('身强身弱');
+    expect(text.split('\n\n\n'), '复制全部应有四个范围分组').toHaveLength(4);
   });
 
   it('维度只留一类时，回执同时报项数与维度类数', async () => {

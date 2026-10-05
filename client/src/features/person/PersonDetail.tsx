@@ -459,12 +459,15 @@ const sanitizeCopyLine = (line: string): string => {
   return /^年(流年|流月)$/.test(cleaned) ? cleaned.slice(1) : cleaned;
 };
 
-  /** 组装复制文本：范围按界面分组顺序；维度为空数组=不筛选(全部)。 */
-  const buildCopyText = (dimFilter: DimKey[] | null): string => {
+  /** 组装复制文本：范围按界面分组顺序；维度为空数组=不筛选(全部)。
+   *  ignoreDisabled=true 时**无视范围勾选框**，取全部已完成结果 —— 「复制全部」必须名副其实。
+   *  缺陷 #92 的旧形态是这个参数没有：copyAll 也走 disabledTasks 过滤，勾掉的范围被静默漏掉，
+   *  回执却写「已复制全部，共 N 项」，N 还是全量数(取自 allCompleted.length)，等于数字与内容对不上。 */
+  const buildCopyText = (dimFilter: DimKey[] | null, ignoreDisabled = false): string => {
     const selected = dimFilter === null ? null : dimFilter.length === DIMS.length ? null : dimFilter;
     const groups: string[] = [];
     for (const group of scopeGroups) {
-      const items = completedResults(group.key).filter((item) => !disabledTasks.has(item.task.taskId));
+      const items = ignoreDisabled ? completedResults(group.key) : completedResults(group.key).filter((item) => !disabledTasks.has(item.task.taskId));
       if (items.length === 0) continue;
       const blocks: string[] = [];
       for (const item of items) {
@@ -491,7 +494,7 @@ const sanitizeCopyLine = (line: string): string => {
   const dimFilter: DimKey[] | null = disabledDims.size === 0 ? null : enabledDims.map((dim) => dim.key);
 
   const copyAll = async () => {
-    const text = buildCopyText(null);
+    const text = buildCopyText(null, true);
     if (!text.trim()) { showCopyNote('暂无可复制的结果'); return; }
     await copy(text);
     showCopyNote('已复制全部，共' + cnCount(allCompleted.length) + '项');
