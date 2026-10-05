@@ -99,8 +99,13 @@ describe('导入/导出往返闭环(T1)', () => {
     const bytes = new TextEncoder().encode(JSON.stringify({ exportedAt: new Date().toISOString(), records: [exported] }));
     const parsed = await parseBackupFile(bytes, 'mingli-data.json');
     expect(parsed.records).toHaveLength(1);
+    /* 判据空白：这一整段往返闭环此前一直勾的是「同盘去重」，而 dedupe 按界面承诺不许改动现有记录。
+       旧实现里那句 isUpdate 排在 mode 判断之前，于是这两条把「覆盖」当成了预期结果(回执写「覆盖一条」) ——
+       等于用被污染的读数给自己盖章；缺陷 #94 修好之后，dedupe 下同 id 只能整条跳过，
+       而这条用例真正要钉的「完整正文没丢」反而在跳过分支上更直接。分流本身由
+       import-mode-diversion.test.ts 负责，这里不再依赖它。 */
     const summary = await importRecords(parsed.records, 'dedupe');
-    expect({ ...summary }).toEqual({ added: 0, updated: 1, skipped: 0, total: 1 });
+    expect({ ...summary }).toEqual({ added: 0, updated: 0, skipped: 1, total: 1 });
 
     await flushPendingPruneWrites();
     const back = await getBaziRecord(ID);
@@ -159,10 +164,16 @@ describe('导入/导出往返闭环(T1)', () => {
     // 语气档在备份文件里是独立一列(tone_used)，不是搭在某段 JSON 的顺风车里
     expect(parsed.records[0].toneUsed).toBe(55);
 
-    const first = await importRecords(parsed.records, 'dedupe');
+    /* 同上：本用例标题要的是「完整盘原样还原」，那是 overwrite 的承诺；旧实现把 dedupe 也
+       拉去覆盖，于是「导入后整条跳过」那句标题从来没被真正测过。 */
+    const first = await importRecords(parsed.records, 'overwrite');
     expect(first.updated).toBe(1);
-    const again = await importRecords(parsed.records, 'dedupe');
+    const again = await importRecords(parsed.records, 'overwrite');
     expect({ ...again }).toEqual({ added: 0, updated: 1, skipped: 0, total: 1 });
+    /* 反向钉子：标题里那句「第二次应整条跳过」是 dedupe 的承诺，overwrite 下永远不会跳。
+       没有这一条，把上面三行换成任何模式组合都能过 —— 判据必须能分辨两种模式。 */
+    const deduped = await importRecords(parsed.records, 'dedupe');
+    expect({ ...deduped }, 'dedupe 第二次导入应整条跳过、不动现有记录').toEqual({ added: 0, updated: 0, skipped: 1, total: 1 });
     const stored = await listBaziRecords();
     expect(stored).toHaveLength(1);
     expect(await hydrateRecord(stored[0])).toBeTruthy();

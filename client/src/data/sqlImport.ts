@@ -76,7 +76,11 @@ export async function importRecords(records: BaziRecord[], mode: ImportMode): Pr
     const record = { ...raw, id: raw.id || undefined };
     if (!record.name || !record.yearPillar) { skipped += 1; continue; }
     const dedupeKey = fpOf(record as BaziRecord);
-    const isUpdate = !!record.id && existingIds.has(record.id);
+    /* 「同 id」是否算覆盖，必须**先看用户勾了哪种模式**。旧实现把 isUpdate 排在 mode 判断之前，
+       于是勾「同盘去重」时同 id 那条照样整条盖掉：界面上名字换了、批断正文与 aiStatus 一起没了，
+       回执还写着「覆盖 1 条」——而这一栏的说明是「现有记录未被改动」。实测读数见
+       import-mode-diversion.test.ts(同名比对 expected 旧名 / received 新名)。 */
+    const isUpdate = mode === 'overwrite' && !!record.id && existingIds.has(record.id);
     // 「同 id 覆盖」优先于去重：用户勾了 overwrite 就是要这条盖掉库里那条。旧实现让文件内部
     // 去重(seen)先返回，于是「同一个人在备份里出现两次(改过名)」时第二条被静默丢掉，
     // 界面显示的仍是导入前的旧名字 —— 而它明明写着「同 id 覆盖」。
