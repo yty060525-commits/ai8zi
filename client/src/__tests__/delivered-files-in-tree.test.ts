@@ -129,12 +129,44 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
   });
 
   it('特征串账本非空且每条都真能在树上取到(防止登记被掏空后全绿)', () => {
-    /* 反向钉子：it.each 遇到空数组会「零条通过」而整块变绿，所以这里显式钉住登记数量下限。
-       实测：把 MARKERS 清空，上面那组一条都不生成，只有这一句会红。 */
+    /* 反向钉子，实测有效：it.each 遇到空数组会「零条通过」而整块变绿。把 MARKERS 清空后，
+       上面那组一条都不生成，只有这一句红(14 passed / 3 failed)。 */
     expect(MARKERS.length, '特征串账本被掏空了').toBeGreaterThanOrEqual(8);
     for (const m of MARKERS) {
       expect(git(['show', `HEAD:${m.file}`]), `树上取不到 ${m.file}`).toContain(m.text);
     }
+  });
+
+  /* 判据自身也要进账本 —— 否则「实现没了、用例也没了」就是完美的静默丢失。
+     #64 那次丢的不止 scopeNotes.ts：它 accompanying 的两份用例(scope-notes.test.ts /
+     scope-notes-ui.test.tsx)同样不在 HEAD 上，所以全量构建照样绿。
+     ⚠ 新增一份**专门守某个功能**的用例时，在这里登记它的文件名；不登记的代价就是本次这种
+        「闸门跟着功能一起消失」。 */
+  const CRITERIA: Array<{ guards: string; file: string }> = [
+    { guards: '#92 复制回执计数', file: 'copy-receipt-count.test.tsx' },
+    { guards: '联网删除走 DELETE 通道', file: 'delete-online-sync.test.ts' },
+    { guards: '详情页全选/清空两组开关', file: 'copy-chips-select-all.test.tsx' },
+    { guards: '记录页全选范围(#91)', file: 'records-select-all-scope.test.tsx' },    { guards: '导出面板勾选不带入(#90)', file: 'export-panel-inclusion.test.tsx' },
+    { guards: '语气进度条本机按盘', file: 'tone-local-scope.test.ts' },
+    { guards: '北京口径全空间扫描(#87)', file: 'beijing-caliber-scan.test.ts' },
+    { guards: 'wiki 链接可达(#83/#84/#89)', file: 'wiki-links-reachable.test.ts' },
+    { guards: '五行配比唯一口径(#9/#11)', file: 'element-ratio-display.test.ts' },
+    { guards: '默认通道三端跟随(#41)', file: 'provider-follow-contract.test.ts' },
+    { guards: 'Qwen 前缀缓存打标', file: 'qwen-cache-mark.test.ts' },
+    { guards: 'SW 缓存版本号', file: 'sw-cache-version.test.ts' },
+    { guards: 'gh-pages 旧 chunk 保留规则(#16/#80)', file: 'deploy-retain-rule.test.ts' },
+    { guards: '存储键命名契约', file: 'storage-key-contract.test.ts' },
+    { guards: '闸门口径单一来源', file: 'gate-single-source.test.ts' },
+  ];
+
+  it.each(CRITERIA)('守「$guards」的用例 $file 必须在 HEAD 树里', ({ file }) => {
+    const dir = 'client/src/__tests__/';
+    expect([...trackedPaths()], `HEAD 树里没有 ${dir}${file}`).toContain(dir + file);
+  });
+
+  it('判据账本非空(掏空它就等于把所有闸门一次性摘掉)', () => {
+    /* 与 MARKERS 同一形态的反向钉子：CRITERIA 为空时上面那条 it.each 会零条通过而全绿。 */
+    expect(CRITERIA.length, '判据账本被掏空了').toBeGreaterThanOrEqual(10);
   });
 });
 
@@ -153,6 +185,16 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
    ========================================================================== */
 const GAPS: Array<{ task: string; claimedDone: boolean; code: string; file: string }> = [
   { task: '#64', claimedDone: true, code: 'scopeNotes.ts', file: 'client/src/data/scopeNotes.ts' },
+  /* 「本地系统 / 第四路离线批断」整块都不在当前分支上：#49-58、#67、#70、#72-74、#77 全标着已完成，
+     #77 甚至还挂着 in_progress。实测取证(不是推断)：
+       · HEAD 的 client/src/data/aiSettings.ts 里没有 OFFLINE_STORAGE_KEY / isOfflineMode ——
+         而 lost-scope-notes 那份的第 79-84 行就有它们；
+       · HEAD 的 types/domain.ts 里 BaziTaskResult 没有 source?: 'cloud' | 'local'(第 137 行整行缺失)，
+         lost-scope-notes 那份有，注释还写着「界面对本地结果打绿点标注」；
+       · HEAD 与工作副本都搜不到 localAnalysis.ts / localSystem.ts 这两个文件名。
+     所以这不是「某个文件没提交」，而是**一次回退把整条链从指针上摘掉了**，连带它的判据一起。 */
+  { task: '#49-52/#67/#70/#72-74', claimedDone: true, code: 'localAnalysis.ts', file: 'client/src/data/localAnalysis.ts' },
+  { task: '#49/#77', claimedDone: true, code: 'localSystem.ts', file: 'client/src/data/localSystem.ts' },
 ];
 
 describe('【已知缺口，红灯是预期状态】标称已完成但实现不在当前树里', () => {
