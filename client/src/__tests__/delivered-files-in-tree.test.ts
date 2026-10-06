@@ -87,21 +87,23 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
        「HEAD 自己」红(实测踩过：本地 CRITERIA 到 20 条后，`GAPS.length === 3` 拿工作副本比，
        而树上还是 3 条以外的旧值，红的其实是「还没提交」而不是「闸门被掏空」)。
        缺口登记表要等代码取回、这条转绿，所以它必须钉在树上的字节上。 */
-    /* 【判据缺陷 #124 · 实测】`indexOf('const GAPS')` 命中的是**上面那条注释里的同名子串**
-       (第 87 行 `GAPS.length === 3` 那句)，于是切片从判据区就开始数，把别处的 `{ task:` 也算进来
-       ⇒ 树上的表明明还是三条，读数却是 14、红在正确代码上。锚点必须唯一：声明行带类型标注。 */
-    const declAt = inTree.indexOf('const GAPS: Array');
-    expect(declAt, '树上找不到缺口登记表的声明行 ⇒ 整块被人摘掉了').toBeGreaterThan(-1);
-    const gapsOnHead = inTree.slice(declAt, inTree.indexOf('\n];', declAt));
+    /* 【判据缺陷 #124 · 实测，踩了两次】切片锚点撞在同名子串上，读数就是错的：
+       · 第一版拿 `indexOf('const GAPS')` 起切 —— 命中的是注释里那句同名子串，切片从判据区就开始数，
+         把别处的 `{ task:` 也算进来 ⇒ 树上的表明明还是三条，读数却是 14、红在正确代码上。
+       · 第二版把锚点换成带类型标注的声明行，照样红在 14 —— 因为**解释这条缺陷的注释里引用了那行代码**，
+         字面量锚点又被自己撞了一次。indexOf 返回的是**最早**那次命中，不是唯一那次。
+       结论：只要注释会引用代码，任何字面量锚点都可能被撞。改成「整行匹配 + 当场证明只有一行」，
+       让锚点失效时直接红在闸门上，而不是悄悄切出一段别的东西冒充读数。 */
+    const declLines = inTree.split('\n').filter((l) => /^\s*const GAPS: Array/.test(l));
+    expect(declLines.length, '缺口登记表的声明行匹配到 0 或 >1 行 ⇒ 锚点不可信，下面的条数读数无意义')
+      .toBe(1);
+    const gapsOnHead = inTree.slice(inTree.indexOf(declLines[0]), inTree.indexOf('\n];'));
     expect(gapsOnHead.split('\n').filter((l) => /^\s*\{ task:/.test(l)).length,
       '树上的缺口登记表条数变了(整块摘掉就是 #64 当初静默丢失的形态)').toBe(3);
-    /* 锚点唯一性钉子(#124)：宽锚点 `'const GAPS'` 在本文件出现 5 次(声明 + 注释/判据里的同名子串)，
-       用它做 indexOf 起点必然切错。这条钉的是**当前字节**，所以红在「有人把宽子串写进注释、而声明行
-       仍是 `const GAPS: Array`」时不会误伤 —— 它要求带类型标注的声明行本身全文件只有一处。 */
-    const declLines = inTree.split('\n').filter((l) => /^\s*const GAPS\b/.test(l));
-    expect(declLines.length, '缺口登记表的声明行不止一处 ⇒ 切片起点不再确定').toBe(1);
-    expect(inTree.split('const GAPS: Array').length - 1, '声明行必须带类型标注，否则锚点会撞注释里的同名子串')
-      .toBe(1);
+    /* 反向钉子(#124 的第二层)：顶格的 `const GAPS` 只允许出现在真声明那一行。注释里若有人把这句
+       引用写成顶格形态，行首锚就会多命中一行 —— 那时切片起点会漂走，而漂走的读数看着仍像个条数。 */
+    expect(inTree.split('\n').filter((l) => l.startsWith('const GAPS')).length,
+      '顶格的 const GAPS 不止一处 ⇒ 行首锚被撞').toBe(1);
     /* 工作副本与树上必须一致：否则「本地红、CI 绿」会让人把这条当成不稳定判据关掉。 */
     expect(readFileSync(resolve(repo, self), 'utf8').replace(/\r\n/g, '\n'))
       .toBe(inTree.replace(/\r\n/g, '\n'));
