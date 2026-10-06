@@ -105,8 +105,15 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
     const gapsOnHead = inTree.slice(gapsStart, gapsEnd);
     expect(gapsOnHead.split('\n').filter((l) => /^\s*\{ task:/.test(l)).length,
       '树上的缺口登记表条数变了(整块摘掉就是 #64 当初静默丢失的形态)').toBe(3);
-    /* 反向钉子(#124 的第二层)：顶格的 `const GAPS` 只允许出现在真声明那一行。注释里若有人把这句
-       引用写成顶格形态，行首锚就会多命中一行 —— 那时切片起点会漂走，而漂走的读数看着仍像个条数。 */
+    /* 反向钉子(#124 的第二层)：当场证明「字面量子串锚」为什么不可信 —— 子串形态命中多处、
+       整行形态只命中一处，两者必须同时成立。
+       ⚠ 【判据缺陷 #128 · 实测】这里曾经钉的是「宽松行首锚比顶格锚命中更多」。基线上就红了
+       (expected 1 to be greater than 1)：注释里引用那行代码时带着反引号前缀，行首并不裸露，
+       所以 `\s*const GAPS` 与 `startsWith('const GAPS')` 命中数**恒等**。那条是我没验证的预测，
+       不是树上的事实。真正多命中的是**子串**形态(实测 6 处)，而它正是第一版切片的锚。 */
+    const substringHits = inTree.split('\n').filter((l) => l.includes('const GAPS')).length;
+    expect(substringHits, '子串锚只剩一行 ⇒ 注释里的同名引用没了，下面的比对失去意义').toBeGreaterThan(1);
+    expect(declLines.length, '整行锚与子串锚命中数相同 ⇒ 本条判据要重写(见 #128)').not.toBe(substringHits);
     expect(inTree.split('\n').filter((l) => l.startsWith('const GAPS')).length,
       '顶格的 const GAPS 不止一处 ⇒ 行首锚被撞').toBe(1);
     /* 工作副本与树上必须一致：否则「本地红、CI 绿」会让人把这条当成不稳定判据关掉。 */
