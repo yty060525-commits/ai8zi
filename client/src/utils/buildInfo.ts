@@ -2,17 +2,16 @@
  *  构建时由 vite.config.ts 的 define 注入；测试/开发环境无注入时回退为 unknown，
  *  不至于让 UI 崩掉。 */
 import { chinaDateTimeParts } from './date';
+import { cnSmall } from '../shared/chineseReadAloud';
 
 export const BUILD_ID: string = typeof __BUILD_ID__ === 'string' ? __BUILD_ID__ : 'unknown';
 
 const CN_DIGITS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
 
-/** ≤99 的中文读法：个位原样、十几读「十二」、整十读「二十」、其余读「二十三」。 */
-function cnSmall(n: number): string {
-  if (n < 10) return CN_DIGITS[n];
-  const tens = Math.floor(n / 10), ones = n % 10;
-  return (tens === 1 ? '十' : CN_DIGITS[tens] + '十') + (ones ? CN_DIGITS[ones] : '');
-}
+/* 这里曾有一份私有的 cnSmall(与 shared/chineseReadAloud 那份逐字重复)。缺陷 #96 的教训就是
+   同一个读法抄两份、改一处漏一处；穷举比对实测 0-99 两版读数恒等(shared 版对 NaN/负数多一层
+   防护，而这里的入参全是 chinaDateTimeParts 拆出的 0-59)，合并掉。CN_DIGITS 留着：年份逐位
+   读与十六进制校验码还要用。 */
 
 /** 构建时间戳 → 中文读法。界面正文在正式版口径下不许出现阿拉伯数字与半角符号，
  *  所以版本号也翻成汉字：「二零二六年九月二十二日九时五分」。年逐位读、月日时按中文数读。
