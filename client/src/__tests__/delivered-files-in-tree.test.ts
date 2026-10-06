@@ -108,14 +108,20 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
     /* 反向钉子(#124 的第二层)：当场证明「字面量子串锚」为什么不可信 —— 子串形态命中多处、
        整行形态只命中一处，两者必须同时成立。
        ⚠ 【判据缺陷 #128 · 实测】这里曾经钉的是「宽松行首锚比顶格锚命中更多」。基线上就红了
-       (expected 1 to be greater than 1)：注释里引用那行代码时带着反引号前缀，行首并不裸露，
-       所以 `\s*const GAPS` 与 `startsWith('const GAPS')` 命中数**恒等**。那条是我没验证的预测，
-       不是树上的事实。真正多命中的是**子串**形态(实测 6 处)，而它正是第一版切片的锚。 */
+       (expected 1 to be greater than 1)：注释里引用那行代码时带着反引号前缀，行首并不裸露。
+       树上字节的实测矩阵(三档行首锚全部命中同一行 242)：
+         'const GAPS' 子串        → 7 处(91, 97, 112, 114, 117, 118, 242)
+         /^\s*const GAPS/         → 1 处(242)
+         l.startsWith('const GAPS') → 1 处(242)
+       ⇒ 真正多命中的只有**子串**形态，而它正是第一版切片的锚；把行首锚放松一档读数不变，
+       所以任何「行首锚命中数」的比对都杀不掉 MUT-D 那类放宽。据此撤掉顶格锚那条空判据。 */
     const substringHits = inTree.split('\n').filter((l) => l.includes('const GAPS')).length;
     expect(substringHits, '子串锚只剩一行 ⇒ 注释里的同名引用没了，下面的比对失去意义').toBeGreaterThan(1);
     expect(declLines.length, '整行锚与子串锚命中数相同 ⇒ 本条判据要重写(见 #128)').not.toBe(substringHits);
-    expect(inTree.split('\n').filter((l) => l.startsWith('const GAPS')).length,
-      '顶格的 const GAPS 不止一处 ⇒ 行首锚被撞').toBe(1);
+    /* #124 第三层的结构性后果，可杀(实测)：把起点退回第一个子串命中(即有人改回 indexOf('const GAPS'))，
+       切片会越过声明直接撞上更前面的 DELIVERED 收尾 `];` ⇒ gapsEnd < gapsStart。这条红就是那个改动的回执。 */
+    expect(inTree.indexOf('\n];'),
+      '第一个 ] 出现在声明之后 ⇒ 收尾锚不再依赖 fromIndex，#124 第三层的教训失效了').toBeLessThan(gapsStart);
     /* 工作副本与树上必须一致：否则「本地红、CI 绿」会让人把这条当成不稳定判据关掉。 */
     expect(readFileSync(resolve(repo, self), 'utf8').replace(/\r\n/g, '\n'))
       .toBe(inTree.replace(/\r\n/g, '\n'));
