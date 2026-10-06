@@ -77,6 +77,19 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
     const inTree = git(['show', `HEAD:${self}`]);
     expect(inTree.includes('scopeNotes.ts'), '树上的版本里没有缺口登记的文件名').toBe(true);
     expect(inTree.includes('GAPS'), '树上的版本里没有缺口登记表').toBe(true);
+    /* 三本账的条数下限：只查「有没有 GAPS 这个词」太松 —— 把 DELIVERED/MARKERS/CRITERIA 里
+       任意一本掏空，其余断言照样绿(it.each 遇空数组是零条通过)。这里按**当场实测**的条数钉下限，
+       留 3~5 条余量给正常增删；低于下限就是有人删了整块登记。 */
+    expect(DELIVERED.length, '功能→实现文件账本被掏空了').toBeGreaterThanOrEqual(8);
+    expect(MARKERS.length, '特征串账本被掏空了').toBeGreaterThanOrEqual(10);
+    expect(CRITERIA.length, '判据账本被掏空了').toBeGreaterThanOrEqual(15);
+    /* ⚠ 这一句读的是**树上的那份字节**，不是内存里的 const 数组 —— 否则本地加一条登记就会让
+       「HEAD 自己」红(实测踩过：本地 CRITERIA 到 20 条后，`GAPS.length === 3` 拿工作副本比，
+       而树上还是 3 条以外的旧值，红的其实是「还没提交」而不是「闸门被掏空」)。
+       缺口登记表要等代码取回、这条转绿，所以它必须钉在树上的字节上。 */
+    const gapsOnHead = inTree.slice(inTree.indexOf('const GAPS'), inTree.indexOf('describe(\'【已知缺口'));
+    expect(gapsOnHead.split('\n').filter((l) => /^\s*\{ task:/.test(l)).length,
+      '树上的缺口登记表条数变了(整块摘掉就是 #64 当初静默丢失的形态)').toBe(3);
     /* 工作副本与树上必须一致：否则「本地红、CI 绿」会让人把这条当成不稳定判据关掉。 */
     expect(readFileSync(resolve(repo, self), 'utf8').replace(/\r\n/g, '\n'))
       .toBe(inTree.replace(/\r\n/g, '\n'));
@@ -157,11 +170,28 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
     { guards: 'gh-pages 旧 chunk 保留规则(#16/#80)', file: 'deploy-retain-rule.test.ts' },
     { guards: '存储键命名契约', file: 'storage-key-contract.test.ts' },
     { guards: '闸门口径单一来源', file: 'gate-single-source.test.ts' },
+    { guards: '固定池退队重发的口数账(#104/#108/#110/#117/#120)', file: 'pool-retry-budget.test.ts' },
+    /* ⚠ CRITERIA 的 `file` 会拼进 `client/src/__tests__/`，所以**只能登记用例文件名**。
+       实测教训(本轮)：把实现落点写成 '../features/person/PersonDetail.tsx' 也照样能过 ——
+       HEAD 树里确实存在 client/src/features/person/PersonDetail.tsx，于是「红转绿」被误读成
+       「路径写错了」。改参照 '..' 等于把闸门挪到另一棵子树上比对，自己把它解除。 */
+    { guards: '#100 详情页失败后自动排期重试', file: 'auto-retry-schedule.test.tsx' },
+    { guards: '#113/#116/#119 进度条占位与分母同源', file: 'progress-bar-count.test.tsx' },
   ];
 
   it.each(CRITERIA)('守「$guards」的用例 $file 必须在 HEAD 树里', ({ file }) => {
     const dir = 'client/src/__tests__/';
     expect([...trackedPaths()], `HEAD 树里没有 ${dir}${file}`).toContain(dir + file);
+  });
+
+  it('判据账本只许录用例目录内的文件名(防止用 .. 把闸门挪到别的子树)', () => {
+    /* 反向钉子：上面那条对 '../features/person/X.tsx' 这种写法是**通得过**的，
+       也就是说有人可以不改代码、只改登记里的路径，就把一道闸门换成一颗无关的树。
+       这一句把这类写法当场钉红。 */
+    for (const c of CRITERIA) {
+      expect(c.file, `判据账本里的 ${c.file} 指向用例目录之外`).not.toContain('..');
+      expect(c.file, `判据账本里的 ${c.file} 不是用例文件名`).toMatch(/\.test\.(ts|tsx)$/);
+    }
   });
 
   it('判据账本非空(掏空它就等于把所有闸门一次性摘掉)', () => {

@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { PersonDetail, findCurrentFortune } from '../features/person/PersonDetail';
 import { FIRST_DECADE_TASK_INDEX, OVERVIEW_TASK_ID, analysisHorizon, buildBaziTasks, orchestrateBaziAnalysis } from '../data/baziOrchestrator';
@@ -96,14 +99,17 @@ const resultFor = (task: BaziTaskResult['task']): BaziTaskResult => ({
   task, status: 'completed', analysis: task.type === 'baseline' ? baselineAnalysis : task.type === 'overview' ? overviewAnalysis : plainAnalysis,
 });
 
-const stubFor = async (_r: never, task?: { type?: string }) => ({
+/* `_r` 必须标成 unknown 而不是 never：`vi.mocked(analyzeBazi).mockImplementation(slowStub(30))`
+   要求参数**逆变**兼容(record: BaziRecord)，而 never 只能匹配 never ⇒ tsc -b 报 TS2345。
+   桩压根不读这个参数，返回值末尾的 `as never` 才是喂给 mock 的那一侧。 */
+const stubFor = async (_r: unknown, task?: { type?: string }) => ({
   status: 'completed',
   analysis: task?.type === 'overview' ? overviewAnalysis : task?.type === 'annual' || task?.type === 'monthly' || task?.type === 'decade' ? plainAnalysis : baselineAnalysis,
 } as never);
 
 /** 采样点之间插入真实延迟的桩：否则即时 resolve 会让整批任务在第一个宏任务前跑完，
  *  界面只渲染得出起点那一帧(实测)，中间态与「起跑前」那一帧都采不到。 */
-const slowStub = (ms: number) => async (_r: never, task?: { type?: string }) => {
+const slowStub = (ms: number) => async (_r: unknown, task?: { type?: string }) => {
   await new Promise((r) => setTimeout(r, ms));
   return stubFor(_r, task);
 };
@@ -322,6 +328,19 @@ describe('进度条分母与已完成格数(占位加得上也撤得掉)', () =>
     // 宽度与 aria 同源：此刻一格未跑，填充必须为 0%(不是开局拉满)。
     const fill = track.querySelector('.progress-fill') as HTMLElement;
     expect(fill.style.width, '未完成时进度条不该有填充').toBe('0%');
+  });
+
+  /* 【缺陷 #119 · 判据空白补位 2026-10-07】补跑那一句状态用的分母若写回 `tasks.length`，会把收尾
+     刚撤回的「全盘总结」占位又摆回来。编排器层杀不掉它(实测 A/B：正确码与变异体在 retries:0 恒失败盘上
+     逐条读数完全相同 —— 那一格里 totalShown() 恰好等于 tasks.length)，界面层的采样用例也杀不掉
+     (桩即时 resolve，采不到中间帧)。所以这里钉**发射点的那行源码**：它是全仓唯一一处带
+     「自动重试失败任务」文案的 onProgress 调用，分母必须走 totalShown()。 */
+  it('补跑状态句的分母走 totalShown()，不许退回 tasks.length(#119)', () => {
+    const src = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '..', 'data', 'baziOrchestrator.ts'), 'utf8');
+    const lines = src.split(/\r?\n/).filter((l) => l.includes('自动重试失败任务'));
+    expect(lines.length, '补跑状态句应当只有一处发射点').toBe(1);
+    expect(lines[0], '补跑那一句的分母不是 totalShown() ⇒ 已撤回的总结占位会被重新摆进分母').toMatch(/total:\s*totalShown\(\)/);
+    expect(lines[0], '分母退回本轮队列长度 ⇒ 实测 #119 的「共二五」虚报回来了').not.toMatch(/total:\s*tasks\.length/);
   });
 });
 

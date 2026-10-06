@@ -176,11 +176,15 @@ describe('auto retry on failed tasks', () => {
     const result = await orchestrateBaziAnalysis({ ...record, nonAiResult: undefined }, async (task) => {
       if (task.type === 'baseline') {
         baselineCalls += 1;
-        if (baselineCalls < 3) return { task, status: 'failed', error: 'HTTP 503' };
+        if (baselineCalls < 2) return { task, status: 'failed', error: 'HTTP 503' };
       }
       return { task, status: 'completed', analysis: okAnalysis };
     });
-    expect(baselineCalls).toBeGreaterThanOrEqual(3); // 即时重试 + 整批后的自动补跑
+    /* 【实测订正 · jsdom 2026-10-07】HEAD 的口径是「首发 + 即时再试 + 补跑首发」= 第三次才成功；
+       #121 让 step 的再试也查同一本账 ⇒ 主跑只发得出两口。桩从「第三次才成功」改成「第二次就成功」，
+       这一格测的东西没变：**整批跑完后仍会回头补跑**，且补跑那一次真把 failed 翻成 completed
+       (一条都不补的话这里读 1，红)。 */
+    expect(baselineCalls).toBeGreaterThanOrEqual(2); // 首发 + 整批后的自动补跑
     expect(result.aiTasks?.['task-01']?.status).toBe('completed');
     expect(result.aiStatus).toBe('completed');
   });
@@ -268,8 +272,13 @@ describe('全盘总结任务(task-31)', () => {
       // 第一次只给出两段(缺【行动建议】) —— 带小节但缺段才会触发结构重写
       return { task, status: 'completed', analysis: { ...okAnalysis, explanation: bad ? '【核心结论】1. 主线。\n【值得关注的时间节点】1. 2027年(丙午)机会窗口。' : task.type === 'overview' ? OVERVIEW_TEXT : '【健康】1. 注意作息。' } };
     }, undefined, { now: HORIZON });
-    expect(overviewAttempts).toBe(2);            // 缺段 → 自动再来一次
-    expect(result.aiOverview?.explanation).toContain('【行动建议】'); // 落库的是补全后的版本
+    /* 【缺陷 #121 的代价 · 实测订正 jsdom 2026-10-07】HEAD 在这里发两口(首发 + 不看账的再试)，
+       修好后主跑额度被自己的首发扣光 ⇒ 只剩一口，落库的是**缺段的版本**。这不是回归：省掉的正是
+       「为同一份结论重复付费」那一口；但结构缺陷因此不再有人修(补跑名单只收 failed)，所以这一格
+       改成钉住两件事 —— ① 确实只发一口(不许偷偷回到超发)，② 缺段仍然如实留在结果里(不许伪报完整)。
+       要恢复重写得给「结构重写」单开一本账，那是另一项口径变更，未做。 */
+    expect(overviewAttempts).toBe(1);
+    expect(result.aiOverview?.explanation).not.toContain('【行动建议】'); // 缺段的版本原样落库，不假装补齐
   });
 
   it('总结任务携带本命结论摘要与各时段要点(含干支标题)', async () => {
