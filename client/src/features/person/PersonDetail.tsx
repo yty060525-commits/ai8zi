@@ -21,7 +21,7 @@ const statusText: Record<BaziRecord['aiStatus'], string> = {
  *  在正式版口径下和英文字段名一样属于算法痕迹。超过二十就退回逐位读。
  *  词表与读法在 shared/chineseReadAloud —— 原先这里、RecordsPage、SettingsPage 各抄一份，
  *  三份互不相干就会分叉(同一屏里「已配置 零 条」与「已配置零条」混着出现就是这么来的)。 */
-import { cnCount, cnYear } from '../../shared/chineseReadAloud';
+import { cnCount, cnSmall, cnYear } from '../../shared/chineseReadAloud';
 
 /** 范围标题的两种写法：屏幕上的 <summary> 用带年份的这一套(④栏的大运区间是既有判据，
    不能凭空改口径)，「复制/导出」拼进文档的那一行则一律走 sanitizeCopyLine。
@@ -188,11 +188,14 @@ export const luckStartText = (result: NonAiChart, nowYear: number): string => {
   return `约${age}、${cnDate(onset)}交运${current ? `；今年在${current.ganZhi}运，${cnYear(current.startYear)}至${cnYear(current.endYear)}` : '；当前已出排定的大运区间'}`;
 };
 /** 界面上的日期读法：「1984-02-06」→「一九八四年二月六日」。年份逐位、月日按中文数读，
- *  与闸门里数字的读法同规则；解析不出 ISO 形态就原样返回(存量数据里有只到月份的)。 */
+ *  与闸门里数字的读法同规则；解析不出 ISO 形态就原样返回(存量数据里有只到月份的)。
+ *  ⚠ 月/日必须走 cnSmall(≤99 规范读法)而不是 cnCount：后者超过二十就逐位读，
+ *  会把「十一月二十三日」念成「十一月二三日」(缺陷 #96，实测读数见 date-reading-parity.test.tsx)。
+ *  这条口径与 utils/buildInfo.ts 的构建时间戳读法一致；RecordsPage 那份同名函数必须一起改。 */
 export const cnDate = (iso: string): string => {
   const m = /^(\d{4})-(\d{1,2})(?:-(\d{1,2}))?/.exec(String(iso ?? '').trim());
   if (!m) return String(iso ?? '');
-  return `${cnYear(+m[1])}年${cnCount(+m[2])}月${m[3] ? cnCount(+m[3]) + '日' : ''}`;
+  return `${cnYear(+m[1])}年${cnSmall(+m[2])}月${m[3] ? cnSmall(+m[3]) + '日' : ''}`;
 };
 const mapText = (value: Record<string, number>) => Object.entries(value).map(([key, count]) => `${key}${cnCount(count)}`).join('、') || '暂无';
 /** 五行比例按百分比展示(原始值是 0~1 的小数，直接打出来是 0.375 这种看不懂的数)。

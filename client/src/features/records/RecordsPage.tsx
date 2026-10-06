@@ -23,14 +23,17 @@ const stamp = () => new Date().toISOString().slice(0, 10);
 /* 列表里所有可见文案一律读成中文：阿拉伯数字、间隔号、箭头、半角括号在正式版口径下都算
    算法痕迹，与英文字段名同级。cnCount 只覆盖到二十(人数/序号够用)，年份走逐位读。
    词表在 shared/chineseReadAloud，与详情页/设置页同源，不再各抄一份。 */
-import { cnCount, cnYear } from '../../shared/chineseReadAloud';
+import { cnCount, cnSmall, cnYear } from '../../shared/chineseReadAloud';
 import { readableName } from '../../data/chatEngine';
 
-/** 「1990-01-01」→「一九九〇年一月一日」；不是这个形态就原样返回。 */
+/** 「1990-01-01」→「一九九〇年一月一日」；不是这个形态就原样返回。
+ *  ⚠ 与 PersonDetail 那份 cnDate 是**同一套读法**的两份实现(缺陷 #96 的教训：月/日要走
+ *  cnSmall 规范读法，用 cnCount 会把「二十三日」念成「二三日」)。date-reading-parity.test.tsx
+ *  同时渲染两端并比对字符串，任一侧单独改动就会红。 */
 const cnDate = (iso: string): string => {
   const m = /^(\d{4})-(\d{1,2})(?:-(\d{1,2}))?/.exec(String(iso ?? '').trim());
   if (!m) return String(iso ?? '');
-  return `${cnYear(+m[1])}年${cnCount(+m[2])}月${m[3] ? cnCount(+m[3]) + '日' : ''}`;
+  return `${cnYear(+m[1])}年${cnSmall(+m[2])}月${m[3] ? cnSmall(+m[3]) + '日' : ''}`;
 };
 
 export function RecordsPage({ onOpenPerson, refreshKey = 0 }: RecordsPageProps) {
