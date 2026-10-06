@@ -97,7 +97,12 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
     const declLines = inTree.split('\n').filter((l) => /^\s*const GAPS: Array/.test(l));
     expect(declLines.length, '缺口登记表的声明行匹配到 0 或 >1 行 ⇒ 锚点不可信，下面的条数读数无意义')
       .toBe(1);
-    const gapsOnHead = inTree.slice(inTree.indexOf(declLines[0]), inTree.indexOf('\n];'));
+    const gapsStart = inTree.indexOf(declLines[0]);
+    /* 收尾锚也必须**从起点往后找**：DELIVERED 的 `];` 在文件更前面，不带第二参的 indexOf('\n];')
+       会命中它 ⇒ 切片塌成空段、条数读 0(#124 第三层，同一次改动里连错三口)。 */
+    const gapsEnd = inTree.indexOf('\n];', gapsStart);
+    expect(gapsEnd, '缺口登记表找不到收尾的 ] ⇒ 整块被人摘掉或结构变了').toBeGreaterThan(gapsStart);
+    const gapsOnHead = inTree.slice(gapsStart, gapsEnd);
     expect(gapsOnHead.split('\n').filter((l) => /^\s*\{ task:/.test(l)).length,
       '树上的缺口登记表条数变了(整块摘掉就是 #64 当初静默丢失的形态)').toBe(3);
     /* 反向钉子(#124 的第二层)：顶格的 `const GAPS` 只允许出现在真声明那一行。注释里若有人把这句
