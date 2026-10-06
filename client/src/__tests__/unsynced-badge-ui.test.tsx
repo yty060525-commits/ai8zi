@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { RecordsPage } from '../features/records/RecordsPage';
+import { App } from '../App';
 import { __allowUnsyncedIdsForTests, __failRemoteForTests, __resetSyncStateForTests, configureBaziRepository, flushPendingPushes, memoryBaziRepository, saveBaziRecord, unsyncedRecordIds } from '../data/clientRepository';
 import { setServerSession, setServerUrl } from '../data/serverClient';
 import { initializeMockSession, resetMockSession } from '../data/clientRepository';
@@ -93,6 +94,31 @@ describe('「未同步」徽章与待推送名单一致(判据空白 #98)', () =
     render(<RecordsPage onOpenPerson={vi.fn()} />);
     await waitFor(() => expect(badgeOf('离线者'), '补推成功后仍挂着「未同步」→ 提示和事实相反').toBeNull());
     expect(peekDirty(), '徽章消失了但名单没清 → 聊天那句「等标记消失」永远等不到').toEqual([]);
+  });
+
+  /* 方位词类缺陷(#90 同族)：徽章让用户「去设置里登录服务器」，而全站唯一的常驻入口是
+     App 顶部那个 .settings-entry(CSS margin-left:auto ⇒ 右上角)。unconfigured-guidance 已经
+     给详情页/聊天那两处提示钉过「不许写左上角、要写右上角」，这句此前漏网 —— jsdom 不排版，
+     判据取样式声明本身 + 真实 DOM 顺序(按钮在内容容器第一个)，与那条用例同一口径。 */
+  it('徽章那句指向的「设置」确实在页面右上角，文案不许把用户领向别处', async () => {
+    noNetwork();
+    __failRemoteForTests(true);
+    await saveBaziRecord(rec('u-pos', '方位者'));
+    await flushPendingPushes();
+    render(<RecordsPage onOpenPerson={vi.fn()} />);
+    await waitFor(() => expect(badgeOf('方位者')).toBeTruthy());
+    const hint = badgeOf('方位者')!.textContent ?? '';
+    expect(hint, '把用户领向屏幕左边一个不存在的入口').not.toMatch(/左上|左下|右下/);
+    expect(hint).toContain('设置');
+    // 与既有两处提示同一方位口径(unconfigured-guidance L53-56 立的规矩)
+    expect(hint, '同类提示统一写「右上角」，这句却只说「在设置里」——位置承诺分叉').toContain('右上角');
+    // 入口本身的位置：App 外壳常驻渲染 .settings-entry(测试环境无 hash ⇒ App 强制云端分支、
+    // 落在排盘页)，所以从真实渲染树里取那一个按钮，而不是 RecordsPage 的子树。
+    render(<App />);
+    const entries = screen.getAllByRole('button', { name: '设置' });
+    expect(entries, '全站应只有一个常驻设置入口(App.tsx)').toHaveLength(1);
+    expect(entries[0].className).toContain('settings-entry');
+    expect(entries[0].parentElement!.querySelector(':scope > *') === entries[0], '设置按钮不再是内容区第一个元素 ⇒ 布局改了，文案方位要跟着核').toBe(true);
   });
 
   it('反向钉子：服务器正常的盘一行都不许挂徽章(否则上面两条是永真判据)', async () => {

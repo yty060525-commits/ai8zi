@@ -193,8 +193,10 @@ export function RecordsPage({ onOpenPerson, refreshKey = 0 }: RecordsPageProps) 
                       年柱缺失时才回退存量值。 */}
                   {record.nonAiResult && <span className="chart-summary">公历{cnDate(record.nonAiResult.solarDate)}，生肖{zodiacOfBranch(record.yearPillar?.[1] ?? '') || record.nonAiResult.zodiac}，日主{record.nonAiResult.dayMaster}</span>}
                   <span className="ai-status">批断：{record.aiStatus === 'completed' ? '已完成' : record.aiStatus === 'not_configured' ? '未配置' : record.aiStatus === 'failed' ? '失败' : record.aiStatus === 'pending' ? '分析中' : '未开始'}</span>
-                  {/* 还没推上服务器的盘：不标出来，用户会先在同机「问问批断」上撞到「还没有任何命盘」。 */}
-                  {unsynced.has(record.id) && <span className="ai-status unsynced">未同步，仅存本机。提问前先在设置里登录服务器</span>}
+                  {/* 还没推上服务器的盘：不标出来，用户会先在同机「问问批断」上撞到「还没有任何命盘」。
+                      方位词写「右上角」与详情页/聊天那两句提示同一口径(unconfigured-guidance 立的规矩)：
+                      入口是 App 顶行的 .settings-entry(margin-left:auto)，窄屏同样靠右。 */}
+                  {unsynced.has(record.id) && <span className="ai-status unsynced">未同步，仅存本机。提问前先点页面右上角设置登录服务器</span>}
                   <span className="row-action">查看</span>
                 </button>
               </div>
