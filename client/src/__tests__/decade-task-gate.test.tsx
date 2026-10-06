@@ -114,6 +114,12 @@ describe('已跑完的盘再点「批断分析」不得整轮重算(大运槽位
     mount(tasksFor(tasks.filter((t) => t.taskId !== missing.taskId)));
     await screen.findByRole('button', { name: '批断分析' });
     fireEvent.click(screen.getByRole('button', { name: '批断分析' }));
-    await waitFor(() => expect(analyzeBazi).toHaveBeenCalled(), { timeout: 8000 });
-  });
+    /* ⚠ 判据空白实测(2026-10-06)：这里此前写 waitFor(…, { timeout: 8000 })，但 vitest 默认
+       用例超时是 5000 —— waitFor 的 8 秒预算被外层直接掐死，「慢机器上整轮全量测试里偶发
+       Test timed out in 5000ms」就是这么来的(单独跑三连绿、全量并行时红过一次；同一文件
+       「命中缓存」那条的 findByRole 也撞过同样的超时)。点击之后没有任何同步检查点，
+       所以只能放宽等待；给到 20 秒，慢机器上的重 CPU(hydrate 排盘+编排器建任务)挤不进死角。 */
+    await waitFor(() => expect(analyzeBazi).toHaveBeenCalled(), { timeout: 20000 });
+    // 用例本身也要撑得住这个预算，否则 waitFor 的 timeout 形同虚设(第三参 = 本条 testTimeout)。
+  }, 30000);
 });
