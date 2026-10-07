@@ -60,8 +60,10 @@ describe('语气默认档跨端同源(#129)', () => {
     expect(decl.length, 'DEFAULT_TONE 的声明行匹配异常').toBe(1);
     const tail = decl[0].slice(decl[0].indexOf(';') + 1);
     expect(tail, 'DEFAULT_TONE 行尾没有注释 ⇒ 语义只活在文档里').not.toBe('');
-    expect(tail).not.toMatch(/900|重试|限流|重发/, '行尾注释在讲重试 ⇒ 会把改值的人引向错误的常量语义');
-    expect(tail).toMatch(/语气|档/, '行尾注释没提语气');
+    /* ⚠ `expect(x, msg).not.toMatch(re)` 的第二个参数归 not 分支，vitest 类型只收一参 ——
+       写成两参会让 tsc -b 报 TS2554(实测踩过)，消息要放进断言侧。 */
+    expect(tail, '行尾注释没讲语气 ⇒ 会把改值的人引向错误的常量语义').toMatch(/语气|档/);
+    expect(tail.match(/900|重试|限流|重发/), '行尾注释在讲重试 ⇒ 语义贴错了常量').toBeNull();
   });
 
   it('重试间隔的注释留在重试间隔那一行上(防止两行注释再次互换)', () => {
