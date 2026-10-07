@@ -333,7 +333,11 @@ pub(crate) fn cache_key(record: &BaziRecord, task: &AiTaskInput, model: &str) ->
     //     旧缓存正文里带着英文字段名、阿拉伯数字与出处说明，不符合新展示口径，整体作废重写。
     // v10: 时段指令的标题示例去掉「·」并明写「标题不用任何符号」，与另两端同步；提示词字节变了，
     //      旧缓存里那些带中点的标题是另一版提示词的产物，作废重算。
-    format!("v10|{model}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", record.gender,
+    // v11: natal 的键序改回与另两端一致(#132)：dayMaster→zodiac→solarDate、tenGods→hiddenStems。
+    //      桌面此前写成 solarDate→zodiac→dayMaster 与 hiddenStems→tenGods，serde_json 按插入顺序序列化，
+    //      于是同一命盘在桌面拼出的「本命事实」整段字节与另两端不同 —— 提示词口径没变但前缀分叉，
+    //      已落库的答案是按另一种键序那版提示词产出的，一并作废重算。
+    format!("v11|{model}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", record.gender,
         record.year_pillar, record.month_pillar, record.day_pillar, record.hour_pillar,
         task.task_type, task.year.unwrap_or(0), task.month.unwrap_or(0), record.birth_year, tone_bucket(task.tone))
 }
@@ -502,10 +506,10 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
         "gender": record.gender,
         "birthYear": record.birth_year,
         "pillars": { "year": record.year_pillar, "month": record.month_pillar, "day": record.day_pillar, "hour": record.hour_pillar },
-        "solarDate": val("solarDate"), "lunarDate": val("lunarDate"), "zodiac": val("zodiac"), "dayMaster": val("dayMaster"),
+        "dayMaster": val("dayMaster"), "zodiac": val("zodiac"), "solarDate": val("solarDate"), "lunarDate": val("lunarDate"),
 
         "elements": val("elements"), "elementRatio": val("elementRatio"),
-        "hiddenStems": val("hiddenStems"), "tenGods": val("tenGods"), "tenGodDetails": val("tenGodDetails"),
+        "tenGods": val("tenGods"), "hiddenStems": val("hiddenStems"), "tenGodDetails": val("tenGodDetails"),
         "naYin": val("naYin"), "twelveLongevity": val("twelveLongevity"),
         // 引擎算定的格局与旺衰：模型只解读不重判(与服务器/浏览器直连同口径)
         "patternFacts": val("patternFacts"), "strengthScore": val("strengthScore"),
