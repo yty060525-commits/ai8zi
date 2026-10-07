@@ -18,9 +18,16 @@ describe('语气默认档跨端同源(#129)', () => {
     ['../data/baziOrchestrator.ts', /export const DEFAULT_TONE = (\d+);/],
     ['../data/deepseekAdapter.ts', /Math\.max\(0, Math\.min\(100, Math\.round\(Number\(tone\)\)\)\) : (\d+);/],
     ['../data/chatEngine.ts', /Math\.max\(0, Math\.min\(100, Math\.round\(Number\(input\.tone\)\)\)\) : (\d+);/],
+    /* 另两端也是同一个数字，只是写法不同：服务器 ai.mjs 有具名常量，桌面 Rust 写在 clamp_tone 的
+       None 分支里(整条 match 挤在一行，所以按「None => 数字」取而不是按整行匹配)。
+       ⚠ 路径基准是**本测试文件所在目录**(client/src/__tests__/)，不是仓库根 —— server/ai.mjs 要写
+       '../../../server/ai.mjs'，lib.rs 要写 '../../src-tauri/src/lib.rs'(少一级会拼成 src/src-tauri，
+       实测 ENOENT)。这条链与 §41「默认通道散在五处」同源，只是那处已有 provider-follow-contract 守着。 */
+    ['../../../server/ai.mjs', /export const DEFAULT_TONE = (\d+);/],
+    ['../../src-tauri/src/lib.rs', /match tone \{ Some\(n\) => n\.clamp\(0, 100\), None => (\d+) \}/],
   ] as const;
 
-  it('三处兜底都存在且读数相同(判据不能悄悄跑在缺文件的树上)', () => {
+  it('五端兜底都存在且读数相同(判据不能悄悄跑在缺文件的树上)', () => {
     /* 正向钉子：先把「每处都能匹配到一次」钉死。正则没命中不是「读数为空」而是工具失效，
        必须先自证能打响再谈比对。 */
     const readings: Array<[string, string]> = [];
