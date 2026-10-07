@@ -77,6 +77,14 @@ describe('wiki 相对链接可达性', () => {
        此时 bad=0 是白给的，不能算通过。 */
     expect(r.mdFiles, '没扫到 wiki 文档，判据恒真').toBeGreaterThan(5);
     expect(r.total, '一条相对链接都没解析出来，判据恒真').toBeGreaterThan(100);
+    /* 【判据缺陷 #130】矩阵表格里写着「本 wiki 里的相对链接(当前读数 N 条)」，而承诺「由脚本当场打印」
+       是空的 —— 没有任何脚本打这个数，`total > 100` 也管不到它，于是那个数字从写下起就没人回读
+       (实测停在 359、真值已 361)。散文里的数量词要么不写，要么就得有校验器；这里选择后者：
+       把扫描器读数与文档里写的读数钉成同一个数。 */
+    const doc = readFileSync(MATRIX_DOC, 'utf8');
+    const claims = [...doc.matchAll(/相对链接\(当前读数 (\d+) 条\)/g)].map((m) => Number(m[1]));
+    expect(claims.length, '矩阵里登记链接条数的位置匹配到 0 处或 >1 处 ⇒ 钉子不可信').toBe(1);
+    expect(claims[0], `矩阵声称 ${claims[0]} 条，扫描器读到 ${r.total} 条 ⇒ 散文在说谎`).toBe(r.total);
   });
 
   it('尺子能分叉：植入坏链必须被抓到，还原后重新干净', () => {
