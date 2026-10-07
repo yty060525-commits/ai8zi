@@ -806,11 +806,14 @@ pub(crate) fn fnv1a(text: &str) -> u64 {
 }
 
 /// 聊天缓存键：第 2..6 段与任务键同位(性别+四柱)，chart_sig 索引自动覆盖。
-/// chatv5 与服务端同名键对齐(桌面端曾停在 chatv1，提示词早已分叉)：系统提示词现为
+/// chatv6 与服务端同名键对齐(桌面端曾停在 chatv1，提示词早已分叉)：系统提示词现为
 /// 「正文限死纯中文 + 禁止引用出处」，旧答案带英文字段名/数字/出处说明，一律作废重写。
+/// chatv6 这一跳：证据标题与缺口提示不再出现括号、斜杠与「AI」字样(改读成中文)，
+/// 指向入口的说法也从「点「AI 分析」」改成「点批断分析」。聊天证据由客户端 chatEngine
+/// 构建、三通道共用同一份字节，所以服务端升键的那批措辞同样作用于桌面旧答案 —— 一并作废重答。
 pub(crate) fn chat_cache_key(chat: &ChatRequest, model: &str) -> String {
     let qhash = fnv1a(chat.question.trim());
-    format!("chatv5|{}|{}|{}|{}|{}|{}|chat|{:016x}|{}|{}", model, chat.gender,
+    format!("chatv6|{}|{}|{}|{}|{}|{}|chat|{:016x}|{}|{}", model, chat.gender,
         chat.year_pillar, chat.month_pillar, chat.day_pillar, chat.hour_pillar,
         qhash, chat.birth_year, tone_bucket(chat.tone))
 }

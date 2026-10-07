@@ -48,8 +48,8 @@ Rust 不 import TypeScript，所以以下每一项都是**有意复刻**，改�
 | 通道标签 | `AiProvider::label()` 第 89–91 行 | `PROVIDER_LABEL`（[ai.mjs](../../server/ai.mjs) 第 14 行）、[aiSettings.ts](../../client/src/data/aiSettings.ts) |
 | 状态码读中文 | `cn_code` 第 95 行 | [chineseReadAloud.ts](../../client/src/shared/chineseReadAloud.ts) |
 | 语气 | `clamp_tone` / `tone_instruction` / `tone_bucket` 第 308–316 行 | `ai.mjs` 第 34–40 行 |
-| 缓存键 | `cache_key` 第 324 行，当前 `v10` | `ai.mjs` 第 301 行 `v15` |
-| 聊天缓存键 | `chat_cache_key` + `fnv1a` 第 795–807 行 | `chatCacheKey`（[chat.mjs](../../server/chat.mjs) 第 365 行） |
+| 缓存键 | `cache_key`，当前 `v10`(与服务器 v15 **各自演进**，两边查各自的库) | `ai.mjs` `v15` |
+| 聊天缓存键 | `chat_cache_key` + `fnv1a`，当前 `chatv6` —— **必须等于服务端读数**([cache-key-cross-end.test.ts](../../client/src/__tests__/cache-key-cross-end.test.ts)) | `chatCacheKey`（[chat.mjs](../../server/chat.mjs)） |
 | 时段提示词 | `SCOPE_PREFIX` 第 367 行 | 两端同名常量 |
 | 本命提示词 | `BASELINE_PREFIX` 第 383 行 | 同上 |
 | 失败分类 | `classify_failure` 第 470 行、`final_ai_status` 第 487 行 | `classifyFailure`（[deepseekAdapter.ts](../../client/src/data/deepseekAdapter.ts) 第 37 行） |
