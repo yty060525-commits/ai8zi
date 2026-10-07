@@ -118,8 +118,12 @@ fn selected_provider() -> AiProvider {
 
 #[tauri::command]
 pub fn save_ai_credential(provider: AiProvider, secret: String) -> Result<&'static str, String> {
-    if secret.is_empty() { return Err("密钥不能为空".into()); }
-    credential_entry(&provider)?.set_password(&secret).map_err(|error| error.to_string())?;
+    // #134：与另两端同口径 —— 服务端 saveProviderKey 用 key.trim()、浏览器 saveAiCredential 也先 trim 再判空。
+    //        此前只判 secret.is_empty()，纯空白("   ")在桌面被当成有效密钥落进 keyring，界面报「已配置」，
+    //        而那份串发给上游必失败(aiSettings.ts:29 的注释恰恰声称桌面「见空密钥直接报错」)。trim 后判空并存储。
+    let trimmed = secret.trim();
+    if trimmed.is_empty() { return Err("密钥不能为空".into()); }
+    credential_entry(&provider)?.set_password(trimmed).map_err(|error| error.to_string())?;
     Ok("configured")
 }
 

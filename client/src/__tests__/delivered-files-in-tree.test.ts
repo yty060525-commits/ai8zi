@@ -212,6 +212,7 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
     { guards: '#131 聊天缓存键跨端版本对齐', file: 'cache-key-cross-end.test.ts' },
     { guards: '#132 natal 键序三端同序', file: 'natal-key-order-cross-end.test.ts' },
   { guards: '#133 通道端点/模型/温度三端同源(Qwen 温度)', file: 'provider-spec-cross-end.test.ts' },
+  { guards: '#134 凭据空白口径三端同源(桌面曾漏 trim)', file: 'credential-blank-caliber-cross-end.test.ts' },
     { guards: '#113/#116/#119 进度条占位与分母同源', file: 'progress-bar-count.test.tsx' },
   ];
 
