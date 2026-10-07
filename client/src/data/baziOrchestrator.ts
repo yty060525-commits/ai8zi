@@ -69,7 +69,7 @@ export interface OrchestrateOptions {
 
 const isTest = typeof import.meta !== 'undefined' && import.meta.env?.MODE === 'test';
 const DEFAULT_RETRY_DELAY_MS = 900;
-export const DEFAULT_TONE = 80;   // 检测到失败后尽快重发(太短易被限流，900ms 合适)
+export const DEFAULT_TONE = 80;   // 语气默认档：八成好话两成委婉，与滑杆「这是默认档」同源
 const REPAIR_WAIT_MS = 2500;          // 整批跑完后的自动补跑等待
 /** 补跑阶段给**每条任务**的那一份额度(与主跑的 retries 分开，见 roundOf 的实测订正)。
  *  ⚠ 「独立」指的是记账对象不同，不是「随便再发一批」：这一份同样记在**这条任务**的账上、

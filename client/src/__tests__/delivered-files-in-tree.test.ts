@@ -208,6 +208,7 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
        HEAD 树里确实存在 client/src/features/person/PersonDetail.tsx，于是「红转绿」被误读成
        「路径写错了」。改参照 '..' 等于把闸门挪到另一棵子树上比对，自己把它解除。 */
     { guards: '#100 详情页失败后自动排期重试', file: 'auto-retry-schedule.test.tsx' },
+    { guards: '#129 语气默认档三处同源', file: 'tone-default-single-source.test.ts' },
     { guards: '#113/#116/#119 进度条占位与分母同源', file: 'progress-bar-count.test.tsx' },
   ];
 
