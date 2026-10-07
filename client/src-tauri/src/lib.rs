@@ -305,8 +305,12 @@ pub(crate) fn provider_model(provider: &AiProvider) -> &'static str {
     match provider { AiProvider::Deepseek => "deepseek-flash", AiProvider::Kimi => "kimi-k2.6", AiProvider::Qwen => "qwen3.8-flash" }
 }
 
-pub(crate) fn provider_temperature(provider: &AiProvider) -> Option<i32> {
-    match provider { AiProvider::Deepseek => None, AiProvider::Kimi => Some(1), AiProvider::Qwen => Some(1) }
+/// 温度三端同源(#133)：浏览器直连 CHANNELS 与服务端 ai.mjs 对已关思考的 Qwen 都取 0.3
+/// (服务端注释「已关闭思考的 Qwen 用低温度更稳定」)，桌面此前停在 Some(1) —— 同一命盘同一个
+/// 问题在网页与桌面拿到不同温度的答案，而 deepseekAdapter.ts:141 又声称「参数与服务器端、桌面端保持一致」。
+/// 改成 f64 才能表达 0.3：i32 会把小数截断成整数，静默把桌面重新拉回与另两端分叉。
+pub(crate) fn provider_temperature(provider: &AiProvider) -> Option<f64> {
+    match provider { AiProvider::Deepseek => None, AiProvider::Kimi => Some(1.0), AiProvider::Qwen => Some(0.3) }
 }
 
 fn clamp_tone(tone: Option<i32>) -> i32 { match tone { Some(n) => n.clamp(0, 100), None => 80 } }
@@ -353,7 +357,7 @@ pub(crate) fn write_cache(connection: &rusqlite::Connection, key: &str, payload:
 }
 
 /// 只把 API 兼容字段(模型/消息/温度)发给厂商，避免自定义元数据被严格网关拒绝。
-pub(crate) fn api_request_payload(payload: &Value, model: &str, temperature: Option<i32>) -> Value {
+pub(crate) fn api_request_payload(payload: &Value, model: &str, temperature: Option<f64>) -> Value {
     let mut out = serde_json::json!({ "model": model, "messages": payload["messages"].clone() });
     if let Some(t) = temperature { out["temperature"] = t.into(); }
     if model.starts_with("deepseek") { if let Some(effort) = payload.get("effort").and_then(|v| v.as_str()) { out["reasoning_effort"] = effort.into(); } } // 只有 DeepSeek 走思考力度参数，Kimi 不接受
@@ -994,8 +998,9 @@ mod tests {
         assert_eq!(commands::provider_model(&commands::AiProvider::Kimi), "kimi-k2.6");
         assert_eq!(commands::provider_model(&commands::AiProvider::Qwen), "qwen3.8-flash");
         assert_eq!(commands::provider_temperature(&commands::AiProvider::Deepseek), None);
-        assert_eq!(commands::provider_temperature(&commands::AiProvider::Kimi), Some(1));
-        assert_eq!(commands::provider_temperature(&commands::AiProvider::Qwen), Some(1));
+        assert_eq!(commands::provider_temperature(&commands::AiProvider::Kimi), Some(1.0));
+        // #133：Qwen 与浏览器直连/服务端同源取 0.3(已关思考、低温度更稳定)，桌面此前误停在 1。
+        assert_eq!(commands::provider_temperature(&commands::AiProvider::Qwen), Some(0.3));
     }
 
     #[test]
@@ -1137,8 +1142,8 @@ mod tests {
         assert!(api.get("taskId").is_none());
         assert!(api.get("nonAiResult").is_none());
         assert!(api.get("temperature").is_none()); // reasoner 不发送 temperature
-        let warm = commands::api_request_payload(&payload, "kimi-k2.6", Some(1));
-        assert_eq!(warm["temperature"], 1);
+        let warm = commands::api_request_payload(&payload, "kimi-k2.6", Some(1.0));
+        assert_eq!(warm["temperature"], 1.0);
         assert_eq!(warm["messages"][0]["role"], "user");
     }
 
