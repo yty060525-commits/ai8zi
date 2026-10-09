@@ -110,6 +110,10 @@ export function ChartChat() {
     setInput('');
     const recId = recordId ?? shared.selected?.id ?? null;
     const reply = await askChat({ question: trimmed, history, tone: recordTone(recId), recordId: recId, signal: controller.signal }).catch(() => null);
+    /* 「停止」/「清空对话」/新一问都已经把 sharedAbort 换走或置空时，这一问的回包不再写进会话。
+       引擎侧配合：chatEngine 把 AbortError 转成 {status:'failed',error:'已取消'} 而非外抛，
+       所以这条只能由界面 own —— 少了它，上一问的迟到答案会插在新一问前面，看着像这一问答错了。 */
+    if (sharedAbort !== controller) return;
     sharedAbort = null;
     // 通道被整体取消(停止/清空对话)时也会走到这里：那时会话已经复位，不该再把「已取消」
     // 当成一条错误摆在用户眼前。

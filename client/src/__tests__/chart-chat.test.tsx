@@ -148,6 +148,68 @@ describe('排盘页「问问 AI」', () => {
     expect(screen.queryByText('ok')).toBeNull();
     expect(screen.getByLabelText('命理问题')).toBeTruthy();
   });
+
+  /* #138 停止之后，那一问的迟到回包不得进会话。
+     实测(变异前基线)：点「停止」→ 立刻再问 → 旧请求迟迟到账时，两条答案都摆在会话里，
+     顺序还是「旧答在前、新答在后」—— 用户看到的是上一问的答案冒充这一问的回答。
+     引擎侧其实已经配合(chatEngine.ts 把 AbortError 转成 {status:'failed',error:'已取消'}，
+     不往外抛)，所以这条只能由界面 own：回包落地前先确认这个控制器仍是当前那一个。 */
+  it('点「停止」后旧请求迟迟到账 → 不进会话，也不影响新一问', async () => {
+    const first = { resolve: (_v: unknown) => {}, aborted: false };
+    let calls = 0;
+    let secondResolve!: (v: never) => void;
+    vi.mocked(askChat).mockImplementation((opts) => {
+      calls += 1;
+      opts?.signal?.addEventListener('abort', () => { if (calls === 1) first.aborted = true; });
+      if (calls === 1) return new Promise((res) => { first.resolve = res; }) as never;
+      return new Promise((res) => { secondResolve = res; }) as never;
+    });
+    render(<ChartChat />);
+    await flush();
+    fireEvent.change(screen.getByLabelText('命理问题'), { target: { value: '第一问？' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await flush();
+    // 在途时按钮必须换成「停止」，输入框禁用 —— 这两样是这段用例的前提
+    expect(first.aborted, '前提：此时应有在途请求可中止').toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: '停止' }));
+    await flush();
+    expect(first.aborted, '点「停止」没有中止在途请求').toBe(true);
+
+    fireEvent.change(screen.getByLabelText('命理问题'), { target: { value: '第二问？' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await flush();
+    expect(calls, '停止后无法再发起新的一问').toBe(2);
+
+    act(() => { first.resolve({ status: 'completed', answer: '第一问的迟到答案' }); });
+    await flush();
+    expect(screen.queryByText('第一问的迟到答案'), '已停止的那一问仍把迟到答案写进了会话').toBeNull();
+
+    act(() => { secondResolve({ status: 'completed', answer: '第二问的答案' } as never); });
+    await flush();
+    expect(screen.getByText('第二问的答案')).toBeTruthy();
+    // 会话里只有这两问与新一问的答案，旧答案不出现在任何位置
+    const bodies = Array.from(document.querySelectorAll('.chat-body')).map((n) => String(n.textContent));
+    expect(bodies.filter((t) => t.includes('第一问的迟到答案')), '迟到答案以任何形式出现在会话里').toHaveLength(0);
+  });
+
+  /* 「清空对话」走的是同一条 abort 路径(clearChatThread 也调 sharedAbort?.abort())，
+     但它是模块级导出、在别处也会用到，单独钉一次：清空后迟到的答案不许把会话填回去。 */
+  it('清空对话后旧请求迟迟到账 → 会话保持为空', async () => {
+    let release!: (v: never) => void;
+    vi.mocked(askChat).mockImplementation(() => new Promise((res) => { release = res; }) as never);
+    render(<ChartChat />);
+    await flush();
+    fireEvent.change(screen.getByLabelText('命理问题'), { target: { value: '财运？' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await flush();
+    fireEvent.click(screen.getByRole('button', { name: '停止' }));
+    await flush();
+    act(() => { clearChatThread(); });
+    act(() => { release({ status: 'completed', answer: '迟到的答案' } as never); });
+    await flush();
+    expect(screen.queryByText('迟到的答案'), '清空后迟到答案又把会话填上了').toBeNull();
+    expect(document.querySelectorAll('.chat-msg')).toHaveLength(0);
+  });
 });
 
 describe('切换命主(点名字)', () => {

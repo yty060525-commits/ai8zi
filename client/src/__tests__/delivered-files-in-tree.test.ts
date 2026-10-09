@@ -218,6 +218,11 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
        但正文没过纯中文闸门 → 就地拦下报错，绝不静默改走本机通道」。登记整文件是为了让
        「删掉这一句」和「删掉整个文件」撞同一道闸门 —— 上一轮踩过的是后者无声通过。 */
     { guards: '#136 云端正文不合格不得静默绕本机直连', file: 'chat-engine.test.ts' },
+    /* #137 的两条各进了既有文件(chat-engine 的「服务器报错且本机没配」措辞判据、
+       provider-follow-contract 的通道顺序读点同源)，登记号沿用被改文件，不再单开条目。 */
+    /* #138 是产品缺陷(ChartChat 迟到回包)，判据在 chart-chat.test.tsx 里新增两条用例；
+       同类的 abort 竞态详情页早在缺陷 #114 就用 signalAbortedRef 修过，聊天区是漏掉的兄弟路径。 */
+    { guards: '#138 已停止/已清空的问不得把迟到回包写进会话', file: 'chart-chat.test.tsx' },
     { guards: '#113/#116/#119 进度条占位与分母同源', file: 'progress-bar-count.test.tsx' },
   ];
 
