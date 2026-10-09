@@ -306,6 +306,28 @@ describe('askChat 通道分流', () => {
     expect(r.evidence?.options).toHaveLength(2);
     expect(chatDirect).not.toHaveBeenCalled();
   });
+  it('云端答了、但正文没过纯中文闸门 → 就地拦下报错，绝不静默改走本机通道', async () => {
+    /* 旧写法在这里把 serverReason 记下来、继续往落到 askChatLocal：连着服务器却用浏览器里那份
+       本机密钥重答，界面上完全看不出换了通道。服务端 chat.mjs 已用同一份 chineseGate 自洗过
+       (洗净为空即换 provider)，completed 带脏串本属异常形态，所以这一条直接终止在云端。 */
+    vi.mocked(isServerMode).mockReturnValue(true);
+    localStorage.setItem('mingli.provider', 'qwen');
+    localStorage.setItem('mingli.cred.qwen', 'test-secret');
+    vi.mocked(listBaziRecords).mockResolvedValue([rec]);
+    /* completed 的正文要「洗完即空」才触发这条分支。夹具不是随手挑的：
+       'The favorable element for this chart is fire.' 里的 favorable/chart/element 都在
+       FIELD_NAME_ZH 表里，会被翻成中文而**非空**(实测返回「喜用」)，用它当反例等于没测。
+       这句没有任何已登记字段名 ⇒ 洗完全删 ⇒ 空串。当场先钉住这个前提。 */
+    const dirty = 'This year your career looks good.';
+    expect(sanitizeAnalysisText(dirty), '夹具本身必须被闸门洗成空串，否则这条分支压根不执行').toBe('');
+    vi.mocked(serverFetch).mockResolvedValue({ status: 200, data: { status: 'completed', answer: dirty } } as never);
+    const reply = await askChat({ question: '2026年事业如何？' });
+    expect(reply.status).toBe('failed');
+    expect(chatDirect, '不许绕本机直连重答').not.toHaveBeenCalled();
+    const text = String(reply.error ?? '');
+    expect(text).toContain('不是纯中文');
+    expect(sanitizeAnalysisText(text), '报错串本身要能上屏：' + text).toBeTruthy();
+  });
   it('服务器与本机都失败时，两段原因各自读成中文后拼接，整句过闸门不塌成空', async () => {
     // 这是「原因丢失」那条链路的端到端钉子：展示层(ChartChat)只做 sanitizeAnalysisText(error) || '回答失败'。
     // 只要拼串里还留一个英文词或半角括号，整句就被判空，用户看到的就只剩「回答失败，请稍后重试」。

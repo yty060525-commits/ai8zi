@@ -535,14 +535,15 @@ export async function askChat(input: AskChatInput): Promise<ChatReply> {
             : '本机这些盘都已同步到服务器，却仍查不到你的命盘：可能是当前登录账号与建盘时的账号不同，数据按账号隔离。请在设置里的服务器通道确认已连接的账号。' };
         }
       }
-      // 闸门拦住了(清洗后仍非纯中文)：这条不能当答案，落到本机通道重答；
-      // 本机也没配凭据时至少给出人话，而不是把一屏英文摆给用户。
+      // 服务器答完就到此为止：正文没过纯中文闸门时**不再静默改走本机通道**。
+      // 理由一(死代码)：服务端 chat.mjs 自己就用同一份 chineseGate 洗过一遍，洗净为空即换 provider、
+      // 全失败返回 failed，completed 带脏串这条路正常根本走不到。
+      // 理由二(口径)：连着服务器又悄悄用浏览器里那份本机密钥重答，用户看不出回答出自哪条通道。
+      // 落本机只保留两种明确情形：服务器不可达(status 0)、服务器自身报错且本机配了凭据(见下方 catch)。
       if (data?.status === 'completed' && !answer) {
-        serverReason = '服务器返回的正文不是纯中文';
-        if (!anyChannelConfigured()) return { status: 'failed', error: '批断返回的正文不是纯中文，已拦下未展示。' };
-      } else {
-        return { ...data, answer: data?.status === 'not_configured' && data.error ? serverOnlyReason(data.error) : answer, evidence: data?.evidence };
+        return { status: 'failed', error: '云端返回的正文不是纯中文，已拦下未展示。', evidence: data?.evidence };
       }
+      return { ...data, answer: data?.status === 'not_configured' && data.error ? serverOnlyReason(data.error) : answer, evidence: data?.evidence };
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return { status: 'failed', error: '已取消' };
       const offline = error instanceof ServerError && error.status === 0;

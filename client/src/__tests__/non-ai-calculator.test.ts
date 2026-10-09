@@ -217,9 +217,19 @@ describe('non-AI calculator', () => {
       const ec = born.getLunar().getEightChar();
       const result = calculateNonAi({ birthYear: 1979, birthMonth: 5, birthDay: 28, yearPillar: ec.getYear(), monthPillar: ec.getMonth(), dayPillar: ec.getDay(), hourPillar: ec.getTime() }, 'male', '2026-09-28T00:00:00Z');
       // 2026-09-28 < 2026-10-08：仍在乙丑运(第4柱)。整数年会误判成下一柱丙寅。
-      const text = luckStartText(result, 2026);
-      expect(text).toContain('今年在乙丑运');
-      expect(text).not.toContain('今年在丙寅运');
+      /* luckStartText 内部读真实时钟(chinaYmd(new Date()))，不能靠传参钉日期 ——
+         产品那行 `const todayYmd = chinaYmd(new Date())` 由 beijing-date-caliber 逐字求值校验，
+         改成参数会让那条判据失去命中点。所以这里桩掉时钟本身，并当场证明桩能分叉。 */
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2026-09-28T00:00:00Z'));
+        expect(luckStartText(result, 2026)).toContain('今年在乙丑运');
+        // 尺本身能分叉：过了交运日就该换柱，否则上面那句等于恒真
+        vi.setSystemTime(new Date('2026-10-08T00:00:00Z'));
+        expect(luckStartText(result, 2026)).toContain('今年在甲子运');
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     /* findCurrentFortune：大运表高亮「今年所在」那一柱所用的共享判据。它必须与 luckStartText
