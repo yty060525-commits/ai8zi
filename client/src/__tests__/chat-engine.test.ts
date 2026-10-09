@@ -289,10 +289,13 @@ describe('askChat 通道分流', () => {
   });
   it('点「停止」后不得再用浏览器里那份本机密钥重答(#141)', async () => {
     /* 缺陷 #141：askChat 的服务器分支里，`error instanceof DOMException && name==='AbortError'`
-       这句闸门**从来没有一条判据碰过**。实测取证(临时探针，读数见 wiki 51)：删掉整句后
-       askChat 不报错、直接落进 askChatLocal → chatDirect，等于用户点了停止反而多花一次钱。
-       同类的兄弟路径早有覆盖(批断侧 #114 的 signalAbortedRef、编排器的 abortError)，
-       「云端脏串不再静默改走本机」也有一条专门用例 —— 只有聊天中止这一格是空的。 */
+       这句闸门**从来没有一条判据碰过**。实测取证：删掉整句后 askChat 不报错、直接落进
+       askChatLocal → chatDirect，等于用户点了停止反而多花一次钱；把这句换成只判断不返回
+       (当成 offline)同样是红的。兄弟路径早有覆盖(批断侧 #114 的 signalAbortedRef、编排器的
+       abortError)，「云端脏串不再静默改走本机」也有一条专门用例 —— 只有聊天中止这一格是空的。
+       ⚠ 订正：这里原先写「读数见 wiki 51」，但 51 页讲的是服务器/桌面那几组变异，#141 的三条
+       读数记在 [21-服务器端](../../../../docs/wiki/21-服务器端.md) 的 #141 一节。注释里指向
+       别处的读数必须当场核实那个去处真写着它。 */
     vi.mocked(isServerMode).mockReturnValue(true);
     // anyChannelConfigured() 读的就是这条本机凭据；不给它，落本机那条路压根不会启动，判据就空转了。
     localStorage.setItem('mingli.cred.qwen', 'test-secret');
