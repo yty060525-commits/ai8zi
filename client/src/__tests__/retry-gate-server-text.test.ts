@@ -1,16 +1,21 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { classifyFailure, cnCode, providerLabel, AI_SERVER_UNCONFIGURED } from '../../../server/ai.mjs';
-import { isRetryableFailure } from '../data/baziOrchestrator';
+import { isRetryableFailure, ABORTED_MESSAGE } from '../data/baziOrchestrator';
 
 /* 判据空白 #144：「这条失败值不值得再烧一次钱」是一份**跨端契约**，可两端各测各的字符串，
  * 中间那条链从来没人当整条链钉过。
  *
- * 消费方只有一处(client/src/data/baziOrchestrator.ts:81 isRetryableFailure)，它只认错误文本里的字样；
- * 生产方有三份实现(浏览器直连 deepseekAdapter.classifyFailure、服务器 server/ai.mjs:329、桌面 lib.rs)。
+ * 消费方有**四处**(实测 grep，2026-10-09)，全部读同一个 `isRetryableFailure`
+ * (client/src/data/baziOrchestrator.ts:81)，而它只认错误文本里的字样：
+ * ① :526 任务主跑的再试闸门；② :623 整批跑完后「仍失败」补跑名单的筛选；③ :654 补跑循环内的再试；
+ * ④ PersonDetail:557 详情页自动重试的排期早退。生产方有三份实现(浏览器直连 deepseekAdapter.classifyFailure、服务器 server/ai.mjs:329、桌面 lib.rs)。
  * 服务器 runOneTask(ai.mjs:441) 那句「未配置」回执会经 app.mjs:133 → runTaskOnServer(serverClient.ts:106)
  * → analyzeBazi(deepseekAdapter.ts:119) → baziOrchestrator:679-680 一路进到 record.aiError；详情页排
  * 自动重试读的就是 saved.aiError(PersonDetail:666)，而早退闸门只有 scheduleAutoRetry(:557) 那一句 ——
  * 控制器在 stopAnalysis 里已被置 null，所以 :579 那句 `!controllerRef.current?.signal.aborted` 恒真拦不住。
+ * ⚠ 订正(实测，2026-10-09)：本文件初稿写的是「消费方只有一处」，那是**错的** —— 我只查了
+ * record.aiError 那一条路径就下了全称结论。这个错不只是措辞：它把判据范围收窄了一半，所以下面
+ * 专门加了一条用例钉住另外三处的共同前提(#112 的中止句必须过闸门)，而不是让注释替我背书。
  *
  * 实测取证(node --test + vitest，2026-10-09)：把 server/ai.mjs:322 的文案改成
  * 「服务器尚未接入任何通道，请机主补凭据」之后，服务器 133 条与客户端全量**照旧全绿**。
@@ -81,5 +86,21 @@ describe('#144 服务器造的失败文本必须喂得动客户端的重试闸�
     const error = (result as { error?: string }).error ?? '';
     expect(error).toBe(AI_SERVER_UNCONFIGURED);
     expect(isRetryableFailure(error), '这一轮的失败会被排成下一次自动重试：' + error).toBe(false);
+  });
+
+  it('#112 的机制前提：中止句必须能过闸门(另外三处消费方靠的就是这个读数)', () => {
+    /* 上面说的那四处消费方里，:526/:623/:654 三处判的是**单条任务**的 error，不是 record.aiError。
+       编排器把一次中止写成 toFailedResult(:422) → ABORTED_MESSAGE(:13)，而 #112 那份注释明确写着
+       「ABORTED_MESSAGE 恰好也能过 isRetryableFailure ⇒ 单次调用绝不许抛出」—— 抛出会落到
+       PersonDetail 那个 catch，把 aiError 写成这句、进而让自动重试在用户没点任何东西时静默断链。
+       也就是说整条 #112 的修复都架在一个**文本层读数**上：这句必须为真。可全仓没有一条用例跨过
+       这道边界(auto-retry-schedule:354 钉的是产品码里的三元式，读的是源码而不是闸门输出)。
+       所以把 :13 改成「已停止：未配置继续」这种带「未配置」字样的说法，闸门立刻判假，而两套套件
+       都不会红 —— 这正是本缺陷(#144)同一类的另一半，只是方向相反：不是该拦的没拦住，
+       而是该放行的被一句改写的文案误杀。 */
+    expect(isRetryableFailure(ABORTED_MESSAGE), '中止句被闸门误杀 ⇒ #112 那条链路的前提塌').toBe(true);
+    /* 反向钉子：这句确实**不含**任何密钥/状态码形态，否则上面那条恒真是因为我抄了条空串。 */
+    expect(ABORTED_MESSAGE).not.toMatch(/not_configured|未配置|credential|keyring/i);
+    expect(ABORTED_MESSAGE).not.toMatch(/HTTP 40[0-9]|服务返回四[零一二三四五六七八九]/);
   });
 });

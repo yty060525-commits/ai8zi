@@ -42,6 +42,16 @@ const MUTANTS = [
     "  if (/HTTP 40[0-9]|服务返回四[零一二三四五六七八九]/.test(error)) return false;",
     '  // 删掉这一句',
     '整条状态码闸门摘掉'),
+  /* A4 是同一缺陷的**反方向**：不是该拦的没拦住，而是该放行的被误杀。#112 整套修复架在
+     「ABORTED_MESSAGE 能过闸门」这个文本层读数上(编排器 :418 的注释亲口写着)，可全仓没有一条
+     用例跨过这道边界。实测取证(vitest，2026-10-09)：把这句改成带「未配置」字样的说法后，
+     pool-retry-budget + orchestration + progress-bar-count 三文件 **48 条全绿**，
+     只有 retry-gate-server-text 新增的那条红 —— 也就是说另外三处消费方(:526/:623/:654)
+     一直靠一个没人钉的巧合活着。 */
+  M('A4', GATE,
+    "export const ABORTED_MESSAGE = '已停止：已完成的任务已保存，可随时再点批断分析继续完成剩余任务';",
+    "export const ABORTED_MESSAGE = '已停止：未配置继续，已完成的任务已保存';",
+    '中止句掺进「未配置」字样 ⇒ 闸门误杀，#112 的前提塌'),
 ];
 
 function runTests() {
