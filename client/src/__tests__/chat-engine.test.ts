@@ -274,6 +274,19 @@ describe('askChat 通道分流', () => {
     expect(body.recordId).toBe('r1');
     expect(body.periodFacts?.annual?.ganZhi).toBe('丙午');
   });
+  it('中止信号要一路带到服务器请求上(#139 的前提)', async () => {
+    /* 服务器侧那套判据(server/test/chat-abort.test.mjs)钉的是「收到断连就不再换通道、不写缓存」，
+       但它看不见浏览器这一端有没有真把 AbortSignal 发出去。这一句补上客户端那一半：
+       少了它，任何人删掉 chatEngine/serverClient 里的 signal 透传，#139 那批用例照样全绿，
+       而线上每次点「停止」都会白付三条通道的钱。 */
+    vi.mocked(isServerMode).mockReturnValue(true);
+    vi.mocked(listBaziRecords).mockResolvedValue([rec]);
+    vi.mocked(serverFetch).mockResolvedValue({ status: 200, data: { status: 'completed', answer: '服务器答案' } } as never);
+    const controller = new AbortController();
+    await askChat({ question: '2026年事业如何？', signal: controller.signal });
+    const opts = vi.mocked(serverFetch).mock.calls[0][1] as { signal?: AbortSignal };
+    expect(opts.signal).toBe(controller.signal);
+  });
   it('取证前先还原瘦身数组：列表给的是清空过大运/流年的存储版', async () => {
     // 落库时 pruneRecord 把派生数组清成空，listBaziRecords 又不重算。聊天若直接拿它算证据，
     // buildPeriodFacts 的三行查找恒为空，模型只剩一个年龄 —— 问「某年运势」就答不出东西。

@@ -223,6 +223,10 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
     /* #138 是产品缺陷(ChartChat 迟到回包)，判据在 chart-chat.test.tsx 里新增两条用例；
        同类的 abort 竞态详情页早在缺陷 #114 就用 signalAbortedRef 修过，聊天区是漏掉的兄弟路径。 */
     { guards: '#138 已停止/已清空的问不得把迟到回包写进会话', file: 'chart-chat.test.tsx' },
+    /* #139 的判据在服务器侧(server/test/chat-abort.test.mjs，node --test)，不是 vitest 用例文件，
+       所以不能进上面那张表(表的 file 会拼进 client/src/__tests__/，且反向钉子要求 .test.ts(x))。
+       丢在这里钉：客户端「停止」发的是真 AbortSignal(chatEngine 把 controller.signal 交给 fetch)，
+       一旦有人把它摘掉，服务器就再也收不到断连 —— #139 那套判据会照样全绿却守不住东西。 */
     { guards: '#113/#116/#119 进度条占位与分母同源', file: 'progress-bar-count.test.tsx' },
   ];
 
@@ -241,8 +245,15 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
     }
   });
 
+  it('#139 的服务器判据必须在 HEAD 树里(它不是 vitest 用例，不能进 CRITERIA 那张表)', () => {
+    /* 上面那张表的 file 会拼进 client/src/__tests__/，反向钉子又要求 .test.ts(x) 结尾，
+       所以 server/test/*.mjs 一律登记不进去 —— 但不登记就等于「闸门跟着功能一起消失」没人报。
+       ⚠ trackedPaths() 只列 HEAD 树，新文件在 git add 之前这条必红(踩过：先跑测后提交)。
+       这一句单独钉 server 侧那份：删掉文件、改名、或把它挪出 test/ 都会红。 */
+    expect([...trackedPaths()]).toContain('server/test/chat-abort.test.mjs');
+  });
+
   it('判据账本非空(掏空它就等于把所有闸门一次性摘掉)', () => {
-    /* 与 MARKERS 同一形态的反向钉子：CRITERIA 为空时上面那条 it.each 会零条通过而全绿。 */
     expect(CRITERIA.length, '判据账本被掏空了').toBeGreaterThanOrEqual(10);
   });
 });

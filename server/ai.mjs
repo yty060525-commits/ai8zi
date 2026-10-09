@@ -365,7 +365,7 @@ export function withQwenCacheMark(provider, messages) {
 
 /** 调一次上游(单 provider，最多 transport 重试一次)；失败返回 {error}。
  *  mode='json'(默认)解析为结构化 analysis；mode='text' 直接返回 {text} 纯正文(聊天用)。 */
-export async function callProvider(provider, key, messages, effort, mode = 'json') {
+export async function callProvider(provider, key, messages, effort, mode = 'json', callerSignal) {
   const body = { model: provider.model, messages: withQwenCacheMark(provider, messages), max_tokens: 32768 };
   // V4.1：思考模式默认开启；按任务类型控制思考力度(本命/后天调整=high，时段=low 以省时省钱)
   if (provider.id === 'deepseek' && effort) body.reasoning_effort = effort;
@@ -375,6 +375,13 @@ export async function callProvider(provider, key, messages, effort, mode = 'json
   if (provider.id === 'kimi') body.temperature = 1;
   if (provider.id === 'qwen') body.temperature = 0.3;
   const controller = new AbortController();
+  /* 调用方的中止信号要接到这条上游请求上(#139)：客户端点「停止」后浏览器 fetch 会断，
+     但服务器此前只用自己的 150s 超时控制器 —— 结果这一问照样会把三条通道挨个试一遍、真金白银地扣费。
+     once:true：不留监听器堆积(同一个 signal 会被后续每个通道复用)。 */
+  if (callerSignal) {
+    if (callerSignal.aborted) controller.abort();
+    else callerSignal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
   const startedAt = Date.now();
   const timer = setTimeout(() => controller.abort(), 150_000);
   try {

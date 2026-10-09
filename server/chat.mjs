@@ -437,7 +437,7 @@ export function applyFollowUp(plan, history, summaries = [], now = new Date()) {
 }
 
 /* ---------- 入口 ---------- */
-export async function runChat(db, user, body = {}) {
+export async function runChat(db, user, body = {}, opts = {}) {
   const question = String(body.question || '').trim();
   if (!question) return { status: 'failed', error: '请输入问题' };
   if (question.length > 500) return { status: 'failed', error: '问题过长，请控制在五百字以内' };
@@ -477,14 +477,21 @@ export async function runChat(db, user, body = {}) {
   }
   if (providers.length === 0) return { status: 'not_configured', error: AI_SERVER_UNCONFIGURED };
   const errors = [];
+  /* 客户端断开(点「停止」/「清空对话」)后：不再换下一条通道，也不把这份没人读的答案写进缓存。
+     后者尤其要紧 —— 首轮问答按 (record, question, model, tone) 落缓存，用户点停止往往正因为
+     模型在跑偏；一旦让它占住这个键，下次重问同一句直接命中缓存、原样返回同一个坏答案。 */
+  const abandoned = () => !!opts.signal?.aborted;
   for (const provider of providers) {
+    if (abandoned()) return { status: 'failed', error: '这一问已经被取消，没有继续调用通道。', evidence: evidenceMeta };
     const ck = cacheable ? chatCacheKey(record, question, provider.model, tone) : null;
-    const result = await callProvider(provider, providerKey(db, provider.id), messages, 'high', 'text');
+    // opts.callProvider 只给测试留的接缝：#139 要直接钉住「路由有没有把请求中止接到通道调用上」，
+    // 而真实 callProvider 内部自己 new AbortController，从外面只能间接看到转发给 fetch 的 signal。
+    const result = await (opts.callProvider || callProvider)(provider, providerKey(db, provider.id), messages, 'high', 'text', opts.signal);
     if (result.text) {
       const clean = sanitizeChatText(result.text);
       // 洗净后为空 = 模型整段跑成英文，当作该 provider 失败，换下一个通道再试
       if (!clean) { errors.push(PROVIDER_LABEL[provider.id] + '：模型输出不是中文'); continue; }
-      if (ck) { try { writeCache(db, ck, clean); } catch { /* 写缓存失败不影响回答 */ } }
+      if (ck && !abandoned()) { try { writeCache(db, ck, clean); } catch { /* 写缓存失败不影响回答 */ } }
       return { status: 'completed', answer: clean, cached: false, evidence: evidenceMeta };
     }
     // 报错里必须用中文通道名：provider.id 是协议层标识(deepseek/kimi/qwen)，直接拼进 error

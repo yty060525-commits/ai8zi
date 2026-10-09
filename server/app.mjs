@@ -27,6 +27,8 @@ function authFrom(db, req) {
 }
 
 export function createApp({ db, allowRegister = true }) {
+  // #139 判据接缝：默认走真实 callProvider，测试可注入替身以直接观察 callerSignal。
+  let chatProviderCaller = null;
   async function handle(req, res) {
     const url = new URL(req.url, 'http://localhost');
     const method = req.method;
@@ -136,8 +138,18 @@ export function createApp({ db, allowRegister = true }) {
       // ---- AI 聊天(排盘页)：解析提问 → 查本账号库内证据 → 思考回答；只读自己的记录 ----
       if (method === 'POST' && route === 'chat') {
         const body = await readJsonBody(req);
-        const result = await runChat(db, user, body || {});
-        return json(res, 200, result);
+        /* res.on('close') 不能无条件 abort：实测(Node 24)客户端读完响应后关闭连接时 close 照样触发，
+           只是那时 writableEnded 已经是 true。所以「writableEnded=false 的 close」就是真放弃，
+           「true 的 close」是正常收尾 —— 用这一位区分，两条都不会误伤。 */
+        const controller = new AbortController();
+        const probe = () => { if (!res.writableEnded) controller.abort(); };
+        res.on('close', probe);
+        try {
+          const result = await runChat(db, user, body || {}, { signal: controller.signal, callProvider: chatProviderCaller });
+          return json(res, 200, result);
+        } finally {
+          res.removeListener('close', probe);
+        }
       }
 
       // ---- 管理端 ----
@@ -184,7 +196,7 @@ export function createApp({ db, allowRegister = true }) {
     saveSession(db, sha256hex(token), userId, Date.now() + SESSION_TTL_MS);
     return token;
   }
-  return { handle, startSession };
+  return { handle, startSession, setProviderCaller: (fn) => { chatProviderCaller = fn; } };
 }
 
 export function pruneSessions(db) { deleteExpiredSessions(db, Date.now()); }
