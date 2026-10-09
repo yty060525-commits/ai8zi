@@ -291,7 +291,7 @@ describe('askChat 通道分流', () => {
     /* 缺陷 #141：askChat 的服务器分支里，`error instanceof DOMException && name==='AbortError'`
        这句闸门**从来没有一条判据碰过**。实测取证(临时探针，读数见 wiki 51)：删掉整句后
        askChat 不报错、直接落进 askChatLocal → chatDirect，等于用户点了停止反而多花一次钱。
-       同类的兄弟路径早就钉住了：批断侧 deepseekAdapter 的 abortResult 有 auto-retry/进度用例守着，
+       同类的兄弟路径早有覆盖(批断侧 #114 的 signalAbortedRef、编排器的 abortError)，
        「云端脏串不再静默改走本机」也有一条专门用例 —— 只有聊天中止这一格是空的。 */
     vi.mocked(isServerMode).mockReturnValue(true);
     // anyChannelConfigured() 读的就是这条本机凭据；不给它，落本机那条路压根不会启动，判据就空转了。
