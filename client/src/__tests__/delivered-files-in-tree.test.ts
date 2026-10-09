@@ -226,6 +226,10 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
     /* #142/#143 是桌面(Tauri)那两条本机通道的中止接线：任务支把 Rust 的 "cancelled" 读成普通失败批断、
        聊天支压根没读 signal。判据独立成一个文件，摘掉任何一句闸门这里立刻红。 */
     { guards: '#142/#143 桌面通道要接住「立即停止」', file: 'tauri-task-abort.test.ts' },
+    /* #144 是跨端契约(服务器造的失败文本 → 客户端那唯一一道重试闸门)，判据两端各一份：
+       客户端这份 import server/ai.mjs 读真实产物，服务器那份起真 HTTP 路由走整条链。只留一边
+       就等于「另一端改了没人报」—— 这正是本缺陷能活到今天的成因。 */
+    { guards: '#144 服务器的失败文本要喂得动重试闸门', file: 'retry-gate-server-text.test.ts' },
     /* #139 的判据在服务器侧(server/test/chat-abort.test.mjs，node --test)，不是 vitest 用例文件，
        所以不能进上面那张表(表的 file 会拼进 client/src/__tests__/，且反向钉子要求 .test.ts(x))。
        丢在这里钉：客户端「停止」发的是真 AbortSignal(chatEngine 把 controller.signal 交给 fetch)，
@@ -257,6 +261,8 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
     /* #140 是 #139 同一类缺陷的兄弟路径（批断任务路由），客户端早就发真 signal，
        服务器那侧却既不 abort 上游也不拦缓存。判据独立成一个文件，摘掉它同样没人报。 */
     expect([...trackedPaths()]).toContain('server/test/task-abort.test.mjs');
+    /* #144 的服务器半边(真 HTTP 路由 → 回执文本 → 闸门)同样不是 vitest 用例，得单独钉。 */
+    expect([...trackedPaths()]).toContain('server/test/retry-gate-unconfigured.test.mjs');
   });
 
   it('判据账本非空(掏空它就等于把所有闸门一次性摘掉)', () => {
