@@ -223,6 +223,9 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
     /* #138 是产品缺陷(ChartChat 迟到回包)，判据在 chart-chat.test.tsx 里新增两条用例；
        同类的 abort 竞态详情页早在缺陷 #114 就用 signalAbortedRef 修过，聊天区是漏掉的兄弟路径。 */
     { guards: '#138 已停止/已清空的问不得把迟到回包写进会话', file: 'chart-chat.test.tsx' },
+    /* #142/#143 是桌面(Tauri)那两条本机通道的中止接线：任务支把 Rust 的 "cancelled" 读成普通失败批断、
+       聊天支压根没读 signal。判据独立成一个文件，摘掉任何一句闸门这里立刻红。 */
+    { guards: '#142/#143 桌面通道要接住「立即停止」', file: 'tauri-task-abort.test.ts' },
     /* #139 的判据在服务器侧(server/test/chat-abort.test.mjs，node --test)，不是 vitest 用例文件，
        所以不能进上面那张表(表的 file 会拼进 client/src/__tests__/，且反向钉子要求 .test.ts(x))。
        丢在这里钉：客户端「停止」发的是真 AbortSignal(chatEngine 把 controller.signal 交给 fetch)，

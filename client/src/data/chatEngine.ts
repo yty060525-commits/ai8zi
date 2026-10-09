@@ -516,6 +516,9 @@ export async function askChat(input: AskChatInput): Promise<ChatReply> {
         periodFacts = buildPeriodFacts(full, { ...plan, recordId: target.id });
       }
     } catch { /* 本地库读不到就让服务器完全按库内数据作答 */ }
+    // #143 同类：上面那步取证是 await，慢盘上可达数百毫秒。旧写法只在 serverFetch 抛 AbortError
+    // 时才认出取消，而那时 fetch 压根没发出去过 —— 「点停止 → 又上一条服务器请求」就是这么来的。
+    if (input.signal?.aborted) return { status: 'failed', error: '已取消' };
     try {
       let provider: string | undefined;
       try { provider = localStorage.getItem('mingli.provider') ?? undefined; } catch { provider = undefined; }
@@ -585,6 +588,13 @@ async function askChatLocal(input: { question: string; history: ChatMessage[]; t
   const meta = { recordId: target.id, personName: target.name, plan };
   const inTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
   if (inTauri) {
+    // #143：桌面这一支以前只看 invoke 的结果，signal 传进来也没人读；而 Rust 侧 run_ai_chat
+    // 一条 session_cancelled() 闸门都没有(任务通道有 lib.rs:712/741/748)。于是「清空对话」或
+    // 「发起新一问」(ChartChat 那两条只 abort 本地控制器、不调 cancelAiSession)之后照样白付一次：
+    //   · 中止在 invoke **之前** —— 旧代码没有预检，这一次上游调用照发、照落缓存；
+    //   · 中止在 invoke **之后** —— 那次调用已经花掉了，至少把结果拦在会话之外，不再显示。
+    // 前者能靠这两句止住，后者要靠 Rust 补闸门(#143 的桌面侧那一半仍未闭合)。
+    if (input.signal?.aborted) return { status: 'failed', error: '已取消', evidence: meta };
     try {
       const result = await invoke<{ status: string; answer?: string; error?: string; cached?: boolean }>('run_ai_chat', {
         chat: {
@@ -594,6 +604,7 @@ async function askChatLocal(input: { question: string; history: ChatMessage[]; t
         },
         messages,
       });
+      if (input.signal?.aborted) return { status: 'failed', error: '已取消', evidence: meta };
       const clean = result.answer ? sanitizeChatText(result.answer) : result.answer;
       if (result.status === 'completed' && !clean) return { status: 'failed', error: '批断返回的正文不是纯中文，已拦下未展示。', evidence: meta };
       return { status: result.status as ChatReply['status'], answer: clean, error: result.error, cached: result.cached, evidence: meta };

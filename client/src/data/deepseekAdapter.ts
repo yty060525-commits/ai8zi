@@ -68,6 +68,12 @@ export function toneInstructionText(tone: number | undefined): string {
 export function beginAiSession(): void { if (inTauri()) void invoke('begin_ai_session'); }
 export function cancelAiSession(): void { if (inTauri()) void invoke('cancel_ai_session'); }
 
+/** 桌面通道被会话开关拦下时，Rust 侧三条闸门(lib.rs:712/741/748)一律 Err("cancelled") —— 只有这一个
+ *  英文串，别无出处。它必须读成「已取消」而不是普通失败：readableTransportError 只认限流那类英文
+ *  关键词，中文里没有可留片段就兜底成「服务未给出可显示的原因」，于是用户主动停止会被编排器当成
+ *  一条**失败批断**写进 aiTasks(还会被自动重试追一次)。缺陷 #142。 */
+const cancelledBySession = (message: string): boolean => message.trim().toLowerCase() === 'cancelled';
+
 const toTauriRecord = (record: BaziRecord) => ({ ...record,
   nonAiResult: record.nonAiResult ? JSON.stringify(record.nonAiResult) : undefined,
   aiAnalysis: record.aiAnalysis ? JSON.stringify(record.aiAnalysis) : undefined,
@@ -88,7 +94,11 @@ export function buildAiRequestPayload(record: BaziRecord, task?: BaziAnalysisTas
 export async function analyzeTask(record: BaziRecord, task: BaziAnalysisTask, tone?: number): Promise<BaziTaskResult> {
   if (inTauri()) {
     try { return await invoke<BaziTaskResult>('run_ai_task', { record: toTauriRecord(record), task: { ...task, tone: tone } }); }
-    catch (error) { return { task, status: 'failed', error: readableTransportError(error instanceof Error ? error.message : '') }; }
+    catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      if (cancelledBySession(message)) return { task, status: 'failed', error: abortResult().error };
+      return { task, status: 'failed', error: readableTransportError(message) };
+    }
   }
   if (secureRunner) return secureRunner(record, task);
   return { task, status: 'not_configured' };
@@ -123,7 +133,11 @@ export async function analyzeBazi(record: BaziRecord, task?: BaziAnalysisTask, o
   if (inTauri()) {
     let result: BaziTaskResult;
     try { result = await invoke<BaziTaskResult>('run_ai_task', { record: toTauriRecord(record), task: { ...task, tone: options?.tone } }); }
-    catch (error) { return { status: 'failed', error: readableTransportError(error instanceof Error ? error.message : '') }; }
+    catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      if (cancelledBySession(message)) return abortResult();
+      return { status: 'failed', error: readableTransportError(message) };
+    }
     if (result.status === 'completed' && result.analysis) return { status: 'completed', analysis: result.analysis };
     return { status: result.status === 'failed' ? 'failed' : 'not_configured', error: result.error };
   }

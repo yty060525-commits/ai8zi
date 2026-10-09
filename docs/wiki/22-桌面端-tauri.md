@@ -33,11 +33,21 @@
 | `get_storage_stats` / `compact_records` | 235 / 271 | 体积统计、压缩旧记录 |
 | `ai_self_test` | 245 | 连通自检（微小消耗） |
 | `save_ai_credential` / `clear_ai_credential` / `get_ai_provider_status` / `set_ai_provider` | 116–135 | 密钥进 Windows 凭据管理器，不落盘 |
-| `run_ai_task` | 695 | 单任务执行：先查缓存，未命中才发请求 |
-| `run_ai_chat` | 815 | 断网时的聊天兜底通道 |
-| `begin_ai_session` / `cancel_ai_session` | 682 / 685 | 全局取消标记 `AI_SESSION_CANCELLED` |
+| `run_ai_task` | 711 | 单任务执行：先查缓存，未命中才发请求；开跑前与每次重试前读会话取消标记 |
+| `run_ai_chat` | 834 | 断网时的聊天兜底通道（**不读**会话取消标记，见下方「立即停止」一节） |
+| `begin_ai_session` / `cancel_ai_session` | 698 / 701 | 全局取消标记 `AI_SESSION_CANCELLED` |
 
 调用方集中在 [client/src/data](../../client/src/data)：见 [12-客户端-数据层](./12-客户端-数据层.md)。
+
+## 「立即停止」在桌面这一侧接到哪里（#142 / #143）
+
+会话开关 `AI_SESSION_CANCELLED` 是**进程级全局**，Rust 只在任务通道读它 —— `run_ai_task` 三处：开跑前(712)、每条通道的重试循环开头(741)、以及 `tokio::select!` 里与请求同时等(748)，命中一律 `Err("cancelled")` 且不发请求。聊天通道 `run_ai_chat`(834–895)**一条都没读**。这是有意还是漏要看清：详情页 `stopAnalysis()` 会调 `cancelAiSession()`，而聊天区的「清空对话」和「发起新一问」只 abort 本地控制器、不调它([ChartChat.tsx](../../client/src/features/chart/ChartChat.tsx) 第 52–56、102–108 行)，所以桌面聊天那一问在途时按停止，上游照样跑完、结果照样落本机缓存。
+
+缺陷 #142 不在 Rust，在 JS 这两处：`analyzeBazi` / `analyzeTask` 的 `inTauri()` 分支把 `Err("cancelled")` 交给 `readableTransportError()`，那里只认限流那类英文关键词，中文里没有可留片段就兜底成「服务未给出可显示的原因」——于是用户主动停止被编排器当成**一条失败批断**存进 `aiTasks`，还会被自动重试追一次。现在由 `cancelledBySession()` 认出这一个串并走 `abortResult()`；这个串在 lib.rs 里只有那三处出处，别无来源。
+
+判据在 [tauri-task-abort.test.ts](../../client/src/__tests__/tauri-task-abort.test.ts)（6 条），桩替身按 Rust 的真实语义实现（置位后 `run_ai_task` 抛 `cancelled`），取消走真实导出 `cancelAiSession()` 而不是直接改桩里的布尔，免得自证。变异读数六条全杀：删掉任务支识别 → 红；两个入口一起中性化(识别恒假) → 2 红；删掉聊天「发前已中止」预检 → 红；删掉「回包时已中止」拦下 → 红；删掉服务器分支取证后的预检 → 红。
+
+⚠ 两条**记录现状而非理想**的反向钉子，别当 bug 顺手改：① 中止时 `askChatLocal` 仍会进入一次（实测读数 1）；② 桌面聊天那一问被中止后仍会落一次本机缓存（实测读数 1）—— 客户端拦不住已经花掉的那次，要闭合得先给 `run_ai_chat` 补 Rust 侧闸门，或让「清空对话／新一问」也调 `cancelAiSession()`，两者都还没做。
 
 ## 概念复刻对照（本端 ↔ 另两端）
 
