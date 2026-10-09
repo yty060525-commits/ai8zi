@@ -245,12 +245,15 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
     }
   });
 
-  it('#139 的服务器判据必须在 HEAD 树里(它不是 vitest 用例，不能进 CRITERIA 那张表)', () => {
+  it('#139/#140 的服务器判据必须在 HEAD 树里(它们不是 vitest 用例，不能进 CRITERIA 那张表)', () => {
     /* 上面那张表的 file 会拼进 client/src/__tests__/，反向钉子又要求 .test.ts(x) 结尾，
        所以 server/test/*.mjs 一律登记不进去 —— 但不登记就等于「闸门跟着功能一起消失」没人报。
        ⚠ trackedPaths() 只列 HEAD 树，新文件在 git add 之前这条必红(踩过：先跑测后提交)。
-       这一句单独钉 server 侧那份：删掉文件、改名、或把它挪出 test/ 都会红。 */
+       这一句单独钉 server 侧那两份：删掉文件、改名、或把它们挪出 test/ 都会红。 */
     expect([...trackedPaths()]).toContain('server/test/chat-abort.test.mjs');
+    /* #140 是 #139 同一类缺陷的兄弟路径（批断任务路由），客户端早就发真 signal，
+       服务器那侧却既不 abort 上游也不拦缓存。判据独立成一个文件，摘掉它同样没人报。 */
+    expect([...trackedPaths()]).toContain('server/test/task-abort.test.mjs');
   });
 
   it('判据账本非空(掏空它就等于把所有闸门一次性摘掉)', () => {

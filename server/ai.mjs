@@ -435,23 +435,27 @@ export async function callProvider(provider, key, messages, effort, mode = 'json
 }
 
 
-export async function runOneTask(db, record, task, tone = DEFAULT_TONE, preferred) {
+export async function runOneTask(db, record, task, tone = DEFAULT_TONE, preferred, opts = {}) {
   const t = clampTone(tone);
-  const { messages, effort } = buildTaskPayload(record, task, t);
   const order = providerOrder(db, preferred);
   if (order.length === 0) return { status: 'not_configured', error: AI_SERVER_UNCONFIGURED };
   const errors = [];
+  /* 与 #139 同一条闸门(#140)：客户端「停止」会断开这条 HTTP 连接，但服务器此前只用自己的
+     150s 超时控制器 —— 结果一次批断剩下的十几个任务照样挨个打完三条通道。缓存这一半更要紧：
+     用户中止往往正因为这一段在跑偏，让它占住 cacheKey，下次点批断直接命中同一个坏产物。 */
+  const abandoned = () => !!opts.signal?.aborted;
   for (const provider of order) {
+    if (abandoned()) return { status: 'failed', error: '这一条已经被取消，没有继续调用通道。' };
     const model = provider.model;
-    const key = providerKey(db, provider.id);
     const ck = cacheKey(record, task, model, t);
     const hit = readCache(db, ck);
     if (hit) {
       try { return { status: 'completed', analysis: JSON.parse(hit) }; } catch { /* 坏缓存忽略，重算 */ }
     }
-    const result = await callProvider(provider, key, messages, effort);
+    // opts.runTask 只给测试留的接缝(同 #139 的 callProvider)：真实实现内部自建控制器，外部只能间接观察。
+    const result = await (opts.runTask || runTaskForProvider)(db, record, task, t, provider, opts.signal);
     if (result.analysis) {
-      try { writeCache(db, ck, JSON.stringify(result.analysis)); } catch { /* 写缓存失败忽略 */ }
+      if (!abandoned()) { try { writeCache(db, ck, JSON.stringify(result.analysis)); } catch { /* 写缓存失败忽略 */ } }
       return { status: 'completed', analysis: result.analysis };
     }
     // 对外只报中文通道名：这条 error 会写进 record.aiError 并进进度提示，
@@ -460,6 +464,12 @@ export async function runOneTask(db, record, task, tone = DEFAULT_TONE, preferre
   }
   const joined = sanitizeChatText(errors.join('；'));
   return { status: 'failed', error: joined || AI_NO_CREDENTIAL_REPLY };
+}
+
+/** 默认的单 provider 执行体：签名与注入接缝一致，方便判据整体替换。 */
+async function runTaskForProvider(db, record, task, t, provider, callerSignal) {
+  const { messages, effort } = buildTaskPayload(record, task, t);
+  return callProvider(provider, providerKey(db, provider.id), messages, effort, 'json', callerSignal);
 }
 
 /** 连通自检：面向机主的诊断回执，允许保留服务商英文名(协议层，不进正文闸门)。 */

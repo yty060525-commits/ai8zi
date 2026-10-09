@@ -27,8 +27,9 @@ function authFrom(db, req) {
 }
 
 export function createApp({ db, allowRegister = true }) {
-  // #139 判据接缝：默认走真实 callProvider，测试可注入替身以直接观察 callerSignal。
+  // #139/#140 判据接缝：默认走真实实现，测试可注入替身以直接观察 callerSignal。
   let chatProviderCaller = null;
+  let chatTaskCaller = null;
   async function handle(req, res) {
     const url = new URL(req.url, 'http://localhost');
     const method = req.method;
@@ -124,8 +125,17 @@ export function createApp({ db, allowRegister = true }) {
         if (method === 'POST' && rest[1] === 'ai' && rest[2] === 'task') {
           const body = await readJsonBody(req);
           if (!body?.task) return json(res, 400, { error: '缺少任务信息，无法批断' });
-          const result = await runOneTask(db, rec, body.task, body.tone, body.provider);
-          return json(res, 200, { result });
+          // #140：与聊天路由同一套中止接线(见上面 chat 分支的注释)。
+          const controller = new AbortController();
+          const probe = () => { if (!res.writableEnded) controller.abort(); };
+          res.on('close', probe);
+          try {
+            const result = await runOneTask(db, rec, body.task, body.tone, body.provider,
+              { signal: controller.signal, runTask: chatTaskCaller });
+            return json(res, 200, { result });
+          } finally {
+            res.removeListener('close', probe);
+          }
         }
         if (method === 'POST' && rest[1] === 'ai' && rest[2] === 'cache-clear') {
           const body = await readJsonBody(req);
@@ -196,7 +206,12 @@ export function createApp({ db, allowRegister = true }) {
     saveSession(db, sha256hex(token), userId, Date.now() + SESSION_TTL_MS);
     return token;
   }
-  return { handle, startSession, setProviderCaller: (fn) => { chatProviderCaller = fn; } };
+  return {
+    handle,
+    startSession,
+    setProviderCaller: (fn) => { chatProviderCaller = fn; },
+    setTaskCaller: (fn) => { chatTaskCaller = fn; },
+  };
 }
 
 export function pruneSessions(db) { deleteExpiredSessions(db, Date.now()); }
