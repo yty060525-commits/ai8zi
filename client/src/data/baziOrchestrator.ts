@@ -77,10 +77,27 @@ const REPAIR_WAIT_MS = 2500;          // 整批跑完后的自动补跑等待
  *    批次不会像旧写法那样逐轮变大(缺陷 #108 实测 92 → 20 → 46 的成因是补跑那份额度没和退队重发对账)。 */
 const REPAIR_BUDGET = 1;
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-/** 判定某条错误是否值得自动重试(密钥类/权限类重试也是白费) */
+/** 判定某条错误是否值得自动重试(密钥类/权限类重试也是白费)。
+ *  ⚠ 429 限流**有意判为不可重试**：并发池(:137 fixedMapLimit，:194 用 isRateLimited)已经冷却
+ *  COOLDOWN_MS(:124)之后就地重发过一次，这一条不再进 step 的即时重试与补跑名单，否则同一条限流任务
+ *  最多花四口(首发+即时+退队+补跑) —— #108/#117/#121 那批实测换来的封顶口径就是这么定的。
+ *  代价如实记下：一整轮被限流时 record.aiError 仍是这句「…服务返回四二九」，详情页 PersonDetail.tsx:557
+ *  的排期闸门读它判假 ⇒ 整轮级别的自动重试不排期，只有池内那一次冷却重发。改这里必须同时复核那条排期闸门。
+ *  ⚠ 黑名单按**形态**匹配(状态码尾巴)，所以生产方 deepseekAdapter.classifyFailure 那句 429 的说法
+ *  是这条契约的一部分：把「…已被限流」或「服务返回四二九」改写掉，闸门立刻放行 —— 两端要动一起动。 */
 export const isRetryableFailure = (error: string | undefined): boolean => {
   if (!error) return false;
+  // 【缺陷 #148】这句兜底(deepseekAdapter.ts:350/:351、:502 的 `errors.join('；') || …`)只在 errors 为空时
+  //   才顶上来，而 errors 为空恰恰意味着「一条都没发出去」：
+  //   · opts.secret 传了空串(调用方把未填的输入框值原样交进来)⇒ anyCredential 为真(那边 :308 只比 undefined)，
+  //     循环对每个通道 continue 掉(那边 :315) ⇒ status 'failed' + 这句；
+  //   · chatDirect 没有任何凭据预检(那边 :476 取 getBrowserCredential、:477 continue)，没填即整圈跳过 ⇒ 同一句。
+  // 两条路都绕过了 not_configured 分诊，而这句文本不含「未配置/credential」字样 ⇒ 过闸门判真。
+  // 于是界面上写着「去设置里配密钥」却在后台连排两轮自动重试，对着一个根本没配密钥的通道白烧钱 ——
+  // 正是本文件上方注释承诺的「密钥类不盲试」被自己的兜底文案打穿。补上这条分支，
+  // 让闸门在**所有出口**都把这句判假；status 原样不动，所以详情页的分诊展示不受影响。
   if (/not_configured|未配置|credential|keyring/i.test(error)) return false;
+  if (/没有可用的通道凭据/.test(error)) return false;
   // 状态码现在一律读成中文「服务返回四零一」，不再出现「HTTP 401」这种形态；
   // 两种写法都留着认：存量 record.aiError 里还有旧格式，漏掉就会对着余额不足白烧两次钱。
   if (/HTTP 40[0-9]|服务返回四[零一二三四五六七八九]/.test(error)) return false;

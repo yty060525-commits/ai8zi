@@ -166,6 +166,14 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
     { task: '#78 AI 连通自检入口', file: 'client/src/data/storageInfo.ts', text: 'runAiSelfTest' },
     { task: '#83 wiki 知识库', file: 'docs/wiki/README.md', text: '#' },
     { task: '#16/#81 gh-pages 发布脚本', file: 'scripts/deploy-pages2.mjs', text: 'gh-pages' },
+    /* 【缺陷 #149】构建口径：`npm run build` 的第一步是 `tsc -b`(package.json 里写死)，而 tsconfig
+       的 include 是整个 `src` —— **测试文件也在编译范围内**，所以任何一份用例的类型错误都会挡住整站构建。
+       这条不是猜测：实测把另一会话未提交的 stop-analysis-recovery.test.tsx 移开后 `npx tsc -b` 仍红在
+       两条 TS7016 上，而我上一轮的提交信息据此写了「唯一一条构建期错误来自他人文件」——那句当场就是错的。
+       钉住这两个字符串，是为了让「有人收窄 include/exclude(测试从此不进构建)」这件事必须留下读数：
+       真要把 __tests__ 排除掉是个独立决定(得同时回答「判据还跑不跑」)，不该被一次顺手改配置静默带过。 */
+    { task: '#149 tsc -b 把用例编进构建(测试类型错误会挡住发布)', file: 'client/tsconfig.json', text: '"include": ["src"]' },
+    { task: '#149 同上：build 脚本第一步就是 tsc -b', file: 'client/package.json', text: 'tsc -b && vite build' },
   ];
 
   it.each(MARKERS)('任务 $task 的特征串必须在 $file 里', ({ task, file, text }) => {
@@ -241,6 +249,18 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
        另有一个 B2(服务端语气档改成向下取整)当场**存活**并查明是中性变异体：滑杆 step=5、两端都先取整，
        真实输入空间里三种写法逐点相同 ⇒ 不是缺陷，已如实记在这里而不是假装杀掉了它。 */
     { guards: '#147 任务缓存键的段序/签名派生/线上字节驼峰三处跨端契约', file: 'task-cache-key-cross-end.test.ts' },
+    /* #148 一半是**修复**：闸门兜底句「没有可用的通道凭据，请先在设置里配置」旧读成可重试 ⇒
+       对着一个根本没配密钥的通道连排两轮自动重试白烧钱(:350/:502 两条出口都发得这句)。
+       另一半是**有意的口径登记**：429 限流判假不是缺陷 —— 并发池 fixedMapLimit(baziOrchestrator:137，
+       冷却重发条件 :194)已用 isRateLimited 在 COOLDOWN_MS(:124)后就地重发一次，闸门不再让它进
+       step 即时重试(:543)与补跑名单(:640)，否则同一条最多四口；
+       代价(整轮限流时详情页 PersonDetail.tsx:557 不排期)如实钉在机制判据那条用例里，两侧不许各自改。
+       三个变异体实测(jsdom 2026-10-09)：M1 删掉兜底句分支 → 红在【修复】那条；M3 改生产方 429 措辞
+       (掺进 keyring 字样) → 红在前提钉子的两端同文本断言；**M2(把中文黑名单收窄成「四[零一二三]」，
+       即放行 429)初稿四条断言全绿** —— 被改的字面量本身就是判据要读的串，拼接文本永远读到「改之前」的
+       行为，补上直接碰 baziOrchestrator 源字节的钉子后才红在「黑名单整行」。
+       「判据杀不掉自己针对的变异」是本轮最值钱的读数，写法教训已记进注释。 */
+    { guards: '#148 闸门对两端真实产物的读数+兜底句修复+源字节钉子', file: 'retry-gate-real-texts.test.ts' },
     /* #139 的判据在服务器侧(server/test/chat-abort.test.mjs，node --test)，不是 vitest 用例文件，
        所以不能进上面那张表(表的 file 会拼进 client/src/__tests__/，且反向钉子要求 .test.ts(x))。
        丢在这里钉：客户端「停止」发的是真 AbortSignal(chatEngine 把 controller.signal 交给 fetch)，
