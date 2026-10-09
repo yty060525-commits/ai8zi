@@ -49,6 +49,19 @@ describe('当前使用通道跟随设置的完整链', () => {
     expect(count(src(CHAT_ENGINE), PROVIDER_KEY)).toBe(1);
   });
 
+  /* 浏览器直连那条通道(channelOrder)读的必须是**同一个键**，而且整份文件里只许出现这一处。
+     上一轮踩过同类形态：deepseekAdapter 的通道回退顺序没有任何判据碰过 channelOrder 的取值来源
+     (channel-routing.test 只写 mingli.provider，改读别的键它照样全绿)，于是「服务器按你选的通道答、
+     本机备用通道按另一份偏好答」这种三端分叉可以静默存在。桌面版 provider_order(&selected_provider())
+     也是单一来源，所以这里把它一并钉住。 */
+  it('浏览器直连的通道顺序与设置页读同一个键，且该文件只有这一处读点', () => {
+    const adapter = src('../data/deepseekAdapter.ts');
+    expect(count(adapter, PROVIDER_KEY), 'deepseekAdapter 里 mingli.provider 的出现次数变了 ⇒ 有多份偏好来源').toBe(1);
+    expect(adapter).toContain("localStorage.getItem('mingli.provider') ?? 'qwen'");
+    // 反向钉子：不许悄悄换成另一个键名(比如按盘存的 pref.<id>)——那会让「跟随设置」这句承诺落空。
+    expect(adapter).not.toContain("getItem('mingli.channel')");
+  });
+
   /* 服务器收到 preferred 后先按 PROVIDERS 名单校验，不在名单上的值会被静默丢掉、
      退回服务器自己的 ai.provider —— 用户这边选了个服务器没有的通道时不会有任何提示。
      所以「名单」是三端一致性的落点：客户端能写的值必须是它的子集。 */

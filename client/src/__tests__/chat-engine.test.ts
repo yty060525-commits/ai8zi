@@ -9,6 +9,7 @@ import { isServerMode, serverFetch, ServerError } from '../data/serverClient';
 import { hydrateRecord, listBaziRecords } from '../data/clientRepository';
 import { chatDirect } from '../data/deepseekAdapter';
 import { sanitizeAnalysisText } from '../features/chart/elements';
+import { getBrowserCredential } from '../data/aiSettings';
 
 /* 三通道共用的提问解析/证据组装(与服务端 chat.mjs 同口径)的单元测试。 */
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
@@ -345,6 +346,32 @@ describe('askChat 通道分流', () => {
     expect(text).toContain('本机通道：');
     expect(text, '报错串里仍有拉丁字母：' + text).not.toMatch(/[A-Za-z]/);
     expect(sanitizeAnalysisText(text), '整句被闸门判空，界面会退化成「回答失败」：' + text).toBeTruthy();
+  });
+  it('服务器报错且本机一条凭据都没配 → 仍要说「服务器那边答不上来」，不能报成「谁都没配」', async () => {
+    /* 假设要钉的行为：用户连着服务器、服务器自己那条通道调用失败(503)，而浏览器里没填任何本机密钥。
+       此时唯一确定的事实是「服务器答不上来」；旧写法把它判成 not_configured + 「还没配访问凭据」，
+       等于把一次服务端故障说成用户少填了东西 —— 而 ChatChat 见 not_configured 还会挂出「去设置」，
+       把人领去填一个对本轮压根不起作用的本机密钥(服务器地址与账号早已填好)。 */
+    vi.mocked(isServerMode).mockReturnValue(true);
+    /* 前提：本机三条通道一条都没配。清单取自 chatEngine.ts 的 anyChannelConfigured()(它逐字读
+       ['deepseek','kimi','qwen'] 这三条 mingli.cred.<id>)。上一版这里清成 'moonshot'(不存在的键)、
+       漏掉 'kimi'，「一条都没配」压根没成立，用例只是恰好绿 —— 所以除了清键，还要正向钉一次：
+       塞进去就能配 up，说明这几条键确实是那条判据读的键。 */
+    for (const id of ['deepseek', 'kimi', 'qwen']) localStorage.removeItem('mingli.cred.' + id);
+    expect(getBrowserCredential('deepseek'), 'deepseek 凭据没清干净').toBeFalsy();
+    expect(getBrowserCredential('kimi'), 'kimi 凭据没清干净(这条曾被漏掉)').toBeFalsy();
+    expect(getBrowserCredential('qwen'), 'qwen 凭据没清干净').toBeFalsy();
+    localStorage.setItem('mingli.cred.kimi', 'probe-only');
+    expect(getBrowserCredential('kimi'), '反向钉子：这条键必须能被读到，否则清理等于空操作').toBe('probe-only');
+    localStorage.removeItem('mingli.cred.kimi');
+    vi.mocked(listBaziRecords).mockResolvedValue([rec]);
+    vi.mocked(serverFetch).mockRejectedValue(new ServerError(503, '服务返回五零三'));
+    const reply = await askChat({ question: '2026年事业如何？' });
+    expect(chatDirect, '本机没配凭据，不该被调起').not.toHaveBeenCalled();
+    const text = String(reply.error ?? '');
+    expect(sanitizeAnalysisText(text), '整句被闸门判空，界面会退化成「回答失败」：' + text).toBeTruthy();
+    expect(text, '服务端故障被误报成用户没配凭据：' + text).toContain('服务器');
+    expect(text).toContain('五零三');
   });
   it('问题为空/超长在入口即拒绝', async () => {
     expect((await askChat({ question: '  ' })).status).toBe('failed');
