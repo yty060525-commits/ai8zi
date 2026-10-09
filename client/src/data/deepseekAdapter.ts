@@ -71,7 +71,9 @@ export function cancelAiSession(): void { if (inTauri()) void invoke('cancel_ai_
 /** 桌面通道被会话开关拦下时，Rust 侧三条闸门(lib.rs:712/741/748)一律 Err("cancelled") —— 只有这一个
  *  英文串，别无出处。它必须读成「已取消」而不是普通失败：readableTransportError 只认限流那类英文
  *  关键词，中文里没有可留片段就兜底成「服务未给出可显示的原因」，于是用户主动停止会被编排器当成
- *  一条**失败批断**写进 aiTasks(还会被自动重试追一次)。缺陷 #142。 */
+ *  一条**失败批断**写进 aiTasks(还会被自动重试追一次)。缺陷 #142。
+ *  ⚠ 这个串目前只有本端读；Rust 侧 run_ai_chat(lib.rs:834-895)压根不读会话开关，桌面聊天那条
+ *  「清空对话／新一问」只 abort 本地控制器也不调 cancelAiSession —— 那半仍未闭合，见 #143。 */
 const cancelledBySession = (message: string): boolean => message.trim().toLowerCase() === 'cancelled';
 
 const toTauriRecord = (record: BaziRecord) => ({ ...record,
@@ -96,7 +98,7 @@ export async function analyzeTask(record: BaziRecord, task: BaziAnalysisTask, to
     try { return await invoke<BaziTaskResult>('run_ai_task', { record: toTauriRecord(record), task: { ...task, tone: tone } }); }
     catch (error) {
       const message = error instanceof Error ? error.message : '';
-      if (cancelledBySession(message)) return { task, status: 'failed', error: abortResult().error };
+      if (cancelledBySession(message)) return { task, status: 'failed', error: '已取消' };
       return { task, status: 'failed', error: readableTransportError(message) };
     }
   }

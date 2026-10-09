@@ -53,6 +53,11 @@ const { askChat } = await import('../data/chatEngine');
 const { listBaziRecords, hydrateRecord } = await import('../data/clientRepository');
 const { serverFetch } = await import('../data/serverClient');
 
+/** 桌面标记要写在 window 对象上(产品读的是 `'__TAURI_INTERNALS__' in window`)。
+ *  ⚠ 只给 `(globalThis as any).window = {...}` 这种替身是**走不到桌面分支的**：那会让产品代码
+ *  里的 `in window` 判据落空，整份判据就在另一条路径上全绿空转 —— 所以配了下面那条前提钉子。 */
+const markDesktop = () => { (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}; };
+
 const record = {
   id: 'r142', name: '张三', gender: 'male', birthYear: 1990, birthMonth: 6,
   yearPillar: '庚午', monthPillar: '壬午', dayPillar: '甲子', hourPillar: '甲子',
@@ -67,7 +72,7 @@ afterEach(() => {
   desktopChatCacheWrites = 0;
   hangUpstream = false;
   releaseUpstream = null;
-  delete (window as Record<string, unknown>).__TAURI_INTERNALS__;
+  delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
   localStorage.clear();
 });
 
@@ -79,7 +84,7 @@ describe('桌面端(Tauri)要接住「立即停止」(#142/#143)', () => {
   });
 
   it('analyzeBazi：停止后的回执是「已取消」，不是一条失败的批断', async () => {
-    (window as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    markDesktop();
     const first = await analyzeBazi(record, task, { tone: 80 });
     expect(first.status, '桌面分支没走到，读数：' + JSON.stringify(first)).toBe('completed');
     expect(upstreamCalls.filter((c) => c === 'run_ai_task').length).toBe(1);
@@ -88,16 +93,16 @@ describe('桌面端(Tauri)要接住「立即停止」(#142/#143)', () => {
     cancelAiSession();
     const stopped = await analyzeBazi(record, task, { tone: 80 });
     expect(stopped.status, '停止后的形态变了：' + JSON.stringify(stopped)).toBe('failed');
-    expect(String(stopped.error), '停止被写成了一条普通失败批断，会存进 aiTasks').toContain('已取消');
+    expect(String((stopped as { error?: string }).error), '停止被写成了一条普通失败批断，会存进 aiTasks').toContain('已取消');
   });
 
   it('analyzeTask：同一条桌面路径的兄弟入口也要认出取消', async () => {
-    (window as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    markDesktop();
     expect((await analyzeTask(record, task, 80)).status).toBe('completed');
     cancelAiSession();
     const stopped = await analyzeTask(record, task, 80);
     expect(stopped.status, 'analyzeTask 的回执形态变了：' + JSON.stringify(stopped)).toBe('failed');
-    expect(String(stopped.error), '这里也没认出取消：' + String(stopped.error)).toContain('已取消');
+    expect(String((stopped as { error?: string }).error), '这里也没认出取消：' + String((stopped as { error?: string }).error)).toContain('已取消');
   });
 
   it('桌面聊天分支：中止那一问照样跑完、照样落缓存(#143)', async () => {
@@ -105,7 +110,7 @@ describe('桌面端(Tauri)要接住「立即停止」(#142/#143)', () => {
        (见 ChartChat.tsx:52-56 与 :102-108)；而 askChatLocal 的 Tauri 分支(chatEngine.ts:587)既不读
        signal，Rust 侧 run_ai_chat(lib.rs:834-895)也没有一条 session_cancelled() 闸门 —— 与任务通道
        (lib.rs:712/741/748 三处)正好缺一半。这一条钉的是 JS 这一侧：signal 传到了就必须拦住。 */
-    (window as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    markDesktop();
     vi.mocked(listBaziRecords).mockResolvedValue([record] as never);
     hangUpstream = true;
     const controller = new AbortController();
@@ -129,7 +134,7 @@ describe('桌面端(Tauri)要接住「立即停止」(#142/#143)', () => {
     /* 上面那条走的是「先发后中止」，M4(删掉 invoke 之前那道 signal?.aborted 预检)在那条里压根执行不到，
        所以它当时存活。这一条把顺序反过来：signal 在调用前就已 aborted，前置闸门是唯一拦住上游调用的东西。
        实测：删掉那句预检后本条必红(发出 1 次调用)。 */
-    (window as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    markDesktop();
     vi.mocked(listBaziRecords).mockResolvedValue([record] as never);
     const controller = new AbortController();
     controller.abort();                                        // 「停止」已经按过，这一次是迟到的那一问
@@ -144,7 +149,7 @@ describe('桌面端(Tauri)要接住「立即停止」(#142/#143)', () => {
     /* 取证那一步是 await hydrateRecord(target)(chatEngine.ts:515)，一次 IndexedDB 读；
        旧写法只在 serverFetch 抛 AbortError 时才认出取消，而这里 fetch 压根没发出去，
        于是「点停止 → 又上一条服务器请求」在网页/桌面连着服务器时都会发生。 */
-    (window as Record<string, unknown>).__TAURI_INTERNALS__ = {};   // 桌面外壳 + 服务器通道，正是详情页那一档
+    markDesktop();   // 桌面外壳 + 服务器通道，正是详情页那一档
     localStorage.setItem('mingli.server.url', 'http://127.0.0.1:9');
     localStorage.setItem('mingli.server.session', JSON.stringify({ token: 't', username: 'u', role: 'user' }));
     vi.mocked(listBaziRecords).mockResolvedValue([record] as never);

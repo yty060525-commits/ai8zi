@@ -43,7 +43,7 @@
 
 会话开关 `AI_SESSION_CANCELLED` 是**进程级全局**，Rust 只在任务通道读它 —— `run_ai_task` 三处：开跑前(712)、每条通道的重试循环开头(741)、以及 `tokio::select!` 里与请求同时等(748)，命中一律 `Err("cancelled")` 且不发请求。聊天通道 `run_ai_chat`(834–895)**一条都没读**。这是有意还是漏要看清：详情页 `stopAnalysis()` 会调 `cancelAiSession()`，而聊天区的「清空对话」和「发起新一问」只 abort 本地控制器、不调它([ChartChat.tsx](../../client/src/features/chart/ChartChat.tsx) 第 52–56、102–108 行)，所以桌面聊天那一问在途时按停止，上游照样跑完、结果照样落本机缓存。
 
-缺陷 #142 不在 Rust，在 JS 这两处：`analyzeBazi` / `analyzeTask` 的 `inTauri()` 分支把 `Err("cancelled")` 交给 `readableTransportError()`，那里只认限流那类英文关键词，中文里没有可留片段就兜底成「服务未给出可显示的原因」——于是用户主动停止被编排器当成**一条失败批断**存进 `aiTasks`，还会被自动重试追一次。现在由 `cancelledBySession()` 认出这一个串并走 `abortResult()`；这个串在 lib.rs 里只有那三处出处，别无来源。
+缺陷 #142 不在 Rust，在 JS 这两处：`analyzeBazi` / `analyzeTask` 的 `inTauri()` 分支把 `Err("cancelled")` 交给 `readableTransportError()`，那里只认限流那类英文关键词，中文里没有可留片段就兜底成「服务未给出可显示的原因」——于是用户主动停止被编排器当成**一条失败批断**存进 `aiTasks`，还会被自动重试追一次。现在由 `cancelledBySession()` 认出这一个串：`analyzeBazi` 走 `abortResult()`，`analyzeTask` 直接写 `error: '已取消'`（它的返回类型在有分析结果那支不带 `error`，绕一圈读 `abortResult().error` 会被类型收窄判成不存在的属性）。
 
 判据在 [tauri-task-abort.test.ts](../../client/src/__tests__/tauri-task-abort.test.ts)（6 条），桩替身按 Rust 的真实语义实现（置位后 `run_ai_task` 抛 `cancelled`），取消走真实导出 `cancelAiSession()` 而不是直接改桩里的布尔，免得自证。变异读数六条全杀：删掉任务支识别 → 红；两个入口一起中性化(识别恒假) → 2 红；删掉聊天「发前已中止」预检 → 红；删掉「回包时已中止」拦下 → 红；删掉服务器分支取证后的预检 → 红。
 
