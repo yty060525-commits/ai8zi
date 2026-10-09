@@ -303,11 +303,11 @@ describe('askChat 通道分流', () => {
     expect(reply.status, '中止后的回执形态变了：' + JSON.stringify(reply)).toBe('failed');
     expect(String(reply.error)).toContain('已取消');
     expect(chatDirect, '已经点了停止，却又用浏览器里的本机密钥打了一次上游').not.toHaveBeenCalled();
-    expect(serverFetch.mock.calls.length, '服务器请求被重试了：' + serverFetch.mock.calls.length).toBe(1);
+    expect(serverFetch, '服务器请求被重试了').toHaveBeenCalledTimes(1);
     /* ⚠ 这一句是**反向钉子**，钉的是现状而不是理想：中止时 askChatLocal 仍会跑一次
        （它第一步 listBaziRecords 必然执行），只是没凭据可打、不会花钱。实测读数 localTries=1。
        若有人把落本机的入口整个去掉，这条会变红 —— 那时要先确认这是有意的口径变化，别顺手改数字。 */
-    expect(listBaziRecords.mock.calls.length, '本机分支的进入次数变了(现状=进一次但打不出去)：' + listBaziRecords.mock.calls.length).toBe(1);
+    expect(listBaziRecords, '本机分支的进入次数变了(现状=进一次但打不出去)').toHaveBeenCalledTimes(1);
   });
   it('取证前先还原瘦身数组：列表给的是清空过大运/流年的存储版', async () => {
     // 落库时 pruneRecord 把派生数组清成空，listBaziRecords 又不重算。聊天若直接拿它算证据，
