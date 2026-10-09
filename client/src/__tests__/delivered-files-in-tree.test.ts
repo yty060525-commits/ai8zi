@@ -235,6 +235,12 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
        `remoteIds.has`(即改成「替换式合并」)，邻近的 unsynced-badge-ui + sync-admin-ghost 共 23 条照旧全绿，
        只有本文件红 —— 所以谁以后真要把合并语义改掉，必须过这份明说的读数，不能悄悄改。 */
     { guards: '#146 换设备删除在本机不生效(取证)', file: 'cross-device-delete-propagation.test.tsx' },
+    /* #147 钉的是任务缓存键这一半的跨端契约(#131/#132 只覆盖了聊天键与 natal 序)。三个变异体实测：
+       C1 删掉桌面 BaziRecord 的 camelCase 声明 → 只有 #147d 红；C2 服务端删除侧少拼时柱 → 只有 #147b 红；
+       C3 桌面任务键把「性别/年柱」换位 → 只有 #147c 红，而**同文件那条老的结构判据照旧绿**(它只数 {} 个数)。
+       另有一个 B2(服务端语气档改成向下取整)当场**存活**并查明是中性变异体：滑杆 step=5、两端都先取整，
+       真实输入空间里三种写法逐点相同 ⇒ 不是缺陷，已如实记在这里而不是假装杀掉了它。 */
+    { guards: '#147 任务缓存键的段序/签名派生/线上字节驼峰三处跨端契约', file: 'task-cache-key-cross-end.test.ts' },
     /* #139 的判据在服务器侧(server/test/chat-abort.test.mjs，node --test)，不是 vitest 用例文件，
        所以不能进上面那张表(表的 file 会拼进 client/src/__tests__/，且反向钉子要求 .test.ts(x))。
        丢在这里钉：客户端「停止」发的是真 AbortSignal(chatEngine 把 controller.signal 交给 fetch)，
