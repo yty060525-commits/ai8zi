@@ -230,6 +230,11 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
        客户端这份 import server/ai.mjs 读真实产物，服务器那份起真 HTTP 路由走整条链。只留一边
        就等于「另一端改了没人报」—— 这正是本缺陷能活到今天的成因。 */
     { guards: '#144 服务器的失败文本要喂得动重试闸门', file: 'retry-gate-server-text.test.ts' },
+    /* #146 是**取证型**判据，不是修复：换设备删除在本机不生效(mergeRemoteRecords 只做「更新+追加」，
+       没有第三条分支)。这条语义此前没有任何用例读过。变异验证：把 :788 那个 `!remoteIds.has` 翻成
+       `remoteIds.has`(即改成「替换式合并」)，邻近的 unsynced-badge-ui + sync-admin-ghost 共 23 条照旧全绿，
+       只有本文件红 —— 所以谁以后真要把合并语义改掉，必须过这份明说的读数，不能悄悄改。 */
+    { guards: '#146 换设备删除在本机不生效(取证)', file: 'cross-device-delete-propagation.test.tsx' },
     /* #139 的判据在服务器侧(server/test/chat-abort.test.mjs，node --test)，不是 vitest 用例文件，
        所以不能进上面那张表(表的 file 会拼进 client/src/__tests__/，且反向钉子要求 .test.ts(x))。
        丢在这里钉：客户端「停止」发的是真 AbortSignal(chatEngine 把 controller.signal 交给 fetch)，
