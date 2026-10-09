@@ -287,6 +287,28 @@ describe('askChat 通道分流', () => {
     const opts = vi.mocked(serverFetch).mock.calls[0][1] as { signal?: AbortSignal };
     expect(opts.signal).toBe(controller.signal);
   });
+  it('点「停止」后不得再用浏览器里那份本机密钥重答(#141)', async () => {
+    /* 缺陷 #141：askChat 的服务器分支里，`error instanceof DOMException && name==='AbortError'`
+       这句闸门**从来没有一条判据碰过**。实测取证(临时探针，读数见 wiki 51)：删掉整句后
+       askChat 不报错、直接落进 askChatLocal → chatDirect，等于用户点了停止反而多花一次钱。
+       同类的兄弟路径早就钉住了：批断侧 deepseekAdapter 的 abortResult 有 auto-retry/进度用例守着，
+       「云端脏串不再静默改走本机」也有一条专门用例 —— 只有聊天中止这一格是空的。 */
+    vi.mocked(isServerMode).mockReturnValue(true);
+    // anyChannelConfigured() 读的就是这条本机凭据；不给它，落本机那条路压根不会启动，判据就空转了。
+    localStorage.setItem('mingli.cred.qwen', 'test-secret');
+    vi.mocked(listBaziRecords).mockResolvedValue([rec]);
+    vi.mocked(serverFetch).mockRejectedValue(new DOMException('user aborted', 'AbortError'));
+    const controller = new AbortController();
+    const reply = await askChat({ question: '2026年事业如何？', signal: controller.signal });
+    expect(reply.status, '中止后的回执形态变了：' + JSON.stringify(reply)).toBe('failed');
+    expect(String(reply.error)).toContain('已取消');
+    expect(chatDirect, '已经点了停止，却又用浏览器里的本机密钥打了一次上游').not.toHaveBeenCalled();
+    expect(serverFetch.mock.calls.length, '服务器请求被重试了：' + serverFetch.mock.calls.length).toBe(1);
+    /* ⚠ 这一句是**反向钉子**，钉的是现状而不是理想：中止时 askChatLocal 仍会跑一次
+       （它第一步 listBaziRecords 必然执行），只是没凭据可打、不会花钱。实测读数 localTries=1。
+       若有人把落本机的入口整个去掉，这条会变红 —— 那时要先确认这是有意的口径变化，别顺手改数字。 */
+    expect(listBaziRecords.mock.calls.length, '本机分支的进入次数变了(现状=进一次但打不出去)：' + listBaziRecords.mock.calls.length).toBe(1);
+  });
   it('取证前先还原瘦身数组：列表给的是清空过大运/流年的存储版', async () => {
     // 落库时 pruneRecord 把派生数组清成空，listBaziRecords 又不重算。聊天若直接拿它算证据，
     // buildPeriodFacts 的三行查找恒为空，模型只剩一个年龄 —— 问「某年运势」就答不出东西。
