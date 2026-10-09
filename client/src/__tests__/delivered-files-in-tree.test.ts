@@ -214,6 +214,10 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
   { guards: '#133 通道端点/模型/温度三端同源(Qwen 温度)', file: 'provider-spec-cross-end.test.ts' },
   { guards: '#134 凭据空白口径三端同源(桌面曾漏 trim)', file: 'credential-blank-caliber-cross-end.test.ts' },
   { guards: '#135 语气指令正文三端逐字节同源(浏览器曾缩写)', file: 'tone-text-cross-end.test.ts' },
+    /* #136 不是一份新判据文件，而是钉在既有聊天用例里的：askChat 通道分流那条「云端答了、
+       但正文没过纯中文闸门 → 就地拦下报错，绝不静默改走本机通道」。登记整文件是为了让
+       「删掉这一句」和「删掉整个文件」撞同一道闸门 —— 上一轮踩过的是后者无声通过。 */
+    { guards: '#136 云端正文不合格不得静默绕本机直连', file: 'chat-engine.test.ts' },
     { guards: '#113/#116/#119 进度条占位与分母同源', file: 'progress-bar-count.test.tsx' },
   ];
 
