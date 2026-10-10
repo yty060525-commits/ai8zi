@@ -178,6 +178,10 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
        展示层从来没有说过它 —— grep「顺排|逆排」在产品代码里命中 0 处，页面上只有九步运的干支。
        特征串取**函数名**而不是那句中文文案(#78 的教训：登记文案会在下一次正常改写时变成噪音红)。 */
     { task: '#150 详情页说出大运排法方向', file: 'client/src/features/person/PersonDetail.tsx', text: 'luckDirectionText' },
+    /* 【#151 非 AI 侧**可修改**功能】用户能在详情页改四柱并让整张盘重排。
+       特征串取函数名 applyPillarEdit(同上：不登记中文文案)，BirthInputModal 那条取新增的预填参数。 */
+    { task: '#151 详情页修正四柱走引擎重算', file: 'client/src/features/person/PersonDetail.tsx', text: 'applyPillarEdit' },
+    { task: '#151 弹窗支持预填当前命盘', file: 'client/src/features/chart/BirthInputModal.tsx', text: 'initialPillars' },
   ];
 
   it.each(MARKERS)('任务 $task 的特征串必须在 $file 里', ({ task, file, text }) => {
@@ -276,6 +280,18 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
        源字节那一句 —— 结果型比对挡不住整体翻转，同类教训见 [[feedback-pin-assertion-on-formula-not-outcome]]。 */
     { guards: '#150 大运方向的引擎真值与文案同源(+源字节钉子)', file: 'luck-direction-display.test.ts' },
     { guards: '#150 大运方向必须渲染在详情页大运小节', file: 'luck-direction-rendered.test.tsx' },
+    /* #151 是**可修改**功能，判据也分两份：
+       · pillar-edit-recompute —— 引擎语义(改柱⇒日主/生肖/大运序列跟着变、三类非法输入各抛其错、
+         birthDay 丢了公历日就漂一天)+ 源字节钉子(修正确实调 calculateNonAi、写库带 ...pillars)；
+       · pillar-edit-rendered —— 真实点击「修正四柱」→ 改四栏 → 「保存修正」→ 读回「贰」的四柱/日主/五行、
+         存储里的 nonAiResult、以及「壹」那张格不分叉。
+       变异实测(jsdom/node 2026-10-10，四条全部被杀，还原后 md5 与基线一致)：
+       M1 只写四柱不重算(nonAiResult 沿用旧值)→ 3 failed；M2 丢 birthDay → 2 failed；
+       M3 保存后不走 refreshRecord 而就地塞视图 → 3 failed；M4 弹窗取消预填 → 4 failed。
+       ⚠ 两条踩过的夹具坑已写进测试顶部：日柱不能孤立改(时柱受五鼠遁校验)、
+       「贰」那张格渲染的是 fields.slice(1)，四柱只在 .chart-columns 的 dt=四柱里。 */
+    { guards: '#151 修正四柱的引擎语义与源字节钉子', file: 'pillar-edit-recompute.test.ts' },
+    { guards: '#151 修正四柱的真实交互路径(弹窗→保存→读回)', file: 'pillar-edit-rendered.test.tsx' },
     /* #139 的判据在服务器侧(server/test/chat-abort.test.mjs，node --test)，不是 vitest 用例文件，
        所以不能进上面那张表(表的 file 会拼进 client/src/__tests__/，且反向钉子要求 .test.ts(x))。
        丢在这里钉：客户端「停止」发的是真 AbortSignal(chatEngine 把 controller.signal 交给 fetch)，

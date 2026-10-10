@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react';
 import type { BaziRecord } from '../../types/domain';
 import { Modal } from '../../components/Modal';
 
-interface BirthInputModalProps { open: boolean; onClose: () => void; onSubmit: (pillars: Pick<BaziRecord, 'yearPillar' | 'monthPillar' | 'dayPillar' | 'hourPillar'>) => void; /** 排盘引擎回传的校验错误(该月找不到日期/时柱不合)，必须显示在弹窗内 */ error?: string; }
+interface BirthInputModalProps { open: boolean; onClose: () => void; onSubmit: (pillars: Pick<BaziRecord, 'yearPillar' | 'monthPillar' | 'dayPillar' | 'hourPillar'>) => void; /** 排盘引擎回传的校验错误(该月找不到日期/时柱不合)，必须显示在弹窗内 */ error?: string; /** 详情页「修正四柱」用：把当前命盘的四柱预填进来(#151)。缺省即新建时的空表。 */ initial?: Partial<Pick<BaziRecord, 'yearPillar' | 'monthPillar' | 'dayPillar' | 'hourPillar'>>; /** 提交按钮文案：建盘是「提交」，修正是「保存修正」，别让改完的人以为又建了一条。 */ submitLabel?: string; }
 
 const STEMS = '甲乙丙丁戊己庚辛壬癸';
 const BRANCHES = '子丑寅卯辰巳午未申酉戌亥';
@@ -16,8 +16,17 @@ const cleanPair = (value: string) => {
 type PillarKey = keyof typeof PILLAR_TITLES;
 const PILLAR_TITLES = { yearPillar: '年柱', monthPillar: '月柱', dayPillar: '日柱', hourPillar: '时柱' } as const;
 
-export function BirthInputModal({ open, onClose, onSubmit, error: engineError }: BirthInputModalProps) {
-  const [pillars, setPillars] = useState<Record<PillarKey, string>>({ yearPillar: '', monthPillar: '', dayPillar: '', hourPillar: '' });
+/** 预填值必须过同一道 cleanPair：外部传进非法字符时截成合法一柱，而不是让非法字直接躺在输入框里提交。 */
+const initialPillars = (initial?: BirthInputModalProps['initial']): Record<PillarKey, string> => {
+  const empty = { yearPillar: '', monthPillar: '', dayPillar: '', hourPillar: '' };
+  if (!initial) return empty;
+  const out = { ...empty };
+  for (const key of Object.keys(empty) as PillarKey[]) { const v = initial[key]; if (v) out[key] = cleanPair(v); }
+  return out;
+};
+
+export function BirthInputModal({ open, onClose, onSubmit, error: engineError, initial, submitLabel = '提交' }: BirthInputModalProps) {
+  const [pillars, setPillars] = useState<Record<PillarKey, string>>(() => initialPillars(initial));
   const [combined, setCombined] = useState('');
   const [error, setError] = useState('');
   if (!open) return null;
@@ -51,6 +60,6 @@ export function BirthInputModal({ open, onClose, onSubmit, error: engineError }:
     {(shown) && <p className="form-error" role="alert">{shown}</p>}
     <label>八字整串，八个字一起输、自动分成四柱，也可只用这一栏<input value={combined} maxLength={8} autoComplete="off" placeholder="例如 甲子丙寅戊辰庚申" onChange={(event) => { setError(''); onCombined(event.target.value); }} /></label>
     <div className="field-grid">{field('yearPillar')}{field('monthPillar')}{field('dayPillar')}{field('hourPillar')}</div>
-    <button className="primary-button" type="submit">提交</button>
+    <button className="primary-button" type="submit">{submitLabel}</button>
   </form></Modal>;
 }

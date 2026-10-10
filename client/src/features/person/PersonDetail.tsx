@@ -5,6 +5,7 @@ import { readableChannelError, readableName } from '../../data/chatEngine';
 import { beginAiSession, cancelAiSession } from '../../data/deepseekAdapter';
 import { clearChartCache } from '../../data/storageInfo';
 import { sanitizeAnalysisText } from '../chart/elements';
+import { BirthInputModal } from '../chart/BirthInputModal';
 import { isServerMode } from '../../data/serverClient';
 import type { BaziRecord, BaziTaskResult, Gender, NonAiChart } from '../../types/domain';
 import { interpersonalZodiac, zodiacOfBranch } from '../../utils/interpersonal';
@@ -818,6 +819,8 @@ const sanitizeCopyLine = (line: string): string => {
 export function PersonDetail({ personId, onBack, refreshKey = 0 }: PersonDetailProps) {
   const [record, setRecord] = useState<BaziRecord>();
   const [notice, setNotice] = useState<string>();
+  // 【#151 可修改功能】「修正四柱」弹窗：把当前命盘的四柱预填进排盘那张表，改完直接重算。
+  const [editOpen, setEditOpen] = useState(false);
   // 删除要二次确认：手机误触一下就把整条命盘连同已生成的 AI 结果全清掉，且无法撤销。
   const [confirmDelete, setConfirmDelete] = useState(false);
   useEffect(() => {
@@ -849,11 +852,38 @@ export function PersonDetail({ personId, onBack, refreshKey = 0 }: PersonDetailP
       setNotice(`排盘重算失败：${error instanceof Error ? error.message : '计算失败'}`);
     }
   }
+  /** 【#151】修正四柱：复用排盘引擎做校验，改完这一条链必须全量重排。
+   *  走 calculateNonAi(不是只替换 record 里的四柱字符串)有三个理由，都是实测出来的语义差别：
+   *  1) 合法性由引擎裁决 —— 阴阳不合、该月找不到日期、时柱与日干不合(五鼠遁)一律抛中文错，
+   *     界面原样显示；自己写校验会跟引擎口径分叉。
+   *  2) 派生事实跟着变 —— 五行/比例、日主、十神、藏干、纳音、十二长生、生肖关系全部按新柱重算。
+   *  3) 大运起法跟着变 —— forward 由**年干**定、步运从**月柱**往后/前数，起运与九步大运随之重排。
+   *  ⚠ 必须带上 nonAiResult.birthDay：换日盘(23 点后生)的日柱是次日干支，丢了这一栏三柱反查会把
+   *  公历/农历与起运锚到次日去(见 nonAiCalculator.ts:736 注释)。修正后仍保留它 —— 命主真实生日没变。
+   *  存的是 hydrateRecord 之前的完整对象：saveBaziRecord 内部会 pruneRecord 再落库，直接回写视图则带着
+   *  本次现算的数组，refreshRecord 再走一遍读取侧清洗，与「重新排盘」那条同源。 */
+  async function applyPillarEdit(pillars: Pick<BaziRecord, 'yearPillar' | 'monthPillar' | 'dayPillar' | 'hourPillar'>) {
+    setNotice(undefined);
+    try {
+      const { calculateNonAi } = await import('../chart/nonAiCalculator');
+      const nonAiResult = calculateNonAi({ birthYear: loadedRecord.birthYear, birthMonth: loadedRecord.birthMonth, birthDay: loadedRecord.nonAiResult?.birthDay, ...pillars }, loadedRecord.gender, loadedRecord.createdAt);
+      const updated = await saveBaziRecord({ ...loadedRecord, ...pillars, nonAiResult });
+      setRecord(await refreshRecord(updated));
+      setEditOpen(false);
+      setNotice('已按修正后的四柱重新排盘：五行、日主、十神、大运与起运均已重排');
+    } catch (error) {
+      // 引擎的拒绝必须留在弹窗里：错误在遮罩后面时手机上看不见，用户只会以为「点了保存没反应」。
+      setNotice(error instanceof Error ? error.message : '修正失败，命盘未改动');
+    }
+  }
   return <main className="person-detail">
     <header className="page-heading detail-top"><div><p className="eyebrow">本机命盘档案</p><h1>人物详情</h1><p className="page-description">{readableName(record.name)} 的八字记录与批断分析</p></div><div>{confirmDelete
       ? <div className="button-group" role="group" aria-label="确认删除"><span className="danger-hint">确定删除{readableName(record.name)}这个人吗？四柱、排盘数据与全部批断结果一并清除，无法撤销。</span><button className="danger-button" type="button" onClick={() => void remove()}>确认删除</button><button className="text-button" type="button" onClick={() => setConfirmDelete(false)}>取消</button></div>
       : <button className="text-button" type="button" onClick={onBack}>返回记录</button>}<button className="danger-button" type="button" onClick={() => setConfirmDelete(true)} hidden={confirmDelete}>删除数据</button></div></header>
     {notice && <p role="status">{notice}</p>}
-    <BasicInfo record={record} /><NonAiAnalysis result={record.nonAiResult} record={record} /><div className="section-actions"><button className="text-button" type="button" onClick={() => void recalculateNonAi()}>重新排盘</button></div><AIAnalysis record={record} onUpdated={setRecord} />
+    <BasicInfo record={record} /><NonAiAnalysis result={record.nonAiResult} record={record} /><div className="section-actions"><button className="text-button" type="button" onClick={() => void recalculateNonAi()}>重新排盘</button><button className="text-button" type="button" onClick={() => { setNotice(undefined); setEditOpen(true); }}>修正四柱</button></div>
+    {/* 弹窗必须挂在 PersonDetail 这一层：它显示的是**引擎拒绝那句**，而拒绝发生在提交之后。 */}
+    <BirthInputModal open={editOpen} onClose={() => { setNotice(undefined); setEditOpen(false); }} onSubmit={(pillars) => { void applyPillarEdit(pillars); }} error={notice && editOpen ? notice : undefined} initial={{ yearPillar: loadedRecord.yearPillar, monthPillar: loadedRecord.monthPillar, dayPillar: loadedRecord.dayPillar, hourPillar: loadedRecord.hourPillar }} submitLabel="保存修正" />
+    <AIAnalysis record={record} onUpdated={setRecord} />
   </main>;
 }
