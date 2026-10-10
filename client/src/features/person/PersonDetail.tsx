@@ -6,7 +6,7 @@ import { beginAiSession, cancelAiSession } from '../../data/deepseekAdapter';
 import { clearChartCache } from '../../data/storageInfo';
 import { sanitizeAnalysisText } from '../chart/elements';
 import { isServerMode } from '../../data/serverClient';
-import type { BaziRecord, BaziTaskResult, NonAiChart } from '../../types/domain';
+import type { BaziRecord, BaziTaskResult, Gender, NonAiChart } from '../../types/domain';
 import { interpersonalZodiac, zodiacOfBranch } from '../../utils/interpersonal';
 import { chinaDateParts, chinaYmd, chinaYear } from '../../utils/date';
 
@@ -198,6 +198,19 @@ export const cnDate = (iso: string): string => {
   return `${cnYear(+m[1])}年${cnSmall(+m[2])}月${m[3] ? cnSmall(+m[3]) + '日' : ''}`;
 };
 const mapText = (value: Record<string, number>) => Object.entries(value).map(([key, count]) => `${key}${cnCount(count)}`).join('、') || '暂无';
+/** 大运排法方向：阳男阴女顺排、阴男阳女逆排(以**年干**阴阳定，不是日干)。
+ *  【判据空白 #150】这句话引擎一直知道(nonAiCalculator.ts:578 fortuneDirection → :801 step → :814
+ *  逐柱 ±1)，但展示层从来没有说出来过：grep「顺排|逆排」在产品代码里命中 0 处，页面上只有九步运的
+ *  干支序列，用户读不出它是从月柱往后数还是往前数。这里补的是**读数**，不是第二套算法 ——
+ *  ⚠ 有意不 import 引擎那份 fortuneDirection：它是模块内私有函数(:578 无 export)，而它同时决定
+ *  luckStart 的方向(lunar-javascript getYun 的入参)，把它公开出来会诱使后来人拿这份布尔值去改起运推算。
+ *  同源由判据兜住：luck-direction-display.test.ts 用十干×两性别的真实引擎输出逐条比对这句话，
+ *  任何一侧翻面都会红。 */
+export const luckDirectionText = (yearStem: string | undefined, gender: Gender): string => {
+  if (!yearStem) return '暂无';
+  const forward = ('甲丙戊庚壬'.includes(yearStem)) === (gender === 'male');
+  return forward ? '顺排(阳男阴女顺行)' : '逆排(阴男阳女逆行)';
+};
 /** 五行比例按百分比展示(原始值是 0~1 的小数，直接打出来是 0.375 这种看不懂的数)。
  *  分母是实际观测数(四干 + 四支本气 = 8)，为 0 时不硬凑百分比。
  *  空格点名的五行补一句「缺X」，这是读盘最关心的一句话，不该让用户自己去数。
@@ -245,7 +258,7 @@ function NonAiAnalysis({ result, record }: { result?: NonAiChart; record: BaziRe
   const yb = record.yearPillar?.[1] ?? '';
   const zs = yb && '子丑寅卯辰巳午未申酉戌亥'.includes(yb) ? interpersonalZodiac(yb) : null;
   const selfZodiac = yb ? zodiacOfBranch(yb) : '';
-  return <section className="detail-section" aria-label="基础排盘数据"><div className="section-heading"><div><p className="eyebrow">贰、排盘数据</p><h2>基础排盘数据</h2></div></div><dl className="info-grid chart-data-grid">{fields.slice(1).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl><div className="chart-columns">{columns.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</div><section className="subsection" aria-label="大运"><h3>大运</h3><table className="luck-table"><thead><tr><th>大运</th><th>起运年</th><th>区间</th><th>交运日</th></tr></thead><tbody>{luckRows.map((g) => <tr key={g.ganZhi + g.startYear} className={g.ganZhi === currentGz ? 'luck-current' : undefined}><td>{g.ganZhi}{g.ganZhi === currentGz ? '行' : ''}</td><td>{cnYear(g.startYear)}</td><td>{cnYear(g.startYear)}至{cnYear(g.endYear)}</td><td>{g.onsetDate && g.endDate ? `${cnDate(g.onsetDate)}至${cnDate(g.endDate)}` : '暂无'}</td></tr>)}</tbody></table></section><section className="subsection" aria-label="生肖关系"><h3>生肖关系</h3><p>本命生肖：{zodiacOfBranch(record.yearPillar?.[1] ?? '')}，年支{record.yearPillar[1]}</p>
+  return <section className="detail-section" aria-label="基础排盘数据"><div className="section-heading"><div><p className="eyebrow">贰、排盘数据</p><h2>基础排盘数据</h2></div></div><dl className="info-grid chart-data-grid">{fields.slice(1).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl><div className="chart-columns">{columns.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</div><section className="subsection" aria-label="大运"><h3>大运</h3><p className="luck-direction">排法：{luckDirectionText(record.yearPillar?.[0], record.gender)}，自月柱{record.monthPillar}起每十年一柱</p><table className="luck-table"><thead><tr><th>大运</th><th>起运年</th><th>区间</th><th>交运日</th></tr></thead><tbody>{luckRows.map((g) => <tr key={g.ganZhi + g.startYear} className={g.ganZhi === currentGz ? 'luck-current' : undefined}><td>{g.ganZhi}{g.ganZhi === currentGz ? '行' : ''}</td><td>{cnYear(g.startYear)}</td><td>{cnYear(g.startYear)}至{cnYear(g.endYear)}</td><td>{g.onsetDate && g.endDate ? `${cnDate(g.onsetDate)}至${cnDate(g.endDate)}` : '暂无'}</td></tr>)}</tbody></table></section><section className="subsection" aria-label="生肖关系"><h3>生肖关系</h3><p>本命生肖：{zodiacOfBranch(record.yearPillar?.[1] ?? '')}，年支{record.yearPillar[1]}</p>
       {zs && <p>人际适配：我属{selfZodiac}，三合{zs.sanHe.join('、')}，六合{zs.liuHe.join('、')}，六冲{zs.chong.join('、')}，六害{zs.hai.join('、')}。生肖人际参考，非决断</p>}<ul>{relationLabels.map(([key, label]) => <li key={key}><strong>{label}</strong>：{result.relationships[key].join('、') || '暂无'}</li>)}</ul></section></section>;
 }
 /** 失败原因先抹掉凭据痕迹，再整句过中文闸门：模型报错常带英文句子、半角括号与斜杠，
@@ -418,10 +431,23 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
   const [tone, setTone] = useState<number>(() => recordTone(record.id));
   const toneRef = useRef(tone); toneRef.current = tone;
   const [autoWaiting, setAutoWaiting] = useState(false);
-  // 本次会话的窗口起点固定一次：跨月长跑时「预期任务清单」与进度条不会中途换算法。
+  // 窗口起点在**每一次批断开跑时**取当下(不是挂载那一刻)。写成一轮之内固定是必要的 ——
+  // 跨月长跑时「第 9 项/共 24 项」不能中途换算法；但把它固定在挂载时刻就会烧钱：手机浏览器
+  // 从月初开着这一屏到月底，horizon 仍停在挂载那个月 ⇒ 队列里排的是已经出窗的流月，
+  // 而读取路径 pruneOnRead 会把上一轮那些过期槽位剔掉 ⇒ 每一轮自动重试都整批重发旧月份
+  // (实测缺陷 #107 的真实成因：第一次自动轮只发了两个年度的任务就静默收尾，补跑又重发一遍早已成功的槽位)。
   const horizonRef = useRef<Date>(new Date());
   const autoTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const autoRetryCountRef = useRef(0);
+  /* 【缺陷 #114】「用户点过立即停止」这件事必须**单独留住**，不能靠读控制器上的 abort 信号：
+     stopAnalysis 在 abort 之后紧接着 `controllerRef.current = null`(那一句是为 runningLocally()
+     区分「遗留 pending vs 真在跑」服务的正确做法)，于是 `controllerRef.current?.signal.aborted`
+     ⇒ undefined —— **abort 这个事实被顺手抹掉了**。两处闸门都写成读控制器的话，只要将来有任何一条
+     路径把排期挂在半路再让用户点停止(#112 加固后 attemptOnce 不再抛，但 refreshRecord 那条 await
+     仍在闸门之前；补跑/冷却也随时可能新增收尾路径)，用户刚叫停的那一回就会在十二秒后整轮重发。
+     现在 scheduleAutoRetry 只有成功分支一个调用点，所以这两句闸门在**当前代码**里还打不红 ——
+     判据交给下面那条快用例(M4 侧：新一轮手动批断必须作废上一回的停止意愿)。 */
+  const signalAbortedRef = useRef(false);
   const busyRef = useRef(false);
   const markBusy = (v: boolean) => { busyRef.current = v; setBusy(v); };
   const cancelAutoRetry = () => { if (autoTimerRef.current) { clearTimeout(autoTimerRef.current); autoTimerRef.current = undefined; } setAutoWaiting(false); };
@@ -534,22 +560,64 @@ const sanitizeCopyLine = (line: string): string => {
 
   /** 分析失败后的“全自动重试”：不点按钮，稍候自动再跑(最多自动 2 次)。 */
   function scheduleAutoRetry(rec: BaziRecord) {
-    if (autoRetryCountRef.current >= 2 || controllerRef.current?.signal.aborted) return;
+    /* 【缺陷 #114】闸门原先写的是 `controllerRef.current?.signal.aborted`，而**用户一点「立即停止」
+       stopAnalysis 就把 controllerRef 置 null**(那是「本机还有没有在途请求」的判据，不是「用户放弃过
+       自动重试」的判据)⇒ `null?.signal.aborted` 是 undefined。于是这句本该拦住「已停止的那一回」的闸门
+       **恒假**：用户在十二秒排期窗里点了停止之后，scheduleAutoRetry 照样重新排期、照样把整轮 113 口发出去 ——
+       界面上还写着「已停止：已完成的任务已保存」，钱却在背后继续烧。
+       这里必须直接读那次 abort 留下的信号(signalAbortedRef)，而不是读那个被顺手清掉的控制器。 */
+    if (autoRetryCountRef.current >= 2 || signalAbortedRef.current) return;
     if (rec.aiError && !isRetryableFailure(rec.aiError)) return; // 密钥/配置类问题不盲试
-    autoRetryCountRef.current += 1;
-    const n = autoRetryCountRef.current;
+    const n = autoRetryCountRef.current + 1;   // 只用于文案「这是第N次」；**不扣账**(见下面 #113 的说明)
     setAutoWaiting(true);
     setHint('分析失败：将在十二秒后自动重新分析，这是第' + cnCount(n) + '次，共两次。也可以现在手动点批断分析，或取消自动重试。');
     autoTimerRef.current = setTimeout(() => {
       autoTimerRef.current = undefined;
+      /* 【缺陷 #115】到点必须先把「正在等自动重试」这个界面状态关掉，**再**判要不要发起。
+         原先只在入口判额度/密钥类早退(那句 return 根本不走到这里)，而正常排期时这一句是
+         setAutoWaiting(false) ⇒ 只有「真发起」那一圈会关灯。于是有一种读数一直挂着：
+         排好队之后用户去设置页改了密钥、把这条盘变成 not_configured ⇒ 到点这句闸门早退、
+         一口都不发，可提示仍写着「将在十二秒后自动重新分析」——一次永远不会发生的承诺
+         (实测 jsdom 2026-10-06：调用数一格不涨)。
+         ⚠ 订正(实测 jsdom 2026-10-07)：这份残留**不会长期挂着**，最多一个十二秒窗口 —— 下一次失败会
+         重新排期、其回调照样先关灯。所以这里的判据只有一条：**关灯必须先于发起闸门**(下面第一句)，
+         不要照着旧描述去追一条更长的尾巴。 */
       setAutoWaiting(false);
-      if (!busyRef.current && !controllerRef.current?.signal.aborted) void requestAnalysis(rec, true);
+      // 额度在**真发起这一刻**扣，不在排队那一刻扣。旧写法只在入口判 `>= 2`、到点不 ++，
+      // 于是「排上队之后又被手动点一次批断」会把那笔已排的账抹掉：次数永远停在原地 ⇒ 无限轮烧请求
+      // (实测缺陷 #103：jsdom 里手动→取消→清除→手动，第四批照发、界面再无排期句，且全程静默)。
+      /* 到点这句同样不能只看 controllerRef：定时器挂在空中的十二秒里，用户可能点了「取消自动重试」
+         —— 那条路走 clearTimeout，这一句压根不会执行(case 3 已钉死)，所以这里不需要「取消意愿」标志；
+         但若他点的是**立即停止**，控制器会被 abort 后置 null ⇒ 只有 signalAbortedRef 拦得住这次发起。 */
+      if (!busyRef.current && !signalAbortedRef.current && !controllerRef.current?.signal.aborted) {
+        /* 【缺陷 #113】扣账只能有这一处。原先这里与上面排期入口各 += 1，一笔自动重试记两次，
+           而闸门是 `count >= 2` ⇒ 手动轮 + **一**次自动轮就把额度吃光：第二次自动轮跑完时 count 已是 2，
+           自己在入口早退，界面上那句「共两次」承诺的第二次永远拿不到(实测 jsdom 2026-10-06：
+           第一次自动轮 [FIRE] 之后 count 直接 1→2，第二次自动轮 [AFTER-SCH] 读到 count=2 而不排期)。
+           挪到此处仍然满足 #103 的原意 —— 扣账发生在闸门之后、且排在 refreshRecord/requestAnalysis
+           之前，所以「被 busy 挡下没真发起」的那次依旧不会白扣一笔。 */
+        autoRetryCountRef.current += 1;
+        /* 必须重新读**当前**记录再发起，不能用 scheduleAutoRetry 闭包里那份 rec：rec 是上一轮开跑前的
+           快照，那一轮的失败任务全被原样带回来 ⇒ 每一批都重发同一组旧时段(实测缺陷 #107：十二秒后
+           那一批照旧发满整条队列、其中一整批是早已出窗的流月)。读取路径(pruneOnRead)会把过期槽位
+           剔掉、把仍有效却挂着旧时刻的失败任务搬回当前窗口，所以这一读正是「收敛」的那一步。
+           refreshRecord 走的就是那条读取路径(存储读 + 重算还原)，不依赖界面 props 是否已跟上最新落库。 */
+        void (async () => {
+          const fresh = await refreshRecord(rec).catch(() => rec);
+          void requestAnalysis(fresh, true);
+        })();
+      }
     }, 12000);
   }
   async function requestAnalysis(base: BaziRecord = record, _auto = false) {
     if (busyRef.current) return;
     cancelAutoRetry();
-    if (!_auto) autoRetryCountRef.current = 0;
+    /* 手动点「批断分析」= 用户又给了这一回两次自动重试的额度(见用例「重试额度重新计」)，
+       同时**上一回的停止意愿也要一并作废**：留着 signalAbortedRef，新的一回第一次失败就再也不排期。 */
+    if (!_auto) { autoRetryCountRef.current = 0; signalAbortedRef.current = false; }
+    // 每一次开跑都重新取窗口起点(一轮之内仍固定，见 horizonRef 上方注释)：自动重试排在十几秒后、
+    // 而这一屏可能已经开着跨了月，继续沿用挂载时刻会把出窗的流月整批重发。
+    horizonRef.current = new Date();
     let enteredBusy = false;
     try {
       const currentTone = toneRef.current;
@@ -574,6 +642,7 @@ const sanitizeCopyLine = (line: string): string => {
       }
       const controller = new AbortController();
       controllerRef.current = controller;
+      signalAbortedRef.current = false;   // 新一轮开跑：上一回的「立即停止」不再约束这一轮的自动重试
       beginAiSession();
       markBusy(true); enteredBusy = true;
       setHint(undefined); setCopyNote(undefined);
@@ -595,13 +664,26 @@ const sanitizeCopyLine = (line: string): string => {
         lastSnapshot = saved;
         setProgress(null);
         markBusy(false); enteredBusy = false;
+        // 一整轮跑完了，本机已经没有在途请求：必须把 controllerRef 也清掉。
+        // busy 灯灭了但引用还留着的话，runningLocally() 会永远为真 —— 主按钮/清除按钮一起锁死，
+        // 这一屏再也点不动(实测缺陷 #102：第二轮手动批断被吞，调用数一格不涨)。
+        if (controllerRef.current === controller) controllerRef.current = null;
+        // 排期必须赶在 refreshRecord 之前。读取路径(pruneOnRead)一旦发现时段任务过期就会另起一轮
+        // 「补跑」(stillFailed)，那一轮要跑十几秒；旧写法把排期放在 await 之后，于是十二秒定时器
+        // 在补跑收尾前就到期 —— 回调那句 `if (!busyRef.current && !controllerRef.current?.signal.aborted)`
+        // 判不过，整圈**静默**跳过：不 ++、不重发、界面也不再挂排期句(实测缺陷 #105：
+        // jsdom 里封顶后的 30 秒尾巴仍多出 22 次调用，全是那轮补跑发的，钱扣了却没有一次算进额度)。
+        // 自动重试拿的是**本轮开跑时那份快照**(saved)：一轮批断只跑十几到几十秒，流月窗口按整月推进，
+        // 跨月边界那种「失败任务带着上一个月份」在实测里没出现(取证 jsdom 2026-10-06：十二秒到点那条
+        // 快照里的 12 个流月仍是当前窗口的 2026-10…2027-9)，不值得为它多走一次读盘。
+        if (saved.aiStatus === 'failed') scheduleAutoRetry(saved);
         // 同 recalculateNonAi：交回视图前走一遍读取路径，视图里的排盘数组与过期任务清洗
         // 必须和下次点「AI 分析」时算出的预期清单同源，否则「结果完整」永远判不出来。
         onUpdated(await refreshRecord(saved));
-        if (saved.aiStatus === 'failed') scheduleAutoRetry(saved);
       } catch (error) {
         setProgress(null);
         markBusy(false); enteredBusy = false;
+        if (controllerRef.current === controller) controllerRef.current = null;   // 同上：异常收尾也要解锁
         const aborted = controller.signal.aborted;
         const reason = error instanceof Error ? error.message : '请求未完成';
         try {
@@ -620,8 +702,19 @@ const sanitizeCopyLine = (line: string): string => {
     cancelAutoRetry();
     autoRetryCountRef.current = 0;
     controllerRef.current?.abort();
+    signalAbortedRef.current = true;   // 【缺陷 #114】这份意愿必须在控制器被置 null 之后仍然留得住
+    controllerRef.current = null;   // 本机已经没有在途请求了：这一句是「遗留 pending」与「真在跑」的区分依据
     cancelAiSession();
     setProgress(null);
+    markBusy(false);   // 必须关灯：requestAnalysis 第一行就是 `if (busyRef.current) return;`，不关的话整页再也点不动
+    // 落库状态也要跟着改走：pending 会让主按钮/清除按钮一起 disabled，记录列表那一行还会永远显示「分析中」。
+    // 写成 failed(而不是 not_started)才如实 —— 用户确实中止了一次分析，已完成的任务仍留在 aiTasks 里，
+    // 再点批断就只补剩下的那些；同时把 aiError 换成「已停止」这句，别让自动重试去追一次用户主动的取消。
+    const stopped = { ...record, aiStatus: 'failed' as const, aiError: ABORTED_MESSAGE };
+    void saveBaziRecord(stopped).then((saved) => onUpdated(saved)).catch(() => { /* 落库失败也先把界面解开来 */ });
+    // 视图立刻跟上：onUpdated 要等一次异步落库才回来，而状态行读的是 record.aiStatus。
+    // 只关灯不就地更新的话，这一屏会挂着「状态：分析中」空转一小会儿(实测缺陷 #101 的界面半边)。
+    onUpdated(stopped);
     setHint('正在停止：已阻止后续任务，正在中断当前请求。');
   }
   function cancelAutoRetryFromHint() {
@@ -630,9 +723,14 @@ const sanitizeCopyLine = (line: string): string => {
     setHint('已取消自动重试。需要时可手动点批断分析。');
   }
   async function clearResultsOnly() {
-    if (record.aiStatus === 'pending' || busy) return;
+    if (runningLocally()) return;   // 同按钮那道闸门：只看本机有没有在途请求，别被遗留的 pending 列锁住
     cancelAutoRetry();
     autoRetryCountRef.current = 0;
+    /* 【缺陷 #114】清除结果是一次**全新的开始**(界面文案就写着「只清除不重算」，用户清完必然要再点批断)，
+       所以上一回「立即停止」留下的意愿也必须一并作废。少这一句的话：停止过一次 → 清除 → 再点批断，
+       requestAnalysis 里那句 `if (!_auto)` 会把它清掉，但走「改语气自动清除」那条内部路径时
+       signalAbortedRef 还留着 true ⇒ scheduleAutoRetry 恒早退，这条盘从此再也拿不到一次免费重试。 */
+    signalAbortedRef.current = false;
     const cleared = await saveBaziRecord({ ...record, aiTasks: undefined, aiAnalysis: undefined, aiOverview: undefined, aiError: undefined, aiStatus: 'not_started' });
     // 缓存清没清掉要如实说：网页版的缓存在服务器库里，离线/未登录时根本清不动，
     // 谎报「已清除」会让人以为下次分析必然重算(其实仍会命中旧缓存)。
@@ -645,10 +743,14 @@ const sanitizeCopyLine = (line: string): string => {
     setDisabledTasks(new Set()); setDisabledDims(new Set());
     setHint('已清除该命盘的批断结果' + cacheNote + '，未重新调用模型。需要时请再点批断分析。');
   }
+  /** 本机是否真有一批请求在途：这是「分析中」的唯一依据。
+     *  record.aiStatus==='pending' 单独不够 —— 换设备同步来的、上次崩在半路的、
+     *  或本页刚被别处打开过的盘，那一列会一直停在 pending，把按钮全锁死却什么都没在跑(实测缺陷 #101)。 */
+  const runningLocally = () => busy || !!controllerRef.current;
   useEffect(() => () => { if (noteTimer.current) clearTimeout(noteTimer.current); if (autoTimerRef.current) clearTimeout(autoTimerRef.current); }, []);
 
   return <section className="detail-section" aria-labelledby="ai-title" aria-label="批断分析">
-    <div className="section-heading"><div><p className="eyebrow">叁、批断结果</p><h2 id="ai-title">批断分析</h2></div><div className="button-group"><button className="primary-button" type="button" onClick={() => void requestAnalysis()} disabled={record.aiStatus === 'pending' || busy}>{busy ? '分析中，请稍候' : '批断分析'}</button>{(record.aiStatus === 'pending' || busy) && <button className="danger-button stop-button" type="button" onClick={stopAnalysis}>立即停止</button>}<button className="text-button" type="button" onClick={() => void clearResultsOnly()} disabled={record.aiStatus === 'pending' || busy}>清除批断结果与缓存，只清除不重算</button></div></div>
+    <div className="section-heading"><div><p className="eyebrow">叁、批断结果</p><h2 id="ai-title">批断分析</h2></div><div className="button-group"><button className="primary-button" type="button" onClick={() => void requestAnalysis()} disabled={runningLocally()}>{busy ? '分析中，请稍候' : '批断分析'}</button>{runningLocally() && <button className="danger-button stop-button" type="button" onClick={stopAnalysis}>立即停止</button>}<button className="text-button" type="button" onClick={() => void clearResultsOnly()} disabled={runningLocally()}>清除批断结果与缓存，只清除不重算</button></div></div>
     <div className="tone-block" aria-label="分析语气">
       <span className="tone-label">措辞语气</span>
       <input id="tone-slider" type="range" min={0} max={100} step={5} value={tone} aria-valuetext={toneLabel(tone)} onChange={(event) => { const v = Number(event.target.value); setTone(v); saveRecordTone(record.id, v); }} />
@@ -662,7 +764,7 @@ const sanitizeCopyLine = (line: string): string => {
       <p className="progress-text">任务 {progress ? cnCount(progress.done) + '，共' + cnCount(progress.total) : '零'}：{progress?.label ?? '准备中'}</p>
       <div className="progress-track" role="progressbar" aria-valuenow={progress?.done ?? 0} aria-valuemin={0} aria-valuemax={progress?.total || queuedTotal() || 1}><div className="progress-fill" style={{ width: `${Math.round(((progress?.done ?? 0) / (progress?.total || queuedTotal() || 1)) * 100)}%` }} /></div>
     </div>}
-    {record.aiStatus === 'pending' && <p role="status">按任务逐个调用批断：本命、每年流年、每月流月、大运、后天调整、全盘总结。每个任务数秒到数十秒；失败会自动重试一次，进度即时保存，中断后可随时继续。</p>}
+    {runningLocally() && <p role="status">按任务逐个调用批断：本命、每年流年、每月流月、大运、后天调整、全盘总结。每个任务数秒到数十秒；失败会自动重试一次，进度即时保存，中断后可随时继续。</p>}
     {(record.aiStatus === 'not_configured' || hasUnconfiguredTask) && <p role="status">{keyMissingHint}<button type="button" className="text-button chat-settings-link" onClick={openSettings}>去设置</button></p>}
     {record.aiStatus === 'failed' && <p role="status">{/未配置|没有可用的通道凭据/.test(record.aiError ?? '')
       // 一个凭据都没填时曾按 failed 上报(现已归为 not_configured)，此处兜住历史数据，

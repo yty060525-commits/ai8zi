@@ -174,6 +174,10 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
        真要把 __tests__ 排除掉是个独立决定(得同时回答「判据还跑不跑」)，不该被一次顺手改配置静默带过。 */
     { task: '#149 tsc -b 把用例编进构建(测试类型错误会挡住发布)', file: 'client/tsconfig.json', text: '"include": ["src"]' },
     { task: '#149 同上：build 脚本第一步就是 tsc -b', file: 'client/package.json', text: 'tsc -b && vite build' },
+    /* 【#150 非 AI 侧新功能】大运「顺排/逆排」这句读数：引擎一直算得出来(fortuneDirection)，
+       展示层从来没有说过它 —— grep「顺排|逆排」在产品代码里命中 0 处，页面上只有九步运的干支。
+       特征串取**函数名**而不是那句中文文案(#78 的教训：登记文案会在下一次正常改写时变成噪音红)。 */
+    { task: '#150 详情页说出大运排法方向', file: 'client/src/features/person/PersonDetail.tsx', text: 'luckDirectionText' },
   ];
 
   it.each(MARKERS)('任务 $task 的特征串必须在 $file 里', ({ task, file, text }) => {
@@ -261,6 +265,17 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
        行为，补上直接碰 baziOrchestrator 源字节的钉子后才红在「黑名单整行」。
        「判据杀不掉自己针对的变异」是本轮最值钱的读数，写法教训已记进注释。 */
     { guards: '#148 闸门对两端真实产物的读数+兜底句修复+源字节钉子', file: 'retry-gate-real-texts.test.ts' },
+    /* #150 是**非 AI 侧的新增读数**(大运顺排/逆排)，判据分两份、各守一段链路：
+       · luck-direction-display —— 引擎真值(十干×两性别穷举，方向从首步运干支**反推**而不是另算一遍)
+         + 文案与引擎同源 + 两端源字节钉子；
+       · luck-direction-rendered —— 真实渲染 PersonDetail，钉这一行确实铺在「大运」小节里。
+       变异实测(jsdom/node 2026-10-10)：M1 删掉 <p className="luck-direction"> → rendered 三条全红；
+       M2 展示层把 `=== (gender === 'male')` 翻成 female → 两份共 5 条红；M3 整句硬编码成顺排 → 4 条红；
+       ⚠ **M4(改的是引擎 fortuneDirection，界面不动)有一个重要读数**：那条「穷举比对文案 vs 引擎」的
+       同源判据**照旧绿**(两边一起翻面当然还一致)，只有十条真值用例和源字节钉子红。所以这里必须留下
+       源字节那一句 —— 结果型比对挡不住整体翻转，同类教训见 [[feedback-pin-assertion-on-formula-not-outcome]]。 */
+    { guards: '#150 大运方向的引擎真值与文案同源(+源字节钉子)', file: 'luck-direction-display.test.ts' },
+    { guards: '#150 大运方向必须渲染在详情页大运小节', file: 'luck-direction-rendered.test.tsx' },
     /* #139 的判据在服务器侧(server/test/chat-abort.test.mjs，node --test)，不是 vitest 用例文件，
        所以不能进上面那张表(表的 file 会拼进 client/src/__tests__/，且反向钉子要求 .test.ts(x))。
        丢在这里钉：客户端「停止」发的是真 AbortSignal(chatEngine 把 controller.signal 交给 fetch)，
