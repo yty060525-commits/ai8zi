@@ -191,6 +191,11 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
        改回裸数字 80 就等于把标注与常量脱钩(#129 的注释把它当后果描述过，却没有判据绑住)。
        ⚠ MARKERS 读的是 HEAD 树字节 ⇒ 本条必须等这次改动提交后才可能绿。 */
     { task: '#153 「这是默认档」的比较对象绑定到常量', file: 'client/src/features/person/PersonDetail.tsx', text: 'tone === DEFAULT_TONE' },
+    /* 【#154 采纳闸门】钉的是「谁算本账号」不再靠字符串兜底：`const me = getServerSession()?.username;`
+       (不带 `?? ''`)是这次收口的实体。旧取值式在账号名为空时把无标签盘一律判成自己的 ⇒ 整份敞开采纳。
+       ⚠ 这条登记只盯**取值式**；那道 `if (!me) return;` 由 adopt-after-account-switch.test.ts 的用例守，
+       MARKERS 读 HEAD 树字节 ⇒ 必须等本次改动提交后才可能绿。 */
+    { task: '#154 采纳闸门的账号名口径不再兜底成空串', file: 'client/src/data/clientRepository.ts', text: 'const me = getServerSession()?.username;' },
   ];
 
   it.each(MARKERS)('任务 $task 的特征串必须在 $file 里', ({ task, file, text }) => {
@@ -328,6 +333,27 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
        ⚠ 未覆盖处如实记下：滑杆 step=5 让 45/55 之外的中间值不可达，所以「非可达档位上的边界」
        (如 T2 的 45→46 只在直接调用 toneLabel 时可见)靠的是函数级穷举而非界面路径；界面那条只走可达档位。 */
     { guards: '#153 语气滑杆刻度、档位边界与无障碍文本同源', file: 'tone-slider-scale.test.tsx' },
+    /* #154 「视图空着先采纳本机存储」(ensureViewLoaded) 的账号名口径。电池 5 条**全杀**
+       (2026-10-10，adopt-after-account-switch + sync-admin-ghost 两文件，--pool=forks --maxWorkers=1，
+       基线冒烟闸门读到 0 failed/22 passed 才开跑；跑完按 cmp 回读 clientRepository.ts 逐字一致)：
+       · U1 只删 `if (!me) return;`(保留旧取值式) / U2 整段改回旧实现(删门 + `?? ''`)
+         / U3 门改成「有 token 才放行」 → 各 2 failed(前提钉子 + 如实登记那条)。
+       · U4 mineOnDevice 恒真 → 1 failed，红的是 sync-admin-ghost「待推送名单里的『别人的盘』不会被补推到服务器」，
+         **不是本文件的反向钉子** —— 这条要如实说明：本文件对「无标签一律算自己的」这种宽松判据本身没有独立杀伤力，
+         它靠的是既有那份跨账号用例。
+       · U5 ensureViewLoaded 不再赋值视图 → 4 failed。
+       ⚠ 两处必须跟着这段一起读的诚实账：
+       ① **这是一处防御性收紧，不是已复现的线上缺陷**。null 会话走不到那道门(isServerMode() 为假时
+          pullAndMergeLocal:693 在门口就 return)，而 server/app.mjs:61 把注册用户名限成 2–24 位、
+          SettingsPage.tsx:177/189 直抄服务器回的 username ⇒ 当前两端都造不出空账号名。
+       ② **第一版夹具是空转的**：用 setServerSession(null) 时「删掉整道门」仍 4 passed，
+          我据此差点把它报成「修复无效」。A/B(username 取空串的会话 vs null 会话)才分辨出是夹具不可达。
+       ③ 换账号那两条是**当前读数登记**而非期望：storageBackedBaziRepository 的写入侧不按账号分键
+          (saveBaziRecord 用固定 storageKey，只有 saveView 分流到 namespacePrefix+owner)，
+          所以换账号后上一账号的无标签盘仍会整份进新账号视图；账号名为空那一轮则把本机存储整体覆盖成
+          只剩新建那条(旧盘从这台设备的存储里消失)。真要改语义得先把这两条改写成新语义并交代
+          「本机自建、从没带过标签的盘为什么不会被抹掉」。 */
+    { guards: '#154 采纳闸门的账号名口径(含换账号/空账号名两条当前读数)', file: 'adopt-after-account-switch.test.ts' },
     /* #139 的判据在服务器侧(server/test/chat-abort.test.mjs，node --test)，不是 vitest 用例文件，
        所以不能进上面那张表(表的 file 会拼进 client/src/__tests__/，且反向钉子要求 .test.ts(x))。
        丢在这里钉：客户端「停止」发的是真 AbortSignal(chatEngine 把 controller.signal 交给 fetch)，

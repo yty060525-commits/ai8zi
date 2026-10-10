@@ -261,6 +261,10 @@ export function configureBaziRepository(repository: BaziRepositoryPort) {
  *  端口层同样要有这条 adopt：否则一次落盘之后视图被清空(换页面/换账号)，下一轮普通读取
  *  拿服务器清单把存储里那些本机盘一概看不见 —— 删除标记、幽灵判定、待推送补推全都没有参照。
  *  只在视图为空时采纳，避免把本轮同步刚剔掉的盘又捞回来。
+ *  ⚠ 这条闸门**只在已登录时生效**(取不到会话就整条返回)：未登录态下 persistView→persistLocal
+ *  根本不落本机库(CAN_PERSIST 为假)，所以「登出后重启」既没有存储可采纳、也没有第二份数据会被写坏。
+ *  真设备上的登出走 reloadLocalForSession(:120-122)：视图清空后按新账号命名空间 loadLocal，
+ *  再交给 adoptUnclaimedLocalRecords 那道 pending.has(r.id) 的窄口径认领 —— 两条路的宽窄不同是有意的。
  *  那道 `!saveView` 在现有两条真实端口上都是空转：内存库那条没有 saveView(它读写的就是视图本身)，
  *  带存储的那条有 saveView —— 删掉这半全量 472 条照旧全绿(实测)。留着它的理由与 persistView 同源：
  *  测试桩可以只声明 mirrorsView 又带上 saveView(本文件「镜像视图的端口不该被整体落盘」那条就是)，
@@ -268,7 +272,12 @@ export function configureBaziRepository(repository: BaziRepositoryPort) {
 async function ensureViewLoaded(): Promise<void> {
   if (baziRecords.length || !baziRepository.saveView) return;
   loadOwners();                                  // 归属表是「这条盘是谁的」的第二份依据(存储里那份可能没带标签)
-  const me = getServerSession()?.username ?? '';
+  const me = getServerSession()?.username;
+  // 没有可用账号名就没有「本账号」这个口径：mineOnDevice(:474) 对无标签盘恒为真，me 兜底成空串等于整份敞开采纳。
+  // ⚠ 可达性如实登记：null 会话走不到这里(isServerMode() 为假时 pullAndMergeLocal:693 在门口就返回)，
+  // 当前两端也造不出空账号名(server/app.mjs:61 限 2–24 位)。所以这是**防御性收紧**而非已复现缺陷，
+  // 目的是让「谁算本账号」不再靠字符串兜底 —— 任何一侧放宽校验都不会自动退化成整份采纳别人的盘。
+  if (!me) return;
   let stored: BaziRecord[];
   try { stored = await baziRepository.listBaziRecords(); } catch { return; /* 读不到就当本机没有 */ }
   // 只采纳本账号名下(含无标签的本机新建)那些：这份存储按账号命名，但**管理员全量同步会把别人
