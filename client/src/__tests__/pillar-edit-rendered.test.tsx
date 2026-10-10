@@ -54,7 +54,9 @@ afterEach(() => { cleanup(); resetMockSession(); vi.restoreAllMocks(); });
  *  渲染不出返回空串，交给下面的前提判红，绝不让断言落在空集上。 */
 async function cell(label: string): Promise<string> {
   try {
-    const grid = await screen.findByRole('region', { name: '基础排盘数据' }, {}, { timeout: 2000 });
+    // findByRole 只接受 (role, queries, options) 三参：第四参会被 tsc -b 挡下(TS2554)，
+    // 超时只能放进第三参的 waitForOptions。
+    const grid = await screen.findByRole('region', { name: '基础排盘数据' }, { timeout: 2000 });
     const dt = within(grid).queryAllByText(label)[0];
     if (!dt) return '';
     const dd = (dt.parentElement as HTMLElement).querySelector('dd');

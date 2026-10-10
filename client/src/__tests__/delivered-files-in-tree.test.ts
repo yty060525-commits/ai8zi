@@ -182,6 +182,11 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
        特征串取函数名 applyPillarEdit(同上：不登记中文文案)，BirthInputModal 那条取新增的预填参数。 */
     { task: '#151 详情页修正四柱走引擎重算', file: 'client/src/features/person/PersonDetail.tsx', text: 'applyPillarEdit' },
     { task: '#151 弹窗支持预填当前命盘', file: 'client/src/features/chart/BirthInputModal.tsx', text: 'initialPillars' },
+    /* 【#152 构建期类型闸门收口】钉的是**声明文件里那行通配形**，因为它是唯一能生效的写法：
+       兄弟位置的 ai 声明文件、按整条 specifier 写的 declare module 两种「直觉写法」实测都仍红两条 TS7016。
+       这条串一旦不在树上(改名、换成那两种写法之一、或整份删掉)，tsc -b 立刻回到 3 条错误 ——
+       而 vitest 完全不做类型检查，所以只有登记进特征串账本才有人守着。 */
+    { task: '#152 server/ai.mjs 的通配类型声明(清掉两条 TS7016)', file: 'client/src/types/server-ai.d.ts', text: "declare module '*.mjs'" },
   ];
 
   it.each(MARKERS)('任务 $task 的特征串必须在 $file 里', ({ task, file, text }) => {
@@ -292,6 +297,18 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
        「贰」那张格渲染的是 fields.slice(1)，四柱只在 .chart-columns 的 dt=四柱里。 */
     { guards: '#151 修正四柱的引擎语义与源字节钉子', file: 'pillar-edit-recompute.test.ts' },
     { guards: '#151 修正四柱的真实交互路径(弹窗→保存→读回)', file: 'pillar-edit-rendered.test.tsx' },
+    /* #152 声明文件自身的判据。⚠ 这里有一条**如实登记的存活变异**，别把它写成「四条全杀」：
+       · M1 整份删掉声明文件 → 套件 import 失败(no tests) ⇒ 被杀；
+       · M3 把声明里的 classifyFailure 改名 → 2 failed ⇒ 被杀；
+       · M4 通配形改成整条 specifier 的 declare module → 1 failed ⇒ 被杀；
+       · M5 把 ai.mjs 真实形参表改成单对象入参 → 2 failed ⇒ 被杀；
+       · M6 声明里多写一个参数 → 1 failed ⇒ 被杀；
+       · M2 把 cnCode 的返回类型 string 改成 number → **3 passed，两个闸门都没读数**。
+         vitest 不查类型可以理解；限定这 6 个文件的 `npx tsc -p` 同样读到 0 错误 ——
+         这不是判据失灵，是机制问题：对 tsc 来说 .d.ts 就是事实源，它没有实现可比。
+         所以类型面无法自证，只能靠 M5/M6 那条「声明 vs 真实形参表」的字节比对兜住签名分叉；
+         纯返回类型的漂移目前仍在无人区，要覆盖它得让判据去跑一次真实构建(成本另计)。 */
+    { guards: '#152 server/ai.mjs 声明与真实导出同源(含参数个数)', file: 'server-ai-declaration.test.ts' },
     /* #139 的判据在服务器侧(server/test/chat-abort.test.mjs，node --test)，不是 vitest 用例文件，
        所以不能进上面那张表(表的 file 会拼进 client/src/__tests__/，且反向钉子要求 .test.ts(x))。
        丢在这里钉：客户端「停止」发的是真 AbortSignal(chatEngine 把 controller.signal 交给 fetch)，

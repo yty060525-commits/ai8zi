@@ -16,14 +16,20 @@ import { isRetryableFailure, orchestrateBaziAnalysis } from '../data/baziOrchest
  * ⇒ 把闸门的中文黑名单从「四[零一二三四五六七八九]」改成只认「四[零一二三]」(即放行 429)，
  *   两套套件照旧全绿，而钱袋子的口径已经悄悄翻面。本文件先钉住**现状读数**，再钉修复。
  *
- * ⚠ 构建期闸门(实测 tsc -b)：`import … from '../../../server/ai.mjs'` 在 `allowJs: false` 下报
+ *   ⚠ 构建期闸门(实测 tsc -b)：`import … from '../../../server/ai.mjs'` 在 `allowJs: false` 下报
  *   TS7016 —— 这条错误**不是我引入的形态**：HEAD 里的 retry-gate-server-text.test.ts:2 用同一句 import、
  *   同样红。⚠ 【缺陷 #149】ab787cf 提交信息里「剩下唯一一条构建期类型错误来自他人未提交文件」那句是错的，
  *   我上一轮照抄了它而没复跑：tsconfig 的 include 是整个 src(只 exclude helpers) ⇒ 用例也在编译范围内，
  *   实测移开他人那份文件后 tsc -b 仍红在这两条上，真实读数是 3 条且 2 条在本会话判据链上(#144 起)。
  *   这里不写 `@ts-expect-error` 把它压掉：那行注释本身就是变异体 —— 谁把 import 改成 any 桩或删掉，
- *   它会立刻红成「unused directive」，等于给跨端契约加了一道会咬人的写法钉子；真要收口应给 ai.mjs
- *   补 .d.ts 或开 allowJs，那是独立决定，不该由一份判据顺手替全站改编译口径。 */
+ *   它会立刻红成「unused directive」，等于给跨端契约加了一道会咬人的写法钉子。
+ *   【#152 已收口，2026-10-10 实测】上面那句「补 .d.ts」按直觉写会白做两趟：兄弟 `server` 目录里的
+ *   ai 声明文件、以及按整条 specifier 写的 declare module 两种写法对 tsc 都**仍然红**
+ *   （allowJs:false 时它不把同名声明文件关联到 mjs；而非相对模块名又匹配不到这个相对 specifier）。
+ *   能生效的只有通配形 —— 对任意 mjs specifier 声明判据真调的那几个符号，
+ *   已在临时最小工程 A/B 四条读数后落到 client/src/types/server-ai.d.ts，不改全站编译口径。
+ *   副作用如实登记：那条通配对任何 mjs specifier 生效，将来再 import 别的 mjs 会拿到这里的
+ *   形状而不是 TS7016，需要时按同一文件补符号即可。 */
 
 const NO_CRED = '没有可用的通道凭据，请先在设置里配置';
 /** 直接读产品源码的字节：闸门那行黑名单的字面量**本身就是判据要读的串**，
