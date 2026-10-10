@@ -755,7 +755,7 @@ const sanitizeCopyLine = (line: string): string => {
     <div className="tone-block" aria-label="分析语气">
       <span className="tone-label">措辞语气</span>
       <input id="tone-slider" type="range" min={0} max={100} step={5} value={tone} aria-valuetext={toneLabel(tone)} onChange={(event) => { const v = Number(event.target.value); setTone(v); saveRecordTone(record.id, v); }} />
-      <span className="tone-value">{toneLabel(tone)}{tone === 80 ? '，这是默认档' : ''}</span>
+      <span className="tone-value">{toneLabel(tone)}{tone === DEFAULT_TONE ? '，这是默认档' : ''}</span>
       <span className="tone-scale"><em>犀利</em><em>中立</em><em>温柔夸夸</em></span>
     </div>
     <p className="ai-status" role="status">状态：{statusText[record.aiStatus]}</p>

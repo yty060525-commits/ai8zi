@@ -187,6 +187,10 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
        这条串一旦不在树上(改名、换成那两种写法之一、或整份删掉)，tsc -b 立刻回到 3 条错误 ——
        而 vitest 完全不做类型检查，所以只有登记进特征串账本才有人守着。 */
     { task: '#152 server/ai.mjs 的通配类型声明(清掉两条 TS7016)', file: 'client/src/types/server-ai.d.ts', text: "declare module '*.mjs'" },
+    /* 【#153 语气滑杆刻度】钉产品侧那一行的**绑定**而不是数字：`tone === DEFAULT_TONE` 是这次收口的实体，
+       改回裸数字 80 就等于把标注与常量脱钩(#129 的注释把它当后果描述过，却没有判据绑住)。
+       ⚠ MARKERS 读的是 HEAD 树字节 ⇒ 本条必须等这次改动提交后才可能绿。 */
+    { task: '#153 「这是默认档」的比较对象绑定到常量', file: 'client/src/features/person/PersonDetail.tsx', text: 'tone === DEFAULT_TONE' },
   ];
 
   it.each(MARKERS)('任务 $task 的特征串必须在 $file 里', ({ task, file, text }) => {
@@ -309,6 +313,21 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
          所以类型面无法自证，只能靠 M5/M6 那条「声明 vs 真实形参表」的字节比对兜住签名分叉；
          纯返回类型的漂移目前仍在无人区，要覆盖它得让判据去跑一次真实构建(成本另计)。 */
     { guards: '#152 server/ai.mjs 声明与真实导出同源(含参数个数)', file: 'server-ai-declaration.test.ts' },
+    /* #153 语气滑杆的刻度与档位语义。电池 10 条**全杀**(2026-10-10，单文件 --pool=forks --maxWorkers=1，
+       每条单独跑、跑完按 md5 回读 PersonDetail.tsx 与 baziOrchestrator.ts 均逐字一致)：
+       · T1 `v <= 5`→`v <= 4` / T2 `v < 45`→`v < 46` / T3 `v <= 90`→`v <= 95` / T5 `v <= 55`→`v <= 56`
+         → 各 1 failed(边界逐位点名)。这四条是本次的核心收获：旧判据只有 toneLabel(0)/(50)/(100) 三个点，
+         离四条边界都远，**整体平移一档在 HEAD 上全绿存活**；补的是边界而不是第五套文案。
+       · T4 `tone === DEFAULT_TONE`→`tone === 80` → 1 failed(字节钉子)。
+       · T6 注释「语气档(0 犀利 .. 50 中立 .. 100 温柔夸夸)」改成「语气档(0..100)」→ 1 failed。
+       · T7 整条删掉偏犀利分支 → 1 failed(反向钉子：证明解析式真在读五条分支，不是空表自洽)。
+       · T8 aria-valuetext 改 String(tone) / T9 写死 toneLabel(80) → 各 1 failed，且**只有用例7 红**。
+         这两条正是「断言必须碰被测组件」的现场：可见那句 `<span>` 完全不变，纯函数级判据(T1–T7 那几条)
+         一条都不会红，只有真实渲染 + fireEvent.change 读组件发出的那个属性才抓得到。
+       · T10 max={100}→max={50} → 3 failed(前提/可达档位/渲染三条同时红)。
+       ⚠ 未覆盖处如实记下：滑杆 step=5 让 45/55 之外的中间值不可达，所以「非可达档位上的边界」
+       (如 T2 的 45→46 只在直接调用 toneLabel 时可见)靠的是函数级穷举而非界面路径；界面那条只走可达档位。 */
+    { guards: '#153 语气滑杆刻度、档位边界与无障碍文本同源', file: 'tone-slider-scale.test.tsx' },
     /* #139 的判据在服务器侧(server/test/chat-abort.test.mjs，node --test)，不是 vitest 用例文件，
        所以不能进上面那张表(表的 file 会拼进 client/src/__tests__/，且反向钉子要求 .test.ts(x))。
        丢在这里钉：客户端「停止」发的是真 AbortSignal(chatEngine 把 controller.signal 交给 fetch)，
