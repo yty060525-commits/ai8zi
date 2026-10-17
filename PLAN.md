@@ -565,8 +565,8 @@ Wiki由同一chat owner在UI冻结后精准同步：[界面入口/资料与复�
 | 第四项low阶段审查与Wiki收口 | 完成，root确认两项P2均关闭、无剩余P1/P2 | — | low复核部分主题扫年与空标题本命修复；root亲读115/90最新日志、实际核心行及WIP摘要，允许阶段交接 |
 | 第五项气泡复制实现/专项/type | 源码/测试/Wiki全部冻结 | 2 / 2，独立计数 | `.scratch/chat-copy-red.log`旧界面24通过/3失败；green保留首次歧义query失败及最终27/27；types退出0；查询修正计1、文档收口复验计2；wiki-final扫描OK11/484/0且4/4 |
 | 第五项low阶段审查 | root与Sol low已亲读通过，无P1/P2 | — | 精确message.content、await后成功、API失败、user无按钮、清空后迟到反馈均已核对；原来源与历史断言保留；Wiki当前状态已同步，可提交源码后统一全量 |
-| 全部阶段统一全量/type/build | root已独立验收冻结后端模块，前端/类型/构建待第五项冻结后执行 | — | `.scratch/ui-chat-root-server-full.log`实际node --test为155/155、退出0；`.scratch/ui-chat-root-rust-full.log`实际cargo test --lib为22/22、退出0；两模块SHA已保存，若再变须重验；不预填前端/上线通过 |
-| 提交后构建/Pages线上核验 | 待执行 | — | 不冒称服务器/桌面已部署，真实HTTP证据与浏览器缺口分开 |
+| 前五项统一全量/type/build基线 | root已独立验收，作为第六项之前的118版基线 | — | `.scratch/ui-chat-root-front-full.log`实际125文件1017/1017、417.60秒、退出0；server155/155、Rust22/22、独立type0/build0均有 `.scratch/ui-chat-root-*` 原日志；只有既有jsdom navigation非阻塞stderr。前端完整进程session23928已结束，工作树恢复为仅旧用户WIP；不是第六项验收 |
+| 提交后构建/Pages线上核验 | 118源码已提交，尚未发布；等第六项完成后统一终验与发布 | — | HEAD `cd9be4a7cbb790a7d01206b47e5af877d5bafb54`，count118；不把本地构建或既有线上版写成118已上线，不冒称服务器/桌面已部署 |
 
 旧用户WIP `client/src/__tests__/auto-retry-schedule.test.tsx`仍不得触碰或提交，SHA256保持 `2063B6AD382AD2996D2BF98CAE8ABE20EEEC5DAE58A3B9E0C39024BB65287290`。不得Qoder、未经项目授权的Pi或调用收费模型；不git add -A、不扩大到其他线程或工程。
 
@@ -583,3 +583,147 @@ Sol low随后发现两项P2，Sol high按原准确性范围收口：扫年某年
 两处双端回归的真实红证据：`.scratch/chat-retrieval-sol-review-red-client-exec.log` 与 `chat-retrieval-sol-review-red-server.log` 各2失败（过滤仅用于红测，不冒称全套）；首次client红测命令通过.cmd传带竖线的过滤表达式被shell截断、退出255，原 `chat-retrieval-sol-review-red-client.log` 保留为工具失败，后改用node直接执行Vitest取得前述真实失败。修复后最新完整client八套115/115、退出0（`.scratch/chat-retrieval-sol-review-final-client.log`）；server六文件90/90、退出0（`.scratch/chat-retrieval-sol-review-green-server.log`）。新增fixture首版不完整ChatPlan转换的TS2352保留在review-types日志，补全实际计划字段后 `.scratch/chat-retrieval-sol-review-types-final.log` 为TSC_EXIT=0。上述替代113/88作为最新相关验收，旧日志保留其历史含义；两项P2仍交root与low复审关闭，不由实现者自行宣称审查已通过。
 
 第四项最终冻结：root已亲读最新115/115、90/90、实际源改动与WIP摘要，并确认Sol low复审关闭两项P2、无剩余P1/P2。文档回归初次1失败/3通过（`.scratch/chat-retrieval-sol-wiki-final.log`）准确指出旧“当前链接477条”登记未随新来源链接更新；只将该处现行读数改为实测484，保留历史477证据。更正后 `.scratch/chat-retrieval-sol-wiki-corrected.log` 为4/4、退出0；`.scratch/chat-retrieval-sol-wiki-scan-final.log` 为OK 11 484 0、退出0。本阶段所有明确文件的git diff --check退出0，旧WIP哈希保持完整基线；lib.rs SHA256为 `D12D0E82699EDE358F97ECAD8F9BFF4CFF63225331C65A61842824D2F32BE3B9`，与接管读数一致，未改动已冻Rust。所有第4项文件现交root并停止写入；第五项仍由root正式派发给pillar_input_fix Luna medium后才开始，复制自修0/2独立计，最终统一full/build/提交/上线尚待后续执行。
+
+## 2026-10-17 第六项：非AI可见数据原位编辑，撤除详情独立修正四柱入口
+
+### 授权、基线与修改语义
+
+按用户先后顺序，前五项已提交并通过上表118基线；本项接在气泡复制之后。用户原话：“非ai计算的部分，增加一个编辑功能，能看到的都可以在原本上面进行修改。不要那个修正八字的功能。”用户随后明确选择：**修改四柱、性别或出生日期后，自动重算未手动修改项、保留人工修改项**。root已亲读批准本节范围；各Luna仍须由root明确下发才写各自实现，先Data接口冻结，再UI/Rust并行。118尚未上线，不发布旧范围再追补本项。
+
+Sol high已亲读 `types/domain.ts`、`features/person/PersonDetail.tsx`、`clientRepository.ts` 的prune/hydrate/repair/save、`deepseekAdapter.ts`、server natal/payload/cache与跨端缓存判据，并结合两位Luna的只读字段/存储审计和Rust JSON审计。已核实：原界面只有详情“修正四柱”弹窗；存储瘦身清空三种时段数组，hydrate整体替换nonAiResult，repair可覆写五行；顶层/嵌套四柱和部分聊天/模型事实读取分叉；任务缓存不含人工有效事实。不能只加输入框或UI文本覆盖便宣称完成。本节尚无第六项红测/实现/通过证据，不以审计报告当运行验收。
+
+语义冻结：
+
+1. 保存的是**实际有效事实**，`nonAiResult`相应原字段必须成为编辑后的值；UI、导出/复制、存储、规则批断、聊天取证和任务payload消费同一份有效对象。人工字段清单用于自动补算后恢复值，不是旁路展示层。不要用ScopeNote、localStorage私有批注或自由JSON编辑器代替。
+2. 四柱/性别/出生日期属于源输入。变更后先调用既有calculateNonAi生成基盘，再逐叶应用历史及本次人工字段；未人工标记项随新源重算。未更改的输入不能因展开编辑表单就全部被标记为人工值。姓名变化不重算历法。直接改某个派生事实只改该事实及同义表示，不暗改其他独立人工事实；人工结果可能与算法默认值不同，界面以简短“已手动修改”及编辑说明如实区分。
+3. 自动hydrate、repair、refresh、时段补算保留人工值，当前窗口的自动年/月数组照常补齐。显式既有“重新排盘”清除本盘人工字段清单并用**当前源输入**恢复全部自动排盘结果；按钮旁事先显示“重新排盘会清除手动修改，并恢复自动计算结果”。不恢复旧姓名/旧出生输入，不增加助手审批弹窗。
+4. 相同事实无变化保存不清已有AI结果、不增加事实修订号。有效事实变化或明确恢复自动结果导致事实变化时，清空该盘旧 `aiTasks/aiAnalysis/aiOverview/aiError`、状态回到not_started，显示“数据已保存，已有批断需重新生成”；生成本机正文也须重新读取新事实。仅改姓名保留命理批断；聊天当次命主标注使用新名，旧气泡仍保持其来源快照。
+5. 删除详情“修正四柱”按钮、弹窗、专用状态/处理器及因此孤立的import；同一详情的四柱在原位置编辑。**新建排盘BirthInputModal、ChartPage及中文IME修复保留**。不新增神煞大表、流年流月非AI表或AI正文编辑入口。
+
+### 实际可见值与原位控件完整清单
+
+编辑模式在原BasicInfo、NonAiAnalysis和现有表格内替换值为有中文标签的专用控件，保持标题与位置；可在该区域顶部统一“编辑数据/保存修改/取消”，不另开修正弹窗。每一行/单元格都能修改真实值，包括暂无的数据；列表用同位置的小输入组、增减项，四柱/藏干十神按年月至时明确列，禁止一大段JSON。非数据标题、说明、按钮文案、随当前日期判定的“行”标记不做自由文本字段。
+
+| 原可见位置 | 有效字段与编辑范围 | 联动及验证 |
+| --- | --- | --- |
+| 基本信息 | name、gender、birthYear、birthMonth、四柱各柱 | 姓名非空；性别枚举；年/月合法；干支各两字、阴阳/五鼠遁/历法可定位沿用真实引擎校验，错误不写库。此处四柱与排盘矩阵是同一编辑目标 |
+| 公历日期 | solarDate、birthDay与顶层出生年月 | 合法公历日期控件；年/月/日与基本信息同义值原子同步，晚子时真实生日不得被进一日柱反推覆盖。源四柱仍是用户所填明确柱，按既有引擎接受契约生成，不从未知时分伪造精确birthTime |
+| 五行/五行比例 | 木火土金水各计数、各比例 | 五个非负整数；比例以百分比输入后存0..1，每项0..100，总和100或全0，中文显示仍走原格式。两组均可人工改，不因repair旧版本再覆写，不强制把人工计数还原成八个字默认计数 |
+| 十二长生 | 年/月/日/时四项 | 四列中文值；空项可补，保留列顺序 |
+| 起运 | luckStart.years/months/days/date、luckOnset | 跨度非负，月0..11、日0..30，合法日期；原展示只读到的年月跨度与精确交运日均有控件。luckStart.date与luckOnset同一交运日期原子同步；“当前第几运/哪年交运”由实际大运区间投影，不能另存假的摘要字符串 |
+| 袁天罡称骨 | totalText/totalLiang、parts.year/month/day/hour | 总重与四个分重分别可改，使用带单位的数值控件（两，步长一钱），保存规范中文重量；totalText与totalLiang同义转换。人工总重不强制被四分重求和覆盖；这是用户明确编辑值，不是修改称骨算法 |
+| 基础矩阵 | 嵌套pillars、hiddenStems四列、tenGodDetails.hidden四列中的stem/tenGod、tenGods四项、naYin四项 | 四柱原子同步顶层；藏干是合法天干列表，藏干十神每项保留真实stem/tenGod/position结构，position按列内本/中/余次序规范，不能把拼接展示串存进数组。十神/纳音/长生使用中文有界值输入，不增加未显示的天干十神表 |
+| 大运排法说明 | fortuneDirection（新增有效事实，forward/backward）、说明中的起排月柱 | 无人工值沿用年干/性别默认顺逆；人工方向显示顺排/逆排及人工标记，不继续附错误的默认阴阳理由；起排月柱与原月柱为同一源字段。方向作为人工派生事实不在后台偷偷再排列用户已改的大运表 |
+| 大运现有每行/每单元 | greatFortunes[i].ganZhi/startYear/endYear/onsetDate/endDate | 原九步表逐行可改，起运年与区间起点为同一值；有效干支、合法年/日期、起止有序且行区间不重叠；不新增整套大运增删管理。交运日缺失时仍能在原格补入；“行”和当前起运摘要根据保存后的区间及当前日期重判 |
+| 本命生肖、人际适配 | zodiac、zodiacCompatibility（新增有效事实，sanHe/liuHe/chong/hai四个生肖列表） | 当前自属生肖的两处显示同读zodiac；无人工值由年支生成；生肖为十二生肖枚举。年支本身仍是yearPillar的第二字，同位置编辑年支即修改同一年柱，需完整源校验，不新增第二份年支。三合/六合/六冲/六害逐组可改并真实持久化 |
+| 生肖关系下七组 | relationships.sanHe/liuHe/xing/chong/po/hai/ke | 七组中文条目原位增减和修改，空组显示暂无；不把其聚合摘要误写为relationshipDetails明细，不新增未显示的逐条关系表 |
+
+神煞、lunarDate、dayMaster、forecastRange、strengthScore/patternFacts、relationshipDetails、greatFortunes.relationships及独立流年/月表目前不在本区展示，因此不新造其编辑UI；它们仍由源输入与引擎生成。人工派生值和未展示算法细节可能有不同口径，不据手改一个展示值擅自重写整套算法；任务/聊天明确接收人工有效值，不能悄悄换回重新数的五行或默认生肖。不得删除已移除独立日主的回归断言或重新加回该字段。
+
+### 先冻结的数据接口与持久化契约
+
+Data owner先在 `client/src/types/domain.ts` 和新增有界纯模块 `client/src/shared/manualNonAi.ts` 定义以下接口并提供其红/绿与实参样例；root核对后冻结，UI及Rust据此并行，不并写同文件。允许依现有风格收敛函数内部实现，不改变以下语义及数据名字：
+
+```ts
+type PillarKey = 'year' | 'month' | 'day' | 'hour';
+type FiveElement = '木' | '火' | '土' | '金' | '水';
+// ManualNonAiFields是下表限定字段的逐叶typed patch，不是任意字符串path或any字典。
+interface ManualNonAiEdits { version: 1; fields: ManualNonAiFields }
+interface NonAiEditRequest {
+  source?: Partial<Pick<BaziRecord, 'name' | 'gender' | 'birthYear' | 'birthMonth'
+    | 'yearPillar' | 'monthPillar' | 'dayPillar' | 'hourPillar'> & { birthDay?: number }>;
+  fields?: ManualNonAiFields;
+}
+// NonAiChart新增可选manualEdits、factsRevision:number、fortuneDirection、zodiacCompatibility。
+// factsRevision是防迟到写入的单调修订号；旧盘缺省0，不参与任务缓存内容摘要。
+applyManualNonAi(base: NonAiChart, edits?: ManualNonAiEdits): NonAiChart;
+saveNonAiEdits(recordId: string, edits: NonAiEditRequest): Promise<BaziRecord>;
+recalculateBaziRecord(recordId: string): Promise<BaziRecord>;
+```
+
+`ManualNonAiFields`仅有 elements/elementRatio 的五行逐键、hiddenStems/tenGods/naYin/twelveLongevity/tenGodDetails.hidden 的四柱逐列、luckStart逐键及luckOnset、chenggu总重/四分重、greatFortunes按步序索引的可见列逐键、zodiac/zodiacCompatibility、relationships七组、fortuneDirection。四柱/姓名/性别/出生年月日不塞入第二套patch，其真实源即record顶层与birthDay。数组列作为一组编辑，未碰的其他列不能标记；大运以第几步索引绑定，源改变后仍把用户明确改过的第几步字段应用到新第几步，其余行/列重新生成；不因改第一格而冻结全九行。列表空数组是有效人工清空，缺少键才表示自动；零值/空组不能用truthy判断丢失。patch不含时间戳、原record快照、AI正文或未显示字段。
+
+仓储接口只按recordId取最新记录再原子构建保存对象，不用旧渲染快照覆盖其他字段。源变化先校验/排盘，再merge历史fields和本次fields并apply；失败不落库、不增revision，界面留草稿。改变源日期/四柱时清除已不适用的精确birthTime；源未改或仅改姓名/性别/派生值时保留真实birthTime（性别不改变出生时刻）。公历日期的单一有效表示同步solarDate与birthDay/顶层年月，不能一处显示旧日一处保存新日。
+
+源冲突边界：明确人工输入的四柱优先保留，日期改变不会把它们无声替换成猜测柱；使用本次触碰的源字段合并现有明确四柱，再由真实引擎校验和生成未人工派生项。同次日期/柱输入若引擎判冲突，必须中文报错并整次不保存；不新增“日期日柱必须相等”规则破坏既有晚子时契约。未改生日按原birthDay保存，日期或柱真实变化后不能遗留旧birthTime。只记录onChange触碰的叶子及真实发生变化的源字段，不把旧整表快照/格式变化作为全表人工mask。
+
+prune仍可清空自动生成的三个大数组，但必须保留manualEdits及factsRevision；包含人工大运叶子的patch不能随greatFortunes清空。hydrate在自动生成及跨年窗口修正后apply；非pruned路径也应返回已应用对象。repairElementCounts不得覆盖人工计数/比例对应叶子，旧无patch盘保持原修复能力。ensureLocalChartComplete及导出/导入/离线SQLite镜像/远端拉取合并都保留metadata并在返回时恢复有效值。版本1为可选JSON metadata，无SQL表/列迁移；Rust整串保存/压缩不得丢根字段，旧客户端不识别字段仍按可选元数据兼容，不承诺旧客户端能编辑新字段。
+
+并发边界：编辑/保存期间不启动批断或自动重试，批断busy时编辑按钮说明先停止批断；UI owner在同文件AIAnalysis增加局部busy通知和编辑禁用参数，不新造全局调度器。Data提供 `saveAiProgress(record: BaziRecord, expectedFactsRevision: number): Promise<BaziRecord>`，从最新存储比较revision；匹配只合入AI字段，失配不写旧AI/源/patch并返回最新盘。UI owner把PersonDetail内pending/progress/finished/stop/error/清空结果各AI写入点迁移到这一接口，使用该轮启动revision；onUpdated只采用返回有效盘，防停止后的迟到包或旧快照覆盖新编辑。事实保存增加revision且清结果，人工reset也维持单调revision，不因移除manualEdits把修订号退回0。此修订号只防同盘旧运行写回，不扩成跨设备通用冲突解决协议。
+
+### AI实际事实、任务缓存与跨端接口
+
+Data owner同步 `deepseekAdapter.ts`、`chatEngine.ts`、`localSystem.ts`、必要的 `baziOrchestrator.ts` 与 `server/ai.mjs`/`server/chat.mjs`。受人工修改的五行、比例、藏干等消费有效字段，不能在natal旁路重新countElements覆盖；无人工字段旧盘默认计数修复仍保留。新增有界人工事实fortuneDirection/zodiacCompatibility及原可见称骨/藏干十神等在实际模型事实段有明确真实字段，三端同形中文映射与来源目录同步；不将manualEdits/factsRevision等内部元数据当命理事实。规则引擎消费返回的有效chart，不实现另一套仅用于展示的chart。已完成旧批断在事实变化后不再被聊天取作新盘证据；旧气泡自己的历史sources快照不追改。
+
+任务缓存摘要必须来自**本次实际构建payload所用的有效事实与任务作用域**：natal、实际选择的annual/monthly/decade及hits/年龄、实际基盘摘要/guide/findings（仅该任务真正发送的部分）。将该投影提为payload与缓存共享的小函数/返回值，避免两个独立白名单各自漂移；不能只hash人工patch、四柱或整个原始nonAiResult。递归稳定JSON序列化对象键，数组保序，排除没有发送的manualEdits/factsRevision/currentTime/savedAt/createdAt及无关全时期数组；同事实跨刷新/换键顺序必须稳定，实际prompt事实或本任务period改变必须失效。已有模型/语气/出生时刻段仍参与身份；固定提示词变化仍由缓存版本负责。
+
+server任务键升v17、Rust任务键升v13，各自在当前birthTime尾段**之前**追加facts摘要，变为14段，前段性别/四柱/类型/年月/出生年/语气位置不动；`chart_sig`仍取2..7，按盘清理必须覆盖不同facts版本。两端独立库可沿用现有SHA/FNV算法，不要求摘要字符相同，要求段位、稳定性与失效行为一致。Rust `pub(crate) fn cache_key(record: &BaziRecord, task: &AiTaskInput, model: &str) -> String`及run_ai_task实参保留，内部从同一effective facts/payload projection取得摘要；JS cacheKey现有调用接口保留。ChatRequest、run_ai_chat、chatv8段结构保持当前契约，其实际messages内容摘要自然覆盖新有效证据，不另加未经消费的客户端签名。
+
+Rust读取已resolved的nonAi JSON和manualEdits：compact_records_in可以清自动时段数组但不得清metadata/手改步运叶子；构造payload/缓存时先恢复可用patch，再按既有task inline→数组查找顺序取period。server同样不能只信瘦身后的空数组，需以有效patch/任务实参恢复实际需要的人工大运事实。task inline若与本盘当前人工步运冲突，先按当前已resolved盘选择本任务实际行再构造task，不让旧task.decade覆盖新事实。没有对应时段保持原缺口，不伪造自动历法数据。既有system/输出硬约束/语气内容保持字节不变；仅事实JSON字段按接口补齐，相关prompt/natal顺序判据精确更新必要键且保留原顺序合同。
+
+### 模块唯一归属、依赖与配套Wiki
+
+| 模块/角色 | 显式模型与owner | 唯一文件归属及交付 |
+| --- | --- | --- |
+| 规划/接口冻结/超两轮接管 | GPT-6.1 Sol high（gpt-6.1-sol），pillar_input_plan | 本节PLAN与诊断；当前仅写PLAN，root亲读后才授权实现 |
+| Data/shared/types、client/server事实与缓存、数据测试、Wiki | GPT-6-Luna medium（gpt-6-luna），chat_retrieval_audit | `client/src/types/domain.ts`、新增 `client/src/shared/manualNonAi.ts`、`client/src/data/clientRepository.ts`、`localSystem.ts`、`baziOrchestrator.ts`、`deepseekAdapter.ts`、`chatEngine.ts`、`server/ai.mjs`、`server/chat.mjs`；若新增中文事实键只精确更新 `client/src/shared/chineseGate.ts` 字典；下列Data测试与Wiki12/13/31/51。先独立交付typed接口/样例及纯函数红绿，root冻结后UI/Rust依赖其接口开展 |
+| 原位置UI、busy桥接及UI测试 | 原GPT-6-Luna medium（gpt-6-luna）pillar_input_fix两轮停止，root改派GPT-6.1 Sol high（gpt-6.1-sol）inline_edit_takeover独占 | `client/src/features/person/PersonDetail.tsx`、新增有界 `client/src/features/person/NonAiInlineEditor.tsx`（仅若抽出专用控件确能减少同文件重复）、必要少量 `client/src/styles.css`；UI测试与Wiki11。全部通过Data接口读写，不能改shared/types/仓储；给Data owner交Wiki51验收要点，不能并写51 |
+| Rust实际有效事实/压缩/任务cache与SQLite回归 | GPT-6-Luna medium（gpt-6-luna），manual_rust_cache（由root明确派发） | 唯一 `client/src-tauri/src/lib.rs`及其内tests；不改JS/tests/Wiki，向Data owner提供实际协议和验证摘要，由其整合Wiki13/31/51 |
+| 独立low审查/整合终验/发布 | GPT-6.1 Sol low（gpt-6.1-sol）审查；root整合 | 审真实diff、红绿与需求覆盖；root单独运行合流type、相关整套、完整三端与构建/发布门禁，子代理报告不等于终验 |
+
+UI tests唯一归UI owner：`person-detail-actions.test.tsx`、`pillar-edit-rendered.test.tsx`、`pillar-edit-recompute.test.ts`、新增 `non-ai-inline-edit.test.tsx`、`app-flow.test.tsx`、`person-copy.test.ts`、`luck-direction-display.test.ts`、`luck-direction-rendered.test.tsx`、`element-ratio-display.test.ts`、`chrome-chinese-only.test.tsx`、`delivered-files-in-tree.test.ts`。旧pillar-edit文件名可保留以便精准迁移，不能删文件/删有效断言让旧入口消失变假绿。交付完整性#151目前钉applyPillarEdit，精准迁移为新内联编辑到真实仓储保存入口的源码锚与同等行为要求，不删除整条交付条目或文件存在判据。
+
+Data tests唯一归Data owner：新增 `manual-non-ai.test.ts`，既有 `storage-slim.test.ts`、`export-hydrate.test.ts`、`import-roundtrip.test.ts`、`offline-sql-mirror.test.ts`、`prune-writeback-push.test.ts`、`local-system.test.ts`、`local-orchestration.test.ts`、`orchestration.test.ts`、`deepseek-adapter.test.ts`、`chat-engine.test.ts`、`task-cache-key-cross-end.test.ts`、`birth-time-cache-cross-end.test.ts`、`cache-key-cross-end.test.ts`、`prompt-parity.test.ts`、`natal-key-order-cross-end.test.ts`、`provider-follow-contract.test.ts`、`wiki-links-reachable.test.ts`；server的 `test/api.test.mjs`、`birth-time-cache.test.mjs`、`cache-clear-http.test.mjs`、`task-abort.test.mjs`、`chat.test.mjs`、`prompt-parity.test.mjs`。其他既有测试只读可执行；确因接口影响必须修改的新增归属，先向root说明具体文件/断言再交接，不并写、不暗扩边界。
+
+不改nonAiCalculator命理算法、新建IME源码、ChartChat复制/来源UI、RecordsPage或DB schema/账户权限/provider配置。没有新算法选项或全局编辑器。新文件限上表专用模块/测试；链接与既有文件清单契约据真实增加精准同步，不删完整性断言。
+
+root后续精准授权Data owner修改 `shared/chatRetrieval.ts` 的NATAL_LABELS字典，仅追加四个新增真实事实的中文来源标签，不改检索规则/chatv8。
+
+Wiki：[界面原位编辑及主动恢复流程](docs/wiki/11-客户端-特性层.md)、[存储瘦身/补算/修订防迟到与AI失效](docs/wiki/12-客户端-数据层.md)、[三端有效事实与缓存/JSON兼容](docs/wiki/13-跨端共享与三端一致性.md)、[typed patch/源输入/仓储接口与新增事实](docs/wiki/31-类型契约.md)、[红绿、实际SQLite/HTTP链与浏览器缺口](docs/wiki/51-测试矩阵.md)。Wiki51实际新增链接/用例计数由Data owner最后扫描登记，禁止预填仍为484或任何预计数。
+
+### 验收、红绿命令与顺序
+
+1. **先复现覆盖风险。** Data红测在真实保存→prune→读取/hydrate→repair/refresh链中改五行、四列藏干与大运某单元，证明当前实现丢值；UI红测证明原位控件缺失、仍有独立修正入口。Rust在真实rusqlite写读/compact后证明新metadata和手改步运可保留、旧cache会错命中。红测原输出与退出码保存，不能后造“旧实现红测”。
+2. **完整UI覆盖。** 真实PersonDetail DOM对上方每组字段/所有九行表格均有可访问控件检查，代表性保存覆盖每组；验证两处四柱、年月/公历、生肖重复项、起运年/区间别名同值。保存成功重挂载/刷新仍在；取消不调用保存且复原；非法干支/日期/负数/比例/倒置区间展示中文错误且原记录及AI不改；存储失败留草稿、无虚假成功。旧四柱重算断言迁移到新内联入口，继续核对变柱后未手改的五行/日主内部值/十神/大运变化，保留阴阳与五鼠遁拒绝、无变化birthTime保留、变源清旧精确时刻。新建IME相关旧测试原样通过。
+3. **用户明确语义。** 先人工改五行一项、生肖/一条关系、某步大运一格，再分别改四柱/性别/出生日期：被标记叶子保留，未标记叶子确实按真实引擎变化；跨年自动hydrate补窗不清人工值。旧盘无metadata仍按旧算法修复；0/空列表可持久化；对象键重排/导入导出/离线SQLite镜像与远端实际保存读取不丢标记。显式重新排盘前已有清除说明，点击后patch消失、自动值恢复、源输入不倒退。大运“行”与起运摘要跟实际改后的区间重判，不能沿用静态旧句。
+4. **真实事实进入AI及失效。** 使用实际builder/localAnalysis/askChat逻辑及server createApp HTTP+SQLite/provider受控接缝，确认人工五行/比例/十神/称骨/生肖/方向及对应大运出现在真实请求事实/来源中，不只在UI mock或patch元数据中出现；改源后旧任务正文不会成为新盘聊天证据。前后同四柱改变实际事实或task period缓存miss，同实际证据无密钥可hit且不调用provider；只改currentTime/savedAt/factsRevision/键插入顺序/无关时段不得伪miss。server/Rust真SQLite存多份证据版本后按盘删除全清；保留出生时刻末段及原前段索引的旧断言。收费外部模型不调用，这些不是外部模型质量验收。
+5. **迟到与旧结果。** 真实延迟runner先启动一轮、停止后保存人工事实，再放行旧pending/progress/finished/error/stop写入：factsRevision闸门必须保住新源/patch/清空后的结果，旧AI不可复活；编辑期间自动重试不开跑，取消编辑后原正常批断可运行。原停止/切页/中文闸门/复制/来源历史测试保留，原auto-retry-schedule用户WIP完全不改。
+6. **独立阶段和终验。** Data先交类型/纯函数接口，root冻结后UI/Rust按此并行，各模块初次验证与失败后自修独立记账，最多2次“修改+相关测试”，仍失败交Sol high；不能通过缩需求/删断言/skip制造通过。root负责合流运行独立tsc和下方相关整套、Wiki扫描与4套回归，Sol low亲读实际diff/日志/覆盖，无P1/P2后最终完整前端/server/Rust/type/build。此前1017/155/22仅前五项基线，不能替代第六项最终全量。仅实现变更或失败未解决才重复相应测试，不多位同时跑长full或写文档。**任何会临时变异并恢复PersonDetail或Wiki51的测试须由root调度独占窗口：相关owner停止写这些文件后才运行，finally恢复后核对SHA再交还；包括wiki-links-reachable实际writeFileSync测试及包含其的full。禁止在变异运行期间实现者并写，禁止把中途变异读数当真实源码。** 按既有授权精准提交后构建并发布Pages，真实远端ref/parent/hash/入口版本核验；未发布后端/桌面不得称已上线，浏览器受阻如实保留。
+
+命令均从真实项目运行，记录完整原输出/退出码到根 `.scratch/non-ai-edit-{data,ui,rust,root}-*.log`；过滤测试只作为红测证明，不代替下列完整相关套件。模块owner仅跑自己归属相关套件，合流全套/type由root统一调度，避免同时改源或资源争用。
+
+```powershell
+# client：UI完整相关；不存在的新文件由该owner先新增红测再运行
+node node_modules/vitest/vitest.mjs run src/__tests__/non-ai-inline-edit.test.tsx src/__tests__/person-detail-actions.test.tsx src/__tests__/pillar-edit-rendered.test.tsx src/__tests__/pillar-edit-recompute.test.ts src/__tests__/app-flow.test.tsx src/__tests__/person-copy.test.ts src/__tests__/luck-direction-display.test.ts src/__tests__/luck-direction-rendered.test.tsx src/__tests__/element-ratio-display.test.ts src/__tests__/chrome-chinese-only.test.tsx src/__tests__/delivered-files-in-tree.test.ts --pool=forks --maxWorkers=2 --testTimeout=30000
+# client：Data完整相关
+node node_modules/vitest/vitest.mjs run src/__tests__/manual-non-ai.test.ts src/__tests__/storage-slim.test.ts src/__tests__/export-hydrate.test.ts src/__tests__/import-roundtrip.test.ts src/__tests__/offline-sql-mirror.test.ts src/__tests__/prune-writeback-push.test.ts src/__tests__/local-system.test.ts src/__tests__/local-orchestration.test.ts src/__tests__/orchestration.test.ts src/__tests__/deepseek-adapter.test.ts src/__tests__/chat-engine.test.ts src/__tests__/task-cache-key-cross-end.test.ts src/__tests__/birth-time-cache-cross-end.test.ts src/__tests__/cache-key-cross-end.test.ts src/__tests__/prompt-parity.test.ts src/__tests__/natal-key-order-cross-end.test.ts src/__tests__/provider-follow-contract.test.ts --pool=forks --maxWorkers=2 --testTimeout=30000
+# client：新建IME保持、并发与停止、聊天资料/逐条复制的原回归（root合流）
+node node_modules/vitest/vitest.mjs run src/__tests__/birth-input-modal.test.tsx src/__tests__/chart-page.test.tsx src/__tests__/stop-analysis-recovery.test.tsx src/__tests__/scheduler-lifecycle.test.ts src/__tests__/chart-chat.test.tsx --pool=forks --maxWorkers=2 --testTimeout=30000
+# server
+node --test test/api.test.mjs test/birth-time-cache.test.mjs test/cache-clear-http.test.mjs test/task-abort.test.mjs test/chat.test.mjs test/prompt-parity.test.mjs
+# client/src-tauri
+cargo test --lib
+# root合流：client独立类型；根Wiki扫描及client既有Wiki回归；然后三端完整门禁
+node node_modules/typescript/bin/tsc --noEmit
+node scripts/check-wiki-links.cjs
+# client（须root安排独占变异窗口）：Wiki实际4套回归；新增链接读数按实际输出登记
+node node_modules/vitest/vitest.mjs run src/__tests__/wiki-links-reachable.test.ts --pool=forks --maxWorkers=2 --testTimeout=30000
+```
+
+最终client完整命令仍为 `node node_modules/vitest/vitest.mjs run --pool=forks --maxWorkers=2 --testTimeout=30000`，server `node --test`，Rust `cargo test --lib`，独立tsc、根Wiki扫描、client Wiki回归与源码精准提交后 `npm.cmd run build`；不跳过完整套件、不提交原用户WIP。实际HTTP证据应捕获API所存record ID和provider真实payload，SQLite缓存核验必须以本问实际key读取，禁止取任意缓存行代替。
+
+| 第六项执行阶段 | 当前状态 | 独立自修次数 | 真实证据/下一步 |
+| --- | --- | --- | --- |
+| Sol high只读核实、用户语义与PLAN | root已亲读批准本节范围，规划文件冻结 | — | 用户明确源变化重算未人工项/保留人工项；尚无第六项实现或红绿结果 |
+| Data/shared/types接口 | 类型已由root冻结；Luna到两轮边界后Sol high接管 | 2 / 2，保留原失败日志，不重置 | 原pure6/6与rootTSC0已验；root实际Node复现十两得到undefined两，Sol补真实红1失败/6通过后修至7/7，继续数据模块 |
+| UI原位控件/迁移旧入口与测试 | 原Luna在两轮边界停止；root另派Sol high inline_edit_takeover唯一owner | 2 / 2，不隐性继续Luna第三轮 | 原位dd/矩阵/td与现有tests/Wiki11归接管UI owner；Data不写这些文件 |
+| Data存储/事实消费/server/任务身份与Wiki | Sol high源码与Wiki12/13/31/51已冻结，交root静态审阅及必要生产build | Luna累计2 / 2，已转high | 实际存储三套19/19、server六套102/102 EXIT0；client十七套最新182通过/1旧tone失败已收口未复跑；不是最终绿，旧失败日志全保留；用户停测后不再运行任何测试/type/Wiki验证 |
+| Rust JSON/有效事实/真实SQLite任务缓存 | 源码冻结；完整原步序及null起运已按审查修正 | 2 / 2，原日志保留 | 修正前24/24；用户停测后的最后修正未再测试，chatv8不改 |
+| root合流专项/type/Wiki、Sol low | 用户取消后续测试；root与Sol low完成最终静态审阅 | — | 已知compact/null/固定guard/重量与源别名问题关闭，未见剩余P1/P2；不代表全量通过 |
+| 第六项统一三端full/提交后构建/真实发布 | 按用户指令不再运行测试；准备精准提交及生产build/发布 | — | 前五项118完整绿仅作基线；第六项仅静态审查，不宣称最终测试绿 |
+
+仅本次第六项PLAN获写授权，所有实现与Wiki仍待root正式下发。旧用户WIP `client/src/__tests__/auto-retry-schedule.test.tsx` 不得改/覆盖/提交，SHA256必须保持 `2063B6AD382AD2996D2BF98CAE8ABE20EEEC5DAE58A3B9E0C39024BB65287290`。不调用Qoder、未经具体项目授权的Pi或收费模型，不绕过之前浏览器审批阻断。
+
+后续执行授权与暂停验证优先于上文初始计划状态：root已正式派发第六项各模块；用户最新要求省token、加快并“别测试了”。该指令之后所有owner停止当前/未来测试、typecheck、Wiki扫描和full，不补更多测试，不把先前中间结果升格为本项最终通过；保留实际日志，继续必要生产实现/简要Wiki和代码审阅，root仅运行发布必要构建。Data当前无在跑测试。称骨Sol红为1失败/6通过、green7/7；存储Sol红7失败/10通过，后续3套19/19；Data首次17套175通过/6失败（server空计数fallback及Rust mut锚），第二次182通过/1失败（旧库tone合并），后者已限定人工修订保护以保留旧语气合同但按用户指令未复跑。server新增HTTP用例最初放在首用户之前影响admin夹具，失败原日志保留，移动到原套件末尾后6文件102/102 EXIT0；这不是模型外部质量测试。最近必要的生肖适配默认组三合/六合/冲/害保留、prune迟到远端推送保护及文档收口尚未重验，不宣称第六项TSC/full/low通过。
+
+Data最终静态收口：同盘 `pushRemote` 使用独立FIFO链，保留本地即时保存/dirty重试，防旧AI上传在新人工事实之后倒序覆盖服务器；Data没有修改lib.rs、PersonDetail/styles、Wiki11或用户WIP。UI高owner报告原位字段、busy桥接和各AI写点已完成，用户停测后未跑验证，不据报告登记绿。Data新增未跟踪文件 `shared/manualNonAi.ts`、`__tests__/manual-non-ai.test.ts` 需root精准纳入交付，不git add -A。原WIP最终只读SHA仍为 `2063B6AD382AD2996D2BF98CAE8ABE20EEEC5DAE58A3B9E0C39024BB65287290`。本次无提交、build或发布，所有Data明确文件停止写入，之后必要修复由root明确交回。

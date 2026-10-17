@@ -1,6 +1,9 @@
 import { getSetting, readCache, writeCache, setSetting } from './db.mjs';
 /* 正文中文闸门：唯一实现在客户端 shared 下，服务端与聊天侧(chat.mjs)读同一份，口径不分叉。 */
 import { sanitizeChatText } from '../client/src/shared/chineseGate.ts';
+import { createHash } from 'node:crypto';
+import { effectiveNonAiFacts, effectiveElementFacts, effectiveTaskDecade, manualNatalFacts } from '../client/src/shared/manualNonAi.ts';
+import { stableJson } from '../client/src/shared/chatRetrieval.ts';
 
 export const PROVIDERS = [
   { id: 'deepseek', label: 'DeepSeek V4.1', endpoint: 'https://api.deepseek.com/chat/completions', model: 'deepseek-flash' },
@@ -192,15 +195,17 @@ export const ADJUST_PREFIX = '你是资深子平命理师。根据【本命结�
 
 /** 本命事实(natal)：各任务与聊天共用的同一段 JSON(口径一致、且最大化前缀缓存)。 */
 export function natalFactsOf(record) {
-  const nonAi = record?.nonAiResult || {};
+  const nonAi = effectiveNonAiFacts(record?.nonAiResult || {});
   const counted = countElements([record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar], nonAi.hiddenStems);
+  const elementFacts = effectiveElementFacts(nonAi, counted);
+  const extras = manualNatalFacts(nonAi);
   return {
     gender: record.gender, birthYear: record.birthYear,
     pillars: { year: record.yearPillar, month: record.monthPillar, day: record.dayPillar, hour: record.hourPillar },
     dayMaster: nonAi.dayMaster, zodiac: nonAi.zodiac, solarDate: nonAi.solarDate, lunarDate: nonAi.lunarDate,
     // dayMaster→zodiac→solarDate 与客户端 natal 同序：顺序一错，跨通道公共前缀当场分叉。
     // 服务器独有的 gender/birthYear/lunarDate/elementRatio/naYin/twelveLongevity 不参与该断言。
-    elements: counted?.elements ?? nonAi.elements, elementRatio: counted?.elementRatio ?? nonAi.elementRatio,
+    elements: elementFacts.elements, elementRatio: elementFacts.elementRatio,
     // 十神在藏干之前，同样与客户端字面量一致(见 prompt-parity 测试)
     tenGods: nonAi.tenGods, hiddenStems: nonAi.hiddenStems,
     naYin: nonAi.naYin, twelveLongevity: nonAi.twelveLongevity,
@@ -213,23 +218,25 @@ export function natalFactsOf(record) {
     // 起运：大运各柱的年份区间由它定，模型须按此说明「几岁起哪一运」，不得自行估。
     luckStart: { ...(nonAi.luckStart ?? {}), onsetDate: nonAi.luckOnset ?? '' },
     shenSha: compactShenSha(nonAi.shenSha), relationships: nonAi.relationships,
+    tenGodDetails: extras.tenGodDetails, chenggu: extras.chenggu,
+    fortuneDirection: extras.fortuneDirection, zodiacCompatibility: extras.zodiacCompatibility,
   };
 }
 
 export function buildTaskPayload(record, task, tone = DEFAULT_TONE) {
-  const nonAi = record?.nonAiResult || {};
+  const nonAi = effectiveNonAiFacts(record?.nonAiResult || {});
   const natal = natalFactsOf(record);
   const y = task.year;
   const scope = {};
   if (y !== undefined) {
     if (task.type !== 'decade') scope.age = y - record.birthYear;
     if (task.type === 'decade') {
-      const decade = (task.decade && gzOf(task.decade)) ? task.decade : pickDecade(nonAi.greatFortunes, y);
+      const decade = effectiveTaskDecade(nonAi, y, task.decade);
       if (decade) { scope.decade = decade; scope.decadeHits = summarizeHits(decade, gzOf(decade)); }
     } else {
       const annual = (task.annual && gzOf(task.annual)) ? task.annual : pickByYear(nonAi.annualFortunes, y);
       if (annual) { scope.annual = annual; scope.annualHits = summarizeHits(annual, gzOf(annual)); }
-      const decade = (task.decade && gzOf(task.decade)) ? task.decade : pickDecade(nonAi.greatFortunes, y);
+      const decade = effectiveTaskDecade(nonAi, y, task.decade);
       if (decade) { scope.decade = decade; scope.decadeHits = summarizeHits(decade, gzOf(decade)); }
       if (task.month !== undefined) {
         const monthly = task.monthly && gzOf(task.monthly)
@@ -295,7 +302,18 @@ export function buildTaskPayload(record, task, tone = DEFAULT_TONE) {
   }
   // 需要横向权衡的判断类任务用 high；单期批断用 low(省时)
   const effort = (task.type === 'baseline' || task.type === 'adjustment' || task.type === 'overview') ? 'high' : 'low';
-  return { messages: [{ role: 'system', content: system }, { role: 'user', content: userContent }], effort };
+  const cacheEvidence = { natal };
+  if (task.type === 'adjustment') {
+    cacheEvidence.baseline = baselineSummaryOf(task.baseline) || '（暂无本命结论）';
+    cacheEvidence.guide = task.guide || {};
+  } else if (task.type === 'overview') {
+    cacheEvidence.baseline = baselineSummaryOf(task.baseline) || '（暂无本命结论）';
+    cacheEvidence.findings = task.findings ?? {};
+  } else if (task.type !== 'baseline') {
+    cacheEvidence.scope = scope;
+    cacheEvidence.baseline = task.baseline ? baselineSummaryOf(task.baseline) : '';
+  }
+  return { messages: [{ role: 'system', content: system }, { role: 'user', content: userContent }], effort, cacheEvidence };
 }
 
 export function birthTimeSignature(value) {
@@ -322,7 +340,8 @@ export function cacheKey(record, task, model, tone = DEFAULT_TONE) {
   // v15：时段任务指令里的标题示例去掉「·」并明写「标题不用任何符号」—— 那道闸门白名单没有中点，
   //      旧提示词等于教模型产出会被删字的标题；提示词字节变了，缓存键必须跟着升。
   // v16：精确起运使用完整出生时刻；同四柱不同分钟不能复用旧答案。旧盘以空尾段保留兼容口径。
-  return ['v16', model, record.gender, record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar, task.type, task.year ?? 0, task.month ?? 0, record.birthYear, toneBucket, birthTimeSignature(record.nonAiResult?.birthTime)].join('|');
+  const factsDigest = createHash('sha256').update(stableJson(buildTaskPayload(record, task, tone).cacheEvidence)).digest('hex').slice(0, 24);
+  return ['v17', model, record.gender, record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar, task.type, task.year ?? 0, task.month ?? 0, record.birthYear, toneBucket, factsDigest, birthTimeSignature(record.nonAiResult?.birthTime)].join('|');
 }
 
 /* ---------- 失败原因分类：把上游错误翻译成用户能看懂的原因 ---------- */
@@ -448,7 +467,15 @@ export async function callProvider(provider, key, messages, effort, mode = 'json
 export async function runOneTask(db, record, task, tone = DEFAULT_TONE, preferred, opts = {}) {
   const t = clampTone(tone);
   const order = providerOrder(db, preferred);
-  if (order.length === 0) return { status: 'not_configured', error: AI_SERVER_UNCONFIGURED };
+  if (order.length === 0) {
+    if (opts.signal?.aborted) return { status: 'failed', error: '这一条已经被取消，没有继续调用通道。' };
+    const selected = providerOf(preferred || currentProviderId(db));
+    for (const provider of [selected, ...PROVIDERS.filter((item) => item.id !== selected.id)]) {
+      const hit = readCache(db, cacheKey(record, task, provider.model, t));
+      if (hit) { try { return { status: 'completed', analysis: JSON.parse(hit) }; } catch { /* 坏缓存不能当有效结果 */ } }
+    }
+    return { status: 'not_configured', error: AI_SERVER_UNCONFIGURED };
+  }
   const errors = [];
   /* 与 #139 同一条闸门(#140)：客户端「停止」会断开这条 HTTP 连接，但服务器此前只用自己的
      150s 超时控制器 —— 结果一次批断剩下的十几个任务照样挨个打完三条通道。缓存这一半更要紧：

@@ -32,6 +32,31 @@ describe('导出前还原完整盘', () => {
     expect(p.nonAiResult!.greatFortunes).toHaveLength(0);
   });
 
+  it('真实保存、瘦身再导出时保留人工叶值与patch', async () => {
+    const calculated = calculateNonAi({ birthYear: 1984, birthMonth: 2, yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午' }, 'male', '2025-03-08T12:34:56.000Z');
+    const manualEdits = {
+      version: 1 as const,
+      fields: {
+        elements: { 木: 9 },
+        hiddenStems: { day: ['甲', '乙'] },
+        greatFortunes: { 0: { startYear: 1988 } },
+      },
+    };
+    await saveBaziRecord({ ...base, id: 'manual-hydrate', nonAiResult: {
+      ...calculated,
+      elements: { ...calculated.elements, 木: 9 },
+      hiddenStems: [calculated.hiddenStems[0], calculated.hiddenStems[1], ['甲', '乙'], calculated.hiddenStems[3]],
+      greatFortunes: calculated.greatFortunes.map((fortune, index) => index === 0 ? { ...fortune, startYear: 1988 } : fortune),
+      manualEdits,
+    } as typeof calculated });
+
+    const restored = (await exportableRecords()).find((record) => record.id === 'manual-hydrate')!;
+    expect(restored.nonAiResult?.elements.木).toBe(9);
+    expect(restored.nonAiResult?.hiddenStems[2]).toEqual(['甲', '乙']);
+    expect(restored.nonAiResult?.greatFortunes[0]?.startYear).toBe(1988);
+    expect(restored.nonAiResult?.manualEdits).toEqual(manualEdits);
+  });
+
   /* .sql 文本备份是三种导出格式里唯一没有往返用例的那一种(.sqlite 与 .json 见 import-roundtrip)。
      它靠「把整段 SQL 喂给一个空库再读表」导入，所以任何一处写侧改动 —— 转义、列序、事务边界 ——
      坏掉的形态都是「文件导得出去、导不回来」或「导回来的字段串了位」。下面这条把导出文本原样

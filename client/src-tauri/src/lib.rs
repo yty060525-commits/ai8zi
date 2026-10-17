@@ -209,8 +209,13 @@ pub(crate) fn compact_records_in(connection: &rusqlite::Connection) -> Result<(u
             _ => false,
         };
         if !needs { kept += 1; continue; }
+        let preserved_fortunes = value.get("manualEdits").and_then(|m| m.get("fields")).and_then(|f| f.get("greatFortunes")).and_then(Value::as_object)
+            .map(|_| {
+                let resolved = apply_manual_non_ai_edits(&value);
+                resolved.get("greatFortunes").and_then(Value::as_array).cloned().unwrap_or_default()
+            }).unwrap_or_default();
         if let Some(obj) = value.as_object_mut() {
-            obj.insert("greatFortunes".into(), Value::Array(Vec::new()));
+            obj.insert("greatFortunes".into(), Value::Array(preserved_fortunes));
             obj.insert("annualFortunes".into(), Value::Array(Vec::new()));
             obj.insert("monthlyFortunes".into(), Value::Array(Vec::new()));
             connection.execute("UPDATE bazi_records SET non_ai_result = ?1 WHERE id = ?2", params![value.to_string(), id]).map_err(|e| e.to_string())?;
@@ -326,6 +331,103 @@ fn tone_instruction(tone: i32) -> &'static str {
     else { "语气：犀利直白。重点明显指出不利之处、性格短板与应戒之事，直截了当、不留情面，但每句都要有命理依据，不做人身攻击。" }
 }
 fn tone_bucket(tone: Option<i32>) -> i32 { (clamp_tone(tone) + 2) / 5 * 5 }
+
+fn apply_manual_non_ai_edits(value: &Value) -> Value {
+    let mut out = value.clone();
+    let Some(obj) = out.as_object_mut() else { return out; };
+    let Some(fields) = value.get("manualEdits").and_then(|v| v.get("version")).and_then(Value::as_i64).filter(|v| *v == 1)
+        .and_then(|_| value.get("manualEdits").and_then(|v| v.get("fields"))) else { return out; };
+    fn merge_object(target: &mut Value, patch: &Value) {
+        if target.is_null() { *target = serde_json::json!({}); }
+        if let (Some(dst), Some(src)) = (target.as_object_mut(), patch.as_object()) {
+            for (k, v) in src { dst.insert(k.clone(), v.clone()); }
+        }
+    }
+    fn apply_columns(target: &mut Value, patch: &Value) {
+        const COLUMNS: [(&str, usize); 4] = [("year", 0), ("month", 1), ("day", 2), ("hour", 3)];
+        let Some(arr) = target.as_array_mut() else { return; };
+        for (name, index) in COLUMNS {
+            if let Some(value) = patch.get(name) { if index < arr.len() { arr[index] = value.clone(); } }
+        }
+    }
+    for key in ["elements", "elementRatio"] {
+        if let Some(patch) = fields.get(key) { merge_object(obj.entry(key).or_insert_with(|| serde_json::json!({})), patch); }
+    }
+    for (key, patch_key) in [("hiddenStems", "hiddenStems"), ("tenGods", "tenGods"), ("naYin", "naYin"), ("twelveLongevity", "twelveLongevity")] {
+        if let Some(patch) = fields.get(patch_key) { apply_columns(obj.entry(key).or_insert(Value::Null), patch); }
+    }
+    if fields.get("tenGods").is_some() {
+        let heavenly = obj.get("tenGods").cloned();
+        if let (Some(details), Some(heavenly)) = (obj.get_mut("tenGodDetails").and_then(Value::as_object_mut), heavenly) {
+            details.insert("heavenly".into(), heavenly);
+        }
+    }
+    if let Some(patch) = fields.get("tenGodDetails") {
+        let target = obj.entry("tenGodDetails").or_insert_with(|| serde_json::json!({}));
+        if let Some(hidden) = patch.get("hidden") {
+            if let Some(target_obj) = target.as_object_mut() {
+                apply_columns(target_obj.entry("hidden").or_insert(Value::Null), hidden);
+            }
+        }
+    }
+    if let Some(patch) = fields.get("chenggu") {
+        let target = obj.entry("chenggu").or_insert_with(|| serde_json::json!({}));
+        if let Some(map) = patch.as_object() {
+            if target.is_null() { *target = serde_json::json!({}); }
+            if let Some(target_obj) = target.as_object_mut() {
+                for (k, v) in map { if k == "parts" { merge_object(target_obj.entry(k).or_insert_with(|| serde_json::json!({})), v); } else { target_obj.insert(k.clone(), v.clone()); } }
+            }
+        }
+    }
+    if let Some(patch) = fields.get("luckStart") {
+        let target = obj.entry("luckStart").or_insert(Value::Null);
+        if target.is_null() { *target = serde_json::json!({"years":0,"months":0,"days":0,"date":""}); }
+        merge_object(target, patch);
+        if let Some(date) = patch.get("date") { obj.insert("luckOnset".into(), date.clone()); }
+    }
+    if let Some(onset) = fields.get("luckOnset") {
+        obj.insert("luckOnset".into(), onset.clone());
+        let luck_start = obj.entry("luckStart").or_insert(Value::Null);
+        if luck_start.is_null() { *luck_start = serde_json::json!({"years":0,"months":0,"days":0,"date":""}); }
+        if let Some(start) = luck_start.as_object_mut() { start.insert("date".into(), onset.clone()); }
+    }
+    if let Some(patch) = fields.get("greatFortunes").and_then(Value::as_object) {
+        if let Some(rows) = obj.get_mut("greatFortunes").and_then(Value::as_array_mut) {
+            for (ix, changes) in patch {
+                if let Ok(ix) = ix.parse::<usize>() { if let Some(row) = rows.get_mut(ix) { merge_object(row, changes); } }
+            }
+        }
+    }
+    for key in ["zodiac", "zodiacCompatibility", "relationships", "fortuneDirection"] {
+        if let Some(patch) = fields.get(key) {
+            if key == "zodiac" || key == "fortuneDirection" { obj.insert(key.into(), patch.clone()); }
+            else { merge_object(obj.entry(key).or_insert_with(|| serde_json::json!({})), patch); }
+        }
+    }
+    out
+}
+
+fn stable_json(value: &Value) -> String {
+    match value {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect(); keys.sort();
+            let fields = keys.into_iter().map(|key| format!("{}:{}", serde_json::to_string(key).unwrap(), stable_json(&map[key]))).collect::<Vec<_>>().join(",");
+            format!("{{{fields}}}")
+        }
+        Value::Array(items) => format!("[{}]", items.iter().map(stable_json).collect::<Vec<_>>().join(",")),
+        _ => serde_json::to_string(value).unwrap_or_else(|_| "null".into()),
+    }
+}
+
+fn facts_only(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(map.iter()
+            .filter(|(key, _)| !matches!(key.as_str(), "manualEdits" | "factsRevision" | "currentTime" | "savedAt" | "createdAt"))
+            .map(|(key, value)| (key.clone(), facts_only(value))).collect()),
+        Value::Array(items) => Value::Array(items.iter().map(facts_only).collect()),
+        _ => value.clone(),
+    }
+}
 fn now_text() -> String {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis().to_string()).unwrap_or_else(|_| "0".into())
@@ -358,11 +460,14 @@ pub(crate) fn cache_key(record: &BaziRecord, task: &AiTaskInput, model: &str) ->
     //      桌面此前写成 solarDate→zodiac→dayMaster 与 hiddenStems→tenGods，serde_json 按插入顺序序列化，
     //      于是同一命盘在桌面拼出的「本命事实」整段字节与另两端不同 —— 提示词口径没变但前缀分叉，
     //      已落库的答案是按另一种键序那版提示词产出的，一并作废重算。
-    // v12: 精确起运按出生时刻区分；旧盘以空尾段保留原缓存口径。
+    // v13: 本命与实际任务作用域事实进入摘要；摘要取同一payload builder的实际事实投影，固定规则由版本处理。
     let birth_time = record.non_ai_result.as_deref().and_then(|raw| serde_json::from_str::<Value>(raw).ok()).and_then(|v| v.get("birthTime").cloned());
-    format!("v12|{model}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", record.gender,
+    let payload = build_ai_request_payload(record, task).unwrap_or(Value::Null);
+    let evidence = payload.get("cacheEvidence").cloned().unwrap_or(Value::Null);
+    let evidence_hash = format!("{:016x}", fnv1a(&stable_json(&evidence)));
+    format!("v13|{model}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", record.gender,
         record.year_pillar, record.month_pillar, record.day_pillar, record.hour_pillar,
-        task.task_type, task.year.unwrap_or(0), task.month.unwrap_or(0), record.birth_year, tone_bucket(task.tone), birth_time_signature(birth_time.as_ref()))
+        task.task_type, task.year.unwrap_or(0), task.month.unwrap_or(0), record.birth_year, tone_bucket(task.tone), evidence_hash, birth_time_signature(birth_time.as_ref()))
 }
 
 pub(crate) fn read_cache(connection: &rusqlite::Connection, key: &str) -> Result<Option<String>, String> {
@@ -522,17 +627,18 @@ pub(crate) fn final_ai_status(errors: &[String]) -> (&'static str, Option<String
 /// 只打包“本次任务需要的最小上下文”：本命要点 + 该年/该月/所处大运单行，
 /// 不再把 120 条流月+10 条流年(约 200KB)整包发送(那是 token 成本的第一大元凶)。
 pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Result<Value, String> {
-    let parsed: Value = record.non_ai_result.as_deref().map(serde_json::from_str).transpose().map_err(|e| e.to_string())?.unwrap_or(Value::Null);
+    let raw: Value = record.non_ai_result.as_deref().map(serde_json::from_str).transpose().map_err(|e| e.to_string())?.unwrap_or(Value::Null);
+    let parsed = apply_manual_non_ai_edits(&raw);
     let val = |key: &str| parsed.get(key).cloned().unwrap_or(Value::Null);
     let ls = parsed.get("luckStart").cloned().unwrap_or(Value::Null);
-    let natal = serde_json::json!({
+    let mut natal = serde_json::json!({
         "gender": record.gender,
         "birthYear": record.birth_year,
         "pillars": { "year": record.year_pillar, "month": record.month_pillar, "day": record.day_pillar, "hour": record.hour_pillar },
         "dayMaster": val("dayMaster"), "zodiac": val("zodiac"), "solarDate": val("solarDate"), "lunarDate": val("lunarDate"),
 
         "elements": val("elements"), "elementRatio": val("elementRatio"),
-        "tenGods": val("tenGods"), "hiddenStems": val("hiddenStems"), "tenGodDetails": val("tenGodDetails"),
+        "tenGods": val("tenGods"), "hiddenStems": val("hiddenStems"),
         "naYin": val("naYin"), "twelveLongevity": val("twelveLongevity"),
         // 引擎算定的格局与旺衰：模型只解读不重判(与服务器/浏览器直连同口径)
         "patternFacts": val("patternFacts"), "strengthScore": val("strengthScore"),
@@ -541,7 +647,12 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
         // luckStart.date 有 ±1 天口径差，故把自算的精确交运日并入 onsetDate 一起发给模型(与另两端同形)。
         "luckStart": { "years": ls.get("years").cloned().unwrap_or(Value::from(0)), "months": ls.get("months").cloned().unwrap_or(Value::from(0)), "days": ls.get("days").cloned().unwrap_or(Value::from(0)), "date": ls.get("date").cloned().unwrap_or_else(|| Value::String(String::new())), "onsetDate": val("luckOnset") },
         "shenSha": compact_shen_sha(&val("shenSha")), "relationships": val("relationships"),
+        "tenGodDetails": val("tenGodDetails"), "chenggu": val("chenggu"),
+        "fortuneDirection": val("fortuneDirection"), "zodiacCompatibility": val("zodiacCompatibility"),
     });
+    for key in ["tenGodDetails", "chenggu", "fortuneDirection", "zodiacCompatibility"] {
+        if natal.get(key).is_some_and(Value::is_null) { natal.as_object_mut().unwrap().remove(key); }
+    }
     // 行动改变与职业适配(喜用五行知识库)：附加 baseline 摘要与 guide 资料
     if task.task_type == "adjustment" {
         if let Some(guide) = task.guide.as_ref() {
@@ -564,7 +675,7 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
                 .unwrap_or_else(|| "（暂无本命结论）".into());
             let body = serde_json::json!({
                 "when": "后天调整与职业适配".to_string(),
-                "baselineSummary": baseline_text,
+                "baselineSummary": baseline_text.clone(),
                 "guide": guide_text,
             });
             let mut content = format!("你是资深子平命理师。根据【本命结论】的喜用五行与下方【资料库】中对应五行的后天调整/职业知识，输出该命局的【后天调整】与【事业职业适配】建议(长文，尽量贴合资料，不要另造体系)。禁止输出/* */注释、HTML注释或代码块标记，只给最终正文。JSON schema：{{\"explanation\":长文}}，explanation 必须依次各出现一次【后天调整】【事业适配】【健康注意】(不得合并、省略或改名)，每段至少 1 条；每个主题内部再分点：每条单独一行、行首 1. 2. 3. 编号，一句话一条，不要整段连排。\n\n# 本命结论\n{}\n\n# 资料库(喜用{})\n{}", baseline_text, guide.get("element").and_then(|e| e.as_str()).unwrap_or(""), guide_text);
@@ -573,6 +684,7 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
                 "model": "deepseek-flash", "promptVersion": "ctx-v8", "thinking": true, "effort": "high",
                 "taskId": task.task_id, "type": task.task_type, "year": task.year, "month": task.month,
                 "nonAiResult": body,
+                "cacheEvidence": { "baselineSummary": baseline_text, "guide": guide },
                 "messages": [{ "role": "user", "content": content }]
             }));
         }
@@ -584,7 +696,10 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
         match task.task_type.as_str() {
             // 大运任务：只给该大运段(不掺入年度/月份行，也不带年龄)
             "decade" => {
-                let decade = task.decade.as_ref().filter(|v| v.get("ganZhi").and_then(|g| g.as_str()).is_some()).cloned().unwrap_or_else(|| pick_decade(&parsed["greatFortunes"], y));
+                let has_manual_fortunes = parsed.get("manualEdits").and_then(|m| m.get("fields")).and_then(|f| f.get("greatFortunes")).and_then(Value::as_object).is_some();
+                let decade = if has_manual_fortunes { pick_decade(&parsed["greatFortunes"], y) }
+                    else { task.decade.as_ref().filter(|v| v.get("ganZhi").and_then(|g| g.as_str()).is_some()).cloned().unwrap_or_else(|| pick_decade(&parsed["greatFortunes"], y)) };
+                let decade = facts_only(&decade);
                 if decade != Value::Null {
                     scope["decade"] = decade.clone();
                     let gz = decade.get("ganZhi").and_then(|v| v.as_str()).unwrap_or("");
@@ -593,12 +708,16 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
             }
             _ => {
                 let annual = task.annual.as_ref().filter(|v| v.get("ganZhi").and_then(|g| g.as_str()).is_some()).cloned().unwrap_or_else(|| pick_by_year(&parsed["annualFortunes"], y));
+                let annual = facts_only(&annual);
                 if annual != Value::Null {
                     scope["annual"] = annual.clone();
                     let gz = annual.get("ganZhi").and_then(|v| v.as_str()).unwrap_or("");
                     if !gz.is_empty() { scope["annualHits"] = serde_json::to_value(summarize_hits(&annual, gz)).unwrap_or(Value::Null); }
                 }
-                let decade = task.decade.as_ref().filter(|v| v.get("ganZhi").and_then(|g| g.as_str()).is_some()).cloned().unwrap_or_else(|| pick_decade(&parsed["greatFortunes"], y));
+                let has_manual_fortunes = parsed.get("manualEdits").and_then(|m| m.get("fields")).and_then(|f| f.get("greatFortunes")).and_then(Value::as_object).is_some();
+                let decade = if has_manual_fortunes { pick_decade(&parsed["greatFortunes"], y) }
+                    else { task.decade.as_ref().filter(|v| v.get("ganZhi").and_then(|g| g.as_str()).is_some()).cloned().unwrap_or_else(|| pick_decade(&parsed["greatFortunes"], y)) };
+                let decade = facts_only(&decade);
                 if decade != Value::Null {
                     scope["decade"] = decade.clone();
                     let gz = decade.get("ganZhi").and_then(|v| v.as_str()).unwrap_or("");
@@ -612,6 +731,7 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
                             if inline.get("ganZhi").and_then(|v| v.as_str()).is_some() { monthly = inline.clone(); }
                         }
                     }
+                    monthly = facts_only(&monthly);
                     if monthly != Value::Null {
                         scope["monthly"] = monthly.clone();
                         let gz = monthly.get("ganZhi").and_then(|v| v.as_str()).unwrap_or("");
@@ -653,7 +773,8 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
         return Ok(serde_json::json!({
             "model": "deepseek-flash", "promptVersion": "ctx-v8", "thinking": true, "effort": "high",
             "taskId": task.task_id, "type": task.task_type, "year": task.year, "month": task.month,
-            "nonAiResult": { "natal": natal, "findings": task.findings.clone().unwrap_or(Value::Null) },
+            "nonAiResult": { "natal": natal.clone(), "findings": task.findings.clone().unwrap_or(Value::Null) },
+            "cacheEvidence": { "natal": natal, "baselineSummary": baseline_text, "findings": task.findings.clone().unwrap_or(Value::Null) },
             "messages": [{ "role": "user", "content": content }]
         }));
     }
@@ -662,7 +783,7 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
     let prompt = if is_scope { SCOPE_PREFIX } else { BASELINE_PREFIX };
     // 关键：把“事实数据 JSON”直接嵌入消息正文 —— 模型只能看到 messages，
     // 顶层字段(如 nonAiResult)对模型不可见(此前因此返回“未提供结构化输入”)。
-    let context = serde_json::json!({ "natal": natal, "scope": scope });
+    let context = serde_json::json!({ "natal": natal.clone(), "scope": scope.clone() });
     // ── 命中率优先的分段(与 server/ai.mjs、deepseekAdapter.ts 同一原则)：
     //    「本命事实数据」用固定标题排在指令**之前**，四类任务因此共享同一段长前缀；
     //    只有中段指令随任务类型分叉，其后才是可变性递增的摘要/年度段/月度段/目标行。
@@ -702,6 +823,7 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
         "model": "deepseek-flash", "promptVersion": "ctx-v8", "thinking": true, "effort": if task.task_type == "baseline" { "high" } else { "low" },
         "taskId": task.task_id, "type": task.task_type, "year": task.year, "month": task.month,
         "nonAiResult": context,
+        "cacheEvidence": { "natal": natal, "scope": if is_scope { scope } else { Value::Null }, "baselineSummary": if is_scope { task.baseline.as_ref().and_then(|b| b.get("summary")).cloned().unwrap_or(Value::Null) } else { Value::Null } },
         "messages": [{ "role": "user", "content": content }]
     }))
 }
@@ -1042,6 +1164,70 @@ mod tests {
         let content = payload["messages"][0]["content"].as_str().unwrap();
         assert!(content.contains("事实数据"));
         assert!(content.contains("\"zodiac\":\"鼠\"") || content.contains("zodiac"));
+    }
+
+    #[test]
+    fn manual_non_ai_patch_is_applied_to_payload_and_survives_compaction() {
+        let connection = Connection::open_in_memory().unwrap(); initialize(&connection).unwrap();
+        let raw = serde_json::json!({
+            "zodiac":"鼠", "elements":{"木":1}, "elementRatio":{"木":0.2},
+            "tenGodDetails":{"heavenly":["伤官"],"hidden":[[{"stem":"癸","tenGod":"伤官","position":"root"}]]},
+            "chenggu":{"totalLiang":3.2,"totalText":"三两二钱","parts":{"year":"五钱"}},
+            "relationships":{"sanHe":["申子辰"]}, "greatFortunes":[{"ganZhi":"丁卯","startYear":1987,"endYear":1996}],
+            "annualFortunes":[{"year":2027,"ganZhi":"丁未"}], "monthlyFortunes":[],
+            "manualEdits":{"version":1,"fields":{"zodiac":"牛","elements":{"木":9},"elementRatio":{"木":0.9},"tenGodDetails":{"hidden":{"year":[{"stem":"甲","tenGod":"正财","position":"root"}]}},"chenggu":{"totalLiang":5.1,"totalText":"五两一钱","parts":{"year":"一两"}},"fortuneDirection":"backward","zodiacCompatibility":{"sanHe":["巳酉丑"]},"greatFortunes":{"0":{"ganZhi":"辛未","startYear":2017,"endYear":2026}}}},
+            "factsRevision":4, "savedAt":"old", "currentTime":"volatile"
+        });
+        let record = BaziRecord { id: Some("manual".into()), name:"名".into(), gender:"male".into(), birth_year:1984, birth_month:2, created_at:"2025-01-01".into(), year_pillar:"甲子".into(), month_pillar:"丙寅".into(), day_pillar:"庚午".into(), hour_pillar:"壬午".into(), non_ai_result:Some(raw.to_string()), ai_status:"pending".into(), ai_analysis:None, ai_overview:None, ai_error:None, ai_tasks:None, tone_used:None };
+        let task = commands::AiTaskInput { task_id:"t".into(), task_type:"baseline".into(), year:None, month:None, annual:None, monthly:None, decade:None, baseline:None, guide:None, findings:None, tone:None };
+        let payload = commands::build_ai_request_payload(&record, &task).unwrap();
+        let natal = &payload["nonAiResult"]["natal"];
+        assert_eq!(natal["zodiac"], "牛");
+        assert_eq!(natal["elements"]["木"], 9);
+        assert_eq!(natal["elementRatio"]["木"], 0.9);
+        assert_eq!(natal["tenGodDetails"]["hidden"][0][0]["stem"], "甲");
+        assert_eq!(natal["chenggu"]["totalLiang"], 5.1);
+        assert_eq!(natal["fortuneDirection"], "backward");
+        assert_eq!(natal["zodiacCompatibility"]["sanHe"][0], "巳酉丑");
+        let insert = |raw: String| { connection.execute("INSERT OR REPLACE INTO bazi_records (id,name,gender,birth_year,birth_month,created_at,year_pillar,month_pillar,day_pillar,hour_pillar,non_ai_result,ai_status,ai_analysis,ai_overview,ai_error,ai_tasks,tone_used) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)", params!["manual", "名", "male", 1984, 2, "2025", "甲子", "丙寅", "庚午", "壬午", raw, "pending", Option::<String>::None, Option::<String>::None, Option::<String>::None, Option::<String>::None, Option::<i32>::None]).unwrap(); };
+        insert(raw.to_string());
+        let (changed, _) = commands::compact_records_in(&connection).unwrap(); assert_eq!(changed, 1);
+        let stored: String = connection.query_row("SELECT non_ai_result FROM bazi_records WHERE id='manual'", [], |r| r.get(0)).unwrap();
+        let roundtrip: Value = serde_json::from_str(&stored).unwrap();
+        assert_eq!(roundtrip["manualEdits"]["fields"]["greatFortunes"]["0"]["ganZhi"], "辛未");
+        assert_eq!(roundtrip["factsRevision"], 4);
+        assert_eq!(roundtrip["savedAt"], "old");
+        assert_eq!(roundtrip["greatFortunes"].as_array().unwrap().len(), 1);
+        assert_eq!(roundtrip["greatFortunes"][0]["ganZhi"], "辛未");
+        let stored_record = connection.query_row("SELECT id,name,gender,birth_year,birth_month,created_at,year_pillar,month_pillar,day_pillar,hour_pillar,non_ai_result,ai_status,ai_analysis,ai_overview,ai_error,ai_tasks,tone_used FROM bazi_records WHERE id='manual'", [], row_to_record).unwrap();
+        let decade_task = commands::AiTaskInput { task_id:"d".into(), task_type:"decade".into(), year:Some(2020), month:None, annual:None, monthly:None, decade:Some(serde_json::json!({"ganZhi":"旧大运","startYear":2017,"endYear":2026})), baseline:None, guide:None, findings:None, tone:None };
+        let decade_payload = commands::build_ai_request_payload(&stored_record, &decade_task).unwrap();
+        assert_eq!(decade_payload["nonAiResult"]["scope"]["decade"]["ganZhi"], "辛未");
+    }
+
+    #[test]
+    fn task_cache_key_tracks_effective_payload_facts_and_actual_scope_only() {
+        let record = BaziRecord { id:Some("r".into()), name:"名".into(), gender:"male".into(), birth_year:1984, birth_month:2, created_at:"2025".into(), year_pillar:"甲子".into(), month_pillar:"丙寅".into(), day_pillar:"庚午".into(), hour_pillar:"壬午".into(), non_ai_result:Some(serde_json::json!({"zodiac":"鼠","currentTime":"now","factsRevision":1,"manualEdits":{"version":1,"fields":{"zodiac":"牛"}},"annualFortunes":[{"year":2027,"ganZhi":"丁未","savedAt":"a"}]}).to_string()), ai_status:"pending".into(), ai_analysis:None, ai_overview:None, ai_error:None, ai_tasks:None, tone_used:None };
+        let mk = |annual: Option<Value>| commands::AiTaskInput { task_id:"t".into(), task_type:"annual".into(), year:Some(2027), month:None, annual, monthly:None, decade:None, baseline:None, guide:None, findings:None, tone:None };
+        let a = commands::cache_key(&record, &mk(None), "deepseek-flash");
+        let reordered = BaziRecord { non_ai_result:Some(r#"{"annualFortunes":[{"savedAt":"b","ganZhi":"丁未","year":2027},{"year":2028,"ganZhi":"戊申"}],"manualEdits":{"fields":{"zodiac":"牛"},"version":1},"factsRevision":999,"currentTime":"later","zodiac":"鼠"}"#.into()), ..record.clone() };
+        assert_eq!(a, commands::cache_key(&reordered, &mk(None), "deepseek-flash"));
+        let changed = BaziRecord { non_ai_result:Some(serde_json::json!({"zodiac":"鼠","manualEdits":{"version":1,"fields":{"zodiac":"虎"}}}).to_string()), ..record.clone() };
+        assert_ne!(a, commands::cache_key(&changed, &mk(None), "deepseek-flash"));
+        let inline_a = commands::cache_key(&record, &mk(Some(serde_json::json!({"year":2027,"ganZhi":"乙巳"}))), "deepseek-flash");
+        let inline_b = commands::cache_key(&record, &mk(Some(serde_json::json!({"year":2027,"ganZhi":"戊申"}))), "deepseek-flash");
+        assert_ne!(inline_a, inline_b);
+        let parts: Vec<&str> = a.split('|').collect();
+        assert_eq!(parts[0], "v13"); assert_eq!(parts.len(), 14);
+        assert_eq!(parts[2..7], ["male", "甲子", "丙寅", "庚午", "壬午"]);
+        assert_eq!(parts[13], "");
+        let connection = Connection::open_in_memory().unwrap(); initialize(&connection).unwrap();
+        for (key, answer) in [(&a, "旧证据"), (&inline_a, "新范围"), (&commands::cache_key(&changed, &mk(None), "deepseek-flash"), "新事实")] {
+            commands::write_cache(&connection, key, answer).unwrap();
+            assert_eq!(commands::read_cache(&connection, key).unwrap().as_deref(), Some(answer));
+        }
+        assert_eq!(commands::purge_chart_cache(&connection, "male", "甲子", "丙寅", "庚午", "壬午").unwrap(), 3);
+        assert_eq!(connection.query_row("SELECT COUNT(*) FROM ai_cache", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
     }
 
     #[test]

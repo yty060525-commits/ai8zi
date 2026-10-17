@@ -33,6 +33,7 @@ const NATAL_LABELS: Record<string, string> = {
   gender: '性别', birthYear: '出生年份', pillars: '四柱', solarDate: '公历日期', lunarDate: '农历日期', zodiac: '生肖', dayMaster: '日主',
   elements: '五行计数', elementRatio: '五行比例', hiddenStems: '地支藏干', tenGods: '十神', naYin: '纳音', twelveLongevity: '十二长生',
   patternFacts: '格局事实', strengthScore: '旺衰评分', tiaohouFacts: '调候参考', shenSha: '神煞', relationships: '干支关系',
+  tenGodDetails: '藏干十神', chenggu: '袁天罡称骨', fortuneDirection: '大运排法', zodiacCompatibility: '生肖人际适配',
 };
 
 export function factLabels(value: Record<string, unknown>, labels = NATAL_LABELS): string[] {

@@ -19,6 +19,33 @@ export interface RelationshipFacts {
   ke: string[];
 }
 
+export type PillarKey = 'year' | 'month' | 'day' | 'hour';
+export type FiveElement = '木' | '火' | '土' | '金' | '水';
+export type FortuneIndex = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+export type ManualFortuneFields = Partial<Pick<NonAiChart['greatFortunes'][number], 'ganZhi' | 'startYear' | 'endYear' | 'onsetDate' | 'endDate'>>;
+export type ManualNonAiFields = {
+  elements?: Partial<Record<FiveElement, number>>;
+  elementRatio?: Partial<Record<FiveElement, number>>;
+  hiddenStems?: Partial<Record<PillarKey, string[]>>;
+  tenGods?: Partial<Record<PillarKey, string>>;
+  naYin?: Partial<Record<PillarKey, string>>;
+  twelveLongevity?: Partial<Record<PillarKey, string>>;
+  tenGodDetails?: { hidden?: Partial<Record<PillarKey, Array<{ stem: string; tenGod: string; position: 'root' | 'middle' | 'residual' }>>> };
+  luckStart?: Partial<NonNullable<NonAiChart['luckStart']>>;
+  luckOnset?: string;
+  chenggu?: { totalLiang?: number; totalText?: string; parts?: Partial<NonNullable<NonAiChart['chenggu']>['parts']> };
+  greatFortunes?: Partial<Record<FortuneIndex, ManualFortuneFields>>;
+  zodiac?: string;
+  zodiacCompatibility?: Partial<NonAiChart['zodiacCompatibility']>;
+  relationships?: Partial<RelationshipFacts>;
+  fortuneDirection?: 'forward' | 'backward';
+};
+export interface ManualNonAiEdits { version: 1; fields: ManualNonAiFields }
+export interface NonAiEditRequest {
+  source?: Partial<Pick<BaziRecord, 'name' | 'gender' | 'birthYear' | 'birthMonth' | 'yearPillar' | 'monthPillar' | 'dayPillar' | 'hourPillar'> & { birthDay?: number }>;
+  fields?: ManualNonAiFields;
+}
+
 export interface FortunePeriod {
   year: number;
   month: number;
@@ -46,6 +73,10 @@ export interface ShenShaItem {
 }
 
 export interface NonAiChart {
+  /** Optional leaf patch; effective values are also written to the corresponding chart fields. */
+  manualEdits?: ManualNonAiEdits;
+  /** Monotonic guard for stale AI writes; absent on legacy records. */
+  factsRevision?: number;
   pillars: { year: string; month: string; day: string; hour: string };
   lunarDate: string;
   solarDate: string;
@@ -56,6 +87,8 @@ export interface NonAiChart {
   /** 精确原始出生时刻；旧盘和手录四柱没有该项时沿用正午起运近似。 */
   birthTime?: BirthTime;
   zodiac: string;
+  fortuneDirection?: 'forward' | 'backward';
+  zodiacCompatibility?: { sanHe: string[]; liuHe: string[]; chong: string[]; hai: string[] };
   elements: Record<string, number>;
   elementRatio: Record<string, number>;
   /** 五行计数口径版本(老库缺标记时按当前口径回填)。 */

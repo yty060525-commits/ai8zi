@@ -1,17 +1,17 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { deleteBaziRecord, getBaziRecord, refreshRecord, saveBaziRecord } from '../../data/clientRepository';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { deleteBaziRecord, getBaziRecord, recalculateBaziRecord, refreshRecord, saveAiProgress, saveNonAiEdits } from '../../data/clientRepository';
 import { ABORTED_MESSAGE, analysisHorizon, buildBaziTasks, expectedTaskIds, isRetryableFailure, orchestrateBaziAnalysis, DEFAULT_TONE } from '../../data/baziOrchestrator';
 import { readableChannelError, readableName } from '../../data/chatEngine';
 import { beginAiSession, cancelAiSession } from '../../data/deepseekAdapter';
 import { clearChartCache } from '../../data/storageInfo';
 import { sanitizeAnalysisText } from '../chart/elements';
-import { BirthInputModal } from '../chart/BirthInputModal';
 import { isServerMode } from '../../data/serverClient';
 import { canBuildLocalAnalysis, ensureLocalChartComplete, isLocalSystemEnabled, localSystemUnlocked, subscribeLocalSystem } from '../../data/localSystem';
 import { ScopeNoteBox } from './ScopeNoteBox';
-import type { BaziRecord, BaziTaskResult, Gender, NonAiChart } from '../../types/domain';
+import type { BaziRecord, BaziTaskResult, Gender, ManualNonAiFields, NonAiChart, NonAiEditRequest, PillarKey } from '../../types/domain';
 import { interpersonalZodiac, zodiacOfBranch } from '../../utils/interpersonal';
 import { chinaDateParts, chinaYmd, chinaYear } from '../../utils/date';
+import { EditMessage, InlineEditActions, InlineHiddenGods, InlineList, InlineValue, weightNumber, weightText } from './NonAiInlineEditor';
 
 export interface PersonDetailProps { personId: string; onBack: () => void; refreshKey?: number }
 const copy = (text: string) => navigator.clipboard?.writeText(text);
@@ -145,19 +145,51 @@ export const toneLabel = (v: number): string => {
   return '温柔夸夸：多说好话，不足委婉带过';
 };
 
-const getBasicFields = (record: BaziRecord): [string, string][] => [
-  ['姓名', readableName(record.name)], ['性别', record.gender === 'male' ? '男' : '女'],
-  // 出生年/月读成中文：这条数组既铺在「基础信息」表上，也是「复制基础信息」的正文来源。
-  ['出生年', cnYear(record.birthYear)], ['出生月', cnCount(record.birthMonth)],
-  ['年柱', record.yearPillar], ['月柱', record.monthPillar], ['日柱', record.dayPillar], ['时柱', record.hourPillar],
-];
+type SourceFields = NonNullable<NonAiEditRequest['source']>;
+type SourceDraft = Required<Pick<SourceFields, 'name' | 'gender' | 'birthYear' | 'birthMonth' | 'yearPillar' | 'monthPillar' | 'dayPillar' | 'hourPillar'>> & { birthDay: number };
+const PILLAR_KEYS: PillarKey[] = ['year', 'month', 'day', 'hour'];
+const PILLAR_LABELS: Record<PillarKey, string> = { year: '年柱', month: '月柱', day: '日柱', hour: '时柱' };
+const ELEMENTS = ['木', '火', '土', '金', '水'] as const;
+const SOURCE_KEYS = ['name', 'gender', 'birthYear', 'birthMonth', 'yearPillar', 'monthPillar', 'dayPillar', 'hourPillar'] as const;
+function sourceDraftOf(record: BaziRecord): SourceDraft {
+  const date = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(record.nonAiResult?.solarDate ?? '');
+  return {
+    name: record.name, gender: record.gender, birthYear: record.birthYear, birthMonth: record.birthMonth,
+    birthDay: record.nonAiResult?.birthDay ?? (date ? Number(date[3]) : 1),
+    yearPillar: record.yearPillar, monthPillar: record.monthPillar, dayPillar: record.dayPillar, hourPillar: record.hourPillar,
+  };
+}
+function getBasicFields(record: BaziRecord, source: SourceDraft = sourceDraftOf(record)): [string, string][] {
+  return [
+    ['姓名', readableName(source.name)], ['性别', source.gender === 'male' ? '男' : '女'],
+    ['出生年', cnYear(source.birthYear)], ['出生月', cnCount(source.birthMonth)],
+    ['年柱', source.yearPillar], ['月柱', source.monthPillar], ['日柱', source.dayPillar], ['时柱', source.hourPillar],
+  ];
+}
 export function generatePersonDetailText(record: BaziRecord) {
   return getBasicFields(record).map(([label, value]) => `${label}：${value}`).join('\n');
 }
-function BasicInfo({ record }: { record: BaziRecord }) {
+function BasicInfo({ record, editing, source, setSource, onEdit, onSave, onCancel, busy }: {
+  record: BaziRecord; editing: boolean; source: SourceDraft; setSource: (next: SourceDraft) => void;
+  onEdit: () => void; onSave: () => void; onCancel: () => void; busy: boolean;
+}) {
+  const fields = getBasicFields(record, source);
+  const set = (key: keyof SourceDraft, value: string) => setSource({ ...source, [key]: key === 'birthYear' || key === 'birthMonth' || key === 'birthDay' ? Number(value) : value });
+  const rendered: Record<string, ReactNode> = {
+    姓名: <InlineValue label="姓名" value={source.name} editing={editing} onChange={(value) => set('name', value)} />,
+    性别: editing ? <label className="non-ai-inline-field">性别<select aria-label="性别" value={source.gender} onChange={(event) => setSource({ ...source, gender: event.target.value as Gender })}><option value="male">男</option><option value="female">女</option></select></label> : <>{source.gender === 'male' ? '男' : '女'}</>,
+    出生年: <InlineValue label="出生年" type="number" value={String(source.birthYear)} editing={editing} onChange={(value) => set('birthYear', value)} />,
+    出生月: <InlineValue label="出生月" type="number" min="1" max="12" value={String(source.birthMonth)} editing={editing} onChange={(value) => set('birthMonth', value)} />,
+    年柱: <InlineValue label="年柱" value={source.yearPillar} editing={editing} onChange={(value) => set('yearPillar', value)} />,
+    月柱: <InlineValue label="月柱" value={source.monthPillar} editing={editing} onChange={(value) => set('monthPillar', value)} />,
+    日柱: <InlineValue label="日柱" value={source.dayPillar} editing={editing} onChange={(value) => set('dayPillar', value)} />,
+    时柱: <InlineValue label="时柱" value={source.hourPillar} editing={editing} onChange={(value) => set('hourPillar', value)} />,
+  };
   return <section className="detail-section" aria-labelledby="basic-title" aria-label="基础信息">
-    <div className="section-heading"><div><p className="eyebrow">壹、基础信息</p><h2 id="basic-title">基础信息</h2></div><button className="text-button" type="button" onClick={() => void copy(generatePersonDetailText(record))}>复制基础信息</button></div>
-    <dl className="info-grid">{getBasicFields(record).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
+    <div className="section-heading"><div><p className="eyebrow">壹、基础信息</p><h2 id="basic-title">基础信息</h2></div><InlineEditActions editing={editing} disabled={busy} onEdit={onEdit} onSave={onSave} onCancel={onCancel} />
+      <button className="text-button" type="button" disabled={editing} onClick={() => void copy(generatePersonDetailText(record))}>复制基础信息</button></div>
+    {busy && <EditMessage>批断进行中，请先停止批断再编辑排盘数据</EditMessage>}
+    <dl className="info-grid">{fields.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{editing ? rendered[label] : value}</dd></div>)}</dl>
   </section>;
 }
 /** 列表读法：内层用「、」并列，外层用中文分号分隔。界面与导出都不许出现半角符号，
@@ -240,29 +272,61 @@ const solarDateText = (result: NonAiChart, record: BaziRecord): string => {
   if (ymd && typeof result.birthDay === 'number') return cnDate(`${ymd[1]}-${ymd[2]}-${result.birthDay}`);
   return cnDate(result.solarDate);
 };
-function NonAiAnalysis({ result, record }: { result?: NonAiChart; record: BaziRecord }) {
-  if (!result) return <section className="detail-section" aria-label="基础排盘数据"><div className="section-heading"><div><p className="eyebrow">贰、排盘数据</p><h2>基础排盘数据</h2></div></div><p role="status">暂无基础排盘数据</p></section>;
-  const fields: [string, string][] = [
-    ['四柱', [result.pillars.year, result.pillars.month, result.pillars.day, result.pillars.hour].join('、')],
-    ['公历日期', solarDateText(result, record)],
-    ['五行', mapText(result.elements)], ['五行比例', formatElementRatio(result.elementRatio)],
-    ['十二长生', listText(result.twelveLongevity)],
-    ['起运', luckStartText(result, chinaYear(new Date()))],
-    ['袁天罡称骨', result.chenggu ? `${result.chenggu.totalText}，年${result.chenggu.parts.year}、月${result.chenggu.parts.month}、日${result.chenggu.parts.day}、时${result.chenggu.parts.hour}` : '暂无'],
-  ];
-  const columns: [string, string][] = [['四柱', fields[0][1]], ['藏干', listText(result.hiddenStems)], ['藏干十神', result.tenGodDetails.hidden.map((items) => items.map((item) => `${item.stem}${item.tenGod}`).join('、')).join('；') || '暂无'], ['十神', listText(result.tenGods)], ['纳音', listText(result.naYin)]];
+function NonAiAnalysis({ result, record, editing, source, setSource, fields, setFields }: {
+  result?: NonAiChart; record: BaziRecord; editing: boolean; source: SourceDraft;
+  setSource: (next: SourceDraft) => void; fields: ManualNonAiFields; setFields: (next: ManualNonAiFields) => void;
+}) {
+  if (!result) return <section className="detail-section" aria-label="基础排盘数据"><h2>基础排盘数据</h2><p role="status">暂无基础排盘数据</p></section>;
+  const scalar = (label: string, value: string | number, onChange: (value: string) => void, type: 'text' | 'number' | 'date' = 'text', step?: string) =>
+    <InlineValue label={label} value={String(value)} editing={editing} onChange={onChange} type={type} step={step} />;
+  const column = (key: 'tenGods' | 'naYin' | 'twelveLongevity', prefix: string) => PILLAR_KEYS.map((pillar, index) => <span key={pillar} className="non-ai-inline-column">{scalar(prefix + PILLAR_LABELS[pillar], fields[key]?.[pillar] ?? result[key][index] ?? '', (value) => setFields({ ...fields, [key]: { ...fields[key], [pillar]: value } }))}</span>);
+  const sourcePillar = (pillar: PillarKey, prefix: string) => scalar(prefix + PILLAR_LABELS[pillar], source[`${pillar}Pillar`], (value) => setSource({ ...source, [`${pillar}Pillar`]: value }));
+  const dateValue = `${String(source.birthYear).padStart(4, '0')}-${String(source.birthMonth).padStart(2, '0')}-${String(source.birthDay).padStart(2, '0')}`;
   const relationLabels: Array<[keyof NonAiChart['relationships'], string]> = [['sanHe', '三合'], ['liuHe', '六合'], ['xing', '刑'], ['chong', '冲'], ['po', '破'], ['hai', '害'], ['ke', '克']];
-  /* 完整大运表：把九步运的干支、十年区间、精确交运日全部列出，并高亮「今年所在」那一柱。
-     AI 分析区的「④未来大运」只排起运晚于今年的运(避免整轮重算)，于是眼前正在走的那步运在
-     那里看不到——这张表补的就是这一格，且它读的是本地排盘数据、不触发任何 AI 请求。 */
-  const today0 = chinaDateParts(new Date()); const todayYmd0 = `${today0.year}-${String(today0.month).padStart(2, '0')}-${String(today0.day).padStart(2, '0')}`;
-  const currentGz = findCurrentFortune(result, today0.year, todayYmd0)?.ganZhi;
+  const today = chinaDateParts(new Date());
+  const current = findCurrentFortune(result, today.year, chinaYmd(new Date()));
   const luckRows = result.greatFortunes ?? [];
   const yb = record.yearPillar?.[1] ?? '';
-  const zs = yb && '子丑寅卯辰巳午未申酉戌亥'.includes(yb) ? interpersonalZodiac(yb) : null;
-  const selfZodiac = yb ? zodiacOfBranch(yb) : '';
-  return <section className="detail-section" aria-label="基础排盘数据"><div className="section-heading"><div><p className="eyebrow">贰、排盘数据</p><h2>基础排盘数据</h2></div></div><dl className="info-grid chart-data-grid">{fields.slice(1).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl><div className="chart-columns">{columns.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</div><section className="subsection" aria-label="大运"><h3>大运</h3><p className="luck-direction">排法：{luckDirectionText(record.yearPillar?.[0], record.gender)}，自月柱{record.monthPillar}起每十年一柱</p><table className="luck-table"><thead><tr><th>大运</th><th>起运年</th><th>区间</th><th>交运日</th></tr></thead><tbody>{luckRows.map((g) => <tr key={g.ganZhi + g.startYear} className={g.ganZhi === currentGz ? 'luck-current' : undefined}><td>{g.ganZhi}{g.ganZhi === currentGz ? '行' : ''}</td><td>{cnYear(g.startYear)}</td><td>{cnYear(g.startYear)}至{cnYear(g.endYear)}</td><td>{g.onsetDate && g.endDate ? `${cnDate(g.onsetDate)}至${cnDate(g.endDate)}` : '暂无'}</td></tr>)}</tbody></table></section><section className="subsection" aria-label="生肖关系"><h3>生肖关系</h3><p>本命生肖：{zodiacOfBranch(record.yearPillar?.[1] ?? '')}，年支{record.yearPillar[1]}</p>
-      {zs && <p>人际适配：我属{selfZodiac}，三合{zs.sanHe.join('、')}，六合{zs.liuHe.join('、')}，六冲{zs.chong.join('、')}，六害{zs.hai.join('、')}。生肖人际参考，非决断</p>}<ul>{relationLabels.map(([key, label]) => <li key={key}><strong>{label}</strong>：{result.relationships[key].join('、') || '暂无'}</li>)}</ul></section></section>;
+  const compatibility = result.zodiacCompatibility ?? (yb && '子丑寅卯辰巳午未申酉戌亥'.includes(yb) ? interpersonalZodiac(yb) : { sanHe: [], liuHe: [], chong: [], hai: [] });
+  const zodiac = fields.zodiac ?? result.zodiac ?? zodiacOfBranch(yb);
+  const zodiacInput = (label: string) => scalar(label, zodiac, (value) => setFields({ ...fields, zodiac: value }));
+  const direction = fields.fortuneDirection ?? result.fortuneDirection ?? (('甲丙戊庚壬'.includes(record.yearPillar?.[0])) === (record.gender === 'male') ? 'forward' : 'backward');
+  const dataRows: Array<[string, ReactNode]> = [
+    ['公历日期', editing ? scalar('公历日期', dateValue, (value) => { const [year, month, day] = value.split('-').map(Number); setSource({ ...source, birthYear: year || 0, birthMonth: month || 0, birthDay: day || 0 }); }, 'date') : solarDateText(result, record)],
+    ['五行', editing ? ELEMENTS.map((element) => <span key={element}>{scalar(`五行${element}`, fields.elements?.[element] ?? result.elements[element] ?? 0, (value) => setFields({ ...fields, elements: { ...fields.elements, [element]: Number(value) } }), 'number')}</span>) : mapText(result.elements)],
+    ['五行比例', editing ? ELEMENTS.map((element) => <span key={element}>{scalar(`五行比例${element}`, Number(((fields.elementRatio?.[element] ?? result.elementRatio[element] ?? 0) * 100).toFixed(6)), (value) => setFields({ ...fields, elementRatio: { ...fields.elementRatio, [element]: Number(value) / 100 } }), 'number', '0.01')}％</span>) : formatElementRatio(result.elementRatio)],
+    ['十二长生', editing ? column('twelveLongevity', '十二长生') : listText(result.twelveLongevity)],
+    ['起运', editing ? <>{(['years', 'months', 'days'] as const).map((key) => <span key={key}>{scalar(`起运${{ years: '年数', months: '月数', days: '日数' }[key]}`, fields.luckStart?.[key] ?? result.luckStart?.[key] ?? 0, (value) => setFields({ ...fields, luckStart: { ...fields.luckStart, [key]: Number(value) } }), 'number')}</span>)}{scalar('交运日期', fields.luckOnset ?? fields.luckStart?.date ?? result.luckOnset ?? result.luckStart?.date ?? '', (value) => setFields({ ...fields, luckOnset: value }), 'date')}</> : luckStartText(result, chinaYear(new Date()))],
+    ['袁天罡称骨', editing ? <>{scalar('称骨总重', fields.chenggu?.totalLiang ?? result.chenggu?.totalLiang ?? 0, (value) => setFields({ ...fields, chenggu: { ...fields.chenggu, totalLiang: Number(value) } }), 'number', '0.1')}两{PILLAR_KEYS.map((pillar) => <span key={pillar}>{scalar(`称骨${{ year: '年重', month: '月重', day: '日重', hour: '时重' }[pillar]}`, weightNumber(fields.chenggu?.parts?.[pillar] ?? result.chenggu?.parts[pillar] ?? '零'), (value) => setFields({ ...fields, chenggu: { ...fields.chenggu, parts: { ...fields.chenggu?.parts, [pillar]: weightText(value) } } }), 'number', '0.1')}两</span>)}</> : result.chenggu ? `${result.chenggu.totalText}，年${result.chenggu.parts.year}、月${result.chenggu.parts.month}、日${result.chenggu.parts.day}、时${result.chenggu.parts.hour}` : '暂无'],
+  ];
+  const columns: Array<[string, ReactNode]> = [
+    ['四柱', editing ? PILLAR_KEYS.map((pillar) => <span key={pillar}>{sourcePillar(pillar, '矩阵四柱')}</span>) : [result.pillars.year, result.pillars.month, result.pillars.day, result.pillars.hour].join('、')],
+    ['藏干', editing ? PILLAR_KEYS.map((pillar, index) => <InlineList key={pillar} label={'藏干' + PILLAR_LABELS[pillar]} values={fields.hiddenStems?.[pillar] ?? result.hiddenStems[index] ?? []} maxItems={3} editing onChange={(value) => setFields({ ...fields, hiddenStems: { ...fields.hiddenStems, [pillar]: value } })} />) : listText(result.hiddenStems)],
+    ['藏干十神', editing ? PILLAR_KEYS.map((pillar, index) => <InlineHiddenGods key={pillar} label={'藏干十神' + PILLAR_LABELS[pillar]} values={fields.tenGodDetails?.hidden?.[pillar] ?? result.tenGodDetails.hidden[index] ?? []} editing onChange={(value) => setFields({ ...fields, tenGodDetails: { hidden: { ...fields.tenGodDetails?.hidden, [pillar]: value } } })} />) : result.tenGodDetails.hidden.map((items) => items.map((item) => `${item.stem}${item.tenGod}`).join('、')).join('；') || '暂无'],
+    ['十神', editing ? column('tenGods', '十神') : listText(result.tenGods)],
+    ['纳音', editing ? column('naYin', '纳音') : listText(result.naYin)],
+  ];
+  return <section className="detail-section" aria-label="基础排盘数据">
+    <div className="section-heading"><div><p className="eyebrow">贰、排盘数据</p><h2>基础排盘数据</h2></div></div>
+    {editing && <EditMessage>修改四柱、性别或出生日期后会重算未手动修改项，保留已手动修改项。比例单位为百分比，称骨单位为两。</EditMessage>}
+    {result.manualEdits && <p className="non-ai-edit-message">已手动修改</p>}
+    <dl className="info-grid chart-data-grid">{dataRows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
+    <div className="chart-columns">{columns.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</div>
+    <section className="subsection" aria-label="大运"><h3>大运</h3>
+      <p className="luck-direction">排法：{editing ? <label className="non-ai-inline-field">大运方向<select aria-label="大运方向" value={direction} onChange={(event) => setFields({ ...fields, fortuneDirection: event.target.value as 'forward' | 'backward' })}><option value="forward">顺排</option><option value="backward">逆排</option></select></label> : result.manualEdits?.fields.fortuneDirection ? `${direction === 'forward' ? '顺排' : '逆排'}，已手动修改` : luckDirectionText(record.yearPillar?.[0], record.gender)}，自月柱{editing ? sourcePillar('month', '起排') : record.monthPillar}起每十年一柱</p>
+      <table className="luck-table"><thead><tr><th>大运</th><th>起运年</th><th>区间</th><th>交运日</th></tr></thead><tbody>{luckRows.map((g, index) => {
+        const ordinal = `大运第${cnCount(index + 1)}步`;
+        const patch = fields.greatFortunes?.[index as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8];
+        const input = (key: 'ganZhi' | 'startYear' | 'endYear' | 'onsetDate' | 'endDate', label: string) => scalar(ordinal + label, patch?.[key] ?? g[key] ?? '', (value) => setFields({ ...fields, greatFortunes: { ...fields.greatFortunes, [index]: { ...patch, [key]: key.endsWith('Year') ? Number(value) : value } } }), key.endsWith('Date') ? 'date' : key.endsWith('Year') ? 'number' : 'text');
+        return <tr key={index} className={g === current ? 'luck-current' : undefined}><td>{editing ? input('ganZhi', '干支') : g.ganZhi}{g === current ? '行' : ''}</td><td>{editing ? input('startYear', '起运年') : cnYear(g.startYear)}</td><td>{editing ? <>{input('startYear', '区间起点')}至{input('endYear', '结束年')}</> : `${cnYear(g.startYear)}至${cnYear(g.endYear)}`}</td><td>{editing ? <>{input('onsetDate', '交运日')}至{input('endDate', '结束交运日')}</> : g.onsetDate && g.endDate ? `${cnDate(g.onsetDate)}至${cnDate(g.endDate)}` : '暂无'}</td></tr>;
+      })}</tbody></table>
+    </section>
+    <section className="subsection" aria-label="生肖关系"><h3>生肖关系</h3>
+      <p>本命生肖：{editing ? zodiacInput('本命生肖') : zodiac}，年支{editing ? scalar('年支', source.yearPillar[1] ?? '', (value) => setSource({ ...source, yearPillar: source.yearPillar[0] + value })) : yb}</p>
+      <div>人际适配：我属{editing ? zodiacInput('人际适配本命生肖') : zodiac}，{(['sanHe', 'liuHe', 'chong', 'hai'] as const).map((key) => <span key={key}>{({ sanHe: '三合', liuHe: '六合', chong: '六冲', hai: '六害' })[key]}{editing ? <InlineList label={'人际适配' + ({ sanHe: '三合', liuHe: '六合', chong: '六冲', hai: '六害' })[key]} values={fields.zodiacCompatibility?.[key] ?? compatibility[key]} editing onChange={(value) => setFields({ ...fields, zodiacCompatibility: { ...fields.zodiacCompatibility, [key]: value } })} /> : compatibility[key].join('、')}，</span>)}生肖人际参考，非决断</div>
+      <ul>{relationLabels.map(([key, label]) => <li key={key}><strong>{label}</strong>：<InlineList label={'关系' + label} values={fields.relationships?.[key] ?? result.relationships[key]} editing={editing} onChange={(value) => setFields({ ...fields, relationships: { ...fields.relationships, [key]: value } })} /></li>)}</ul>
+    </section>
+  </section>;
 }
 /** 失败原因先抹掉凭据痕迹，再整句过中文闸门：模型报错常带英文句子、半角括号与斜杠，
  *  直接铺到界面上就违反「输出只能中文、不留算法痕迹」的正式版口径。闸门判空时退回一句
@@ -422,7 +486,9 @@ const keyMissingHint = isServerMode()
   ? '批断尚未可用：现在连着服务器，分析默认由服务器完成，而服务器那边还没配访问凭据，需要在服务器上配置，本客户端的设置页管不到它。想马上能用：点页面右上角设置，在任一服务里填写访问凭据并保存，分析就会改走本机通道。'
   : '批断尚未可用：请先点页面右上角设置，在任一服务里填写访问凭据并保存，再回来点批断分析。';
 
-function AIAnalysis({ record, showLocalSection, onUpdated }: { record: BaziRecord; showLocalSection: boolean; onUpdated: (next: BaziRecord) => void }) {
+function AIAnalysis({ record, showLocalSection, onUpdated, editing, onBusyChange }: { record: BaziRecord; showLocalSection: boolean; onUpdated: (next: BaziRecord) => void; editing: boolean; onBusyChange: (busy: boolean) => void }) {
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
   const localSystemLive = useSyncExternalStore(subscribeLocalSystem, isLocalSystemEnabled, isLocalSystemEnabled);
   const [progress, setProgress] = useState<{ done: number; total: number; label: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -460,7 +526,7 @@ function AIAnalysis({ record, showLocalSection, onUpdated }: { record: BaziRecor
     localSystemRef.current = { id: record.id, on: localSystemLive };
   }
   const localSystemOn = localSystemRef.current.on;
-  const markBusy = (v: boolean) => { busyRef.current = v; setBusy(v); };
+  const markBusy = (v: boolean) => { busyRef.current = v; setBusy(v); onBusyChange(v); };
   const cancelAutoRetry = () => { if (autoTimerRef.current) { clearTimeout(autoTimerRef.current); autoTimerRef.current = undefined; } setAutoWaiting(false); };
   // 与聊天面板同一个入口：不钻 prop，App 里监听窗口事件打开设置页。
   const openSettings = () => window.dispatchEvent(new Event('mingli:open-settings'));
@@ -577,6 +643,7 @@ const sanitizeCopyLine = (line: string): string => {
        **恒假**：用户在十二秒排期窗里点了停止之后，scheduleAutoRetry 照样重新排期、照样把整轮 113 口发出去 ——
        界面上还写着「已停止：已完成的任务已保存」，钱却在背后继续烧。
        这里必须直接读那次 abort 留下的信号(signalAbortedRef)，而不是读那个被顺手清掉的控制器。 */
+    if (editingRef.current) return;
     if (autoRetryCountRef.current >= 2 || signalAbortedRef.current) return;
     if (rec.aiError && !isRetryableFailure(rec.aiError)) return; // 密钥/配置类问题不盲试
     const n = autoRetryCountRef.current + 1;   // 只用于文案「这是第N次」；**不扣账**(见下面 #113 的说明)
@@ -600,6 +667,7 @@ const sanitizeCopyLine = (line: string): string => {
       /* 到点这句同样不能只看 controllerRef：定时器挂在空中的十二秒里，用户可能点了「取消自动重试」
          —— 那条路走 clearTimeout，这一句压根不会执行(case 3 已钉死)，所以这里不需要「取消意愿」标志；
          但若他点的是**立即停止**，控制器会被 abort 后置 null ⇒ 只有 signalAbortedRef 拦得住这次发起。 */
+      if (editingRef.current) return;
       if (!busyRef.current && !signalAbortedRef.current && !controllerRef.current?.signal.aborted) {
         /* 【缺陷 #113】扣账只能有这一处。原先这里与上面排期入口各 += 1，一笔自动重试记两次，
            而闸门是 `count >= 2` ⇒ 手动轮 + **一**次自动轮就把额度吃光：第二次自动轮跑完时 count 已是 2，
@@ -621,6 +689,7 @@ const sanitizeCopyLine = (line: string): string => {
     }, 12000);
   }
   async function requestAnalysis(base: BaziRecord = record, _auto = false) {
+    if (editingRef.current) return;
     if (busyRef.current) return;
     cancelAutoRetry();
     /* 手动点「批断分析」= 用户又给了这一回两次自动重试的额度(见用例「重试额度重新计」)，
@@ -630,6 +699,8 @@ const sanitizeCopyLine = (line: string): string => {
     // 而这一屏可能已经开着跨了月，继续沿用挂载时刻会把出窗的流月整批重发。
     horizonRef.current = new Date();
     const controller = new AbortController();
+    const expectedRevision = base.nonAiResult?.factsRevision ?? 0;
+    const saveProgress = (next: BaziRecord) => saveAiProgress(next, expectedRevision);
     controllerRef.current = controller;
     signalAbortedRef.current = false;   // 新一轮开跑：上一回的「立即停止」不再约束这一轮的自动重试
     const isCurrentRequest = () => controllerRef.current === controller && !controller.signal.aborted;
@@ -660,7 +731,7 @@ const sanitizeCopyLine = (line: string): string => {
           return;
         }
         setHint('语气已从' + cnCount(ran) + '调到' + cnCount(currentTone) + '：先清旧结果，按新语气重新生成，请稍候');
-        const cleared = await saveBaziRecord({ ...base, aiTasks: undefined, aiAnalysis: undefined, aiOverview: undefined, aiError: undefined, aiStatus: 'not_started' });
+        const cleared = await saveProgress({ ...base, aiTasks: undefined, aiAnalysis: undefined, aiOverview: undefined, aiError: undefined, aiStatus: 'not_started' });
         if (!isCurrentRequest()) return;
         onUpdated(cleared);
         base = cleared;
@@ -669,22 +740,27 @@ const sanitizeCopyLine = (line: string): string => {
       markBusy(true); enteredBusy = true;
       setHint(undefined); setCopyNote(undefined);
       setProgress({ done: 0, total: expectedIds.length + 2, label: '正在准备任务' });
-      const pending = await saveBaziRecord({ ...base, aiStatus: 'pending', aiError: undefined });   // 不再写 toneUsed：语气是本机的事，不进会同步的 record
+      const pending = await saveProgress({ ...base, aiStatus: 'pending', aiError: undefined });   // 不再写 toneUsed：语气是本机的事，不进会同步的 record
       if (!isCurrentRequest()) return;
+      if ((pending.nonAiResult?.factsRevision ?? 0) !== expectedRevision) { onUpdated(pending); return; }
       onUpdated(pending);
       let lastSnapshot: BaziRecord = pending;
       try {
         const finished = await orchestrateBaziAnalysis(pending, undefined, async (step) => {
+          if (!isCurrentRequest()) return;
           setProgress({ done: step.done, total: step.total, label: step.label });
           try {
-            const persisted = await saveBaziRecord(step.record);
+            const persisted = await saveProgress(step.record);
+            if ((persisted.nonAiResult?.factsRevision ?? 0) !== expectedRevision) { controller.abort(); onUpdated(persisted); return; }
+            if (!isCurrentRequest()) return;
             lastSnapshot = persisted;
             onUpdated(persisted);
           } catch { /* 单次进度落库失败不中断整体，最终结果会整体保存 */ }
         }, { signal: controller.signal, tone: currentTone, now: horizonRef.current, local: offline });
         if (!isCurrentRequest()) return;
-        const saved = await saveBaziRecord({ ...finished });   // 同上：不把语气写进同步记录
+        const saved = await saveProgress({ ...finished });   // 同上：不把语气写进同步记录
         if (!isCurrentRequest()) return;
+        if ((saved.nonAiResult?.factsRevision ?? 0) !== expectedRevision) { onUpdated(saved); return; }
         markUsedTone(record.id, currentTone);   // 本机记住：这条盘这次是用 currentTone 生成的
         lastSnapshot = saved;
         setProgress(null);
@@ -713,7 +789,7 @@ const sanitizeCopyLine = (line: string): string => {
         const aborted = controller.signal.aborted;
         const reason = error instanceof Error ? error.message : '请求未完成';
         try {
-          const partial = await saveBaziRecord({ ...lastSnapshot, aiStatus: 'failed', aiError: aborted ? ABORTED_MESSAGE : reason });
+          const partial = await saveProgress({ ...lastSnapshot, aiStatus: 'failed', aiError: aborted ? ABORTED_MESSAGE : reason });
           onUpdated(partial);
         } catch { /* 保存部分进度失败也不卡住界面 */ }
         setHint(aborted ? '已停止：已完成的任务已保存，可随时再点批断分析继续。' : '分析失败：' + safeAiError(reason));
@@ -739,7 +815,7 @@ const sanitizeCopyLine = (line: string): string => {
     // 写成 failed(而不是 not_started)才如实 —— 用户确实中止了一次分析，已完成的任务仍留在 aiTasks 里，
     // 再点批断就只补剩下的那些；同时把 aiError 换成「已停止」这句，别让自动重试去追一次用户主动的取消。
     const stopped = { ...record, aiStatus: 'failed' as const, aiError: ABORTED_MESSAGE };
-    void saveBaziRecord(stopped).then((saved) => onUpdated(saved)).catch(() => { /* 落库失败也先把界面解开来 */ });
+    void saveAiProgress(stopped, record.nonAiResult?.factsRevision ?? 0).then((saved) => onUpdated(saved)).catch(() => { /* 落库失败也先把界面解开来 */ });
     // 视图立刻跟上：onUpdated 要等一次异步落库才回来，而状态行读的是 record.aiStatus。
     // 只关灯不就地更新的话，这一屏会挂着「状态：分析中」空转一小会儿(实测缺陷 #101 的界面半边)。
     onUpdated(stopped);
@@ -751,7 +827,7 @@ const sanitizeCopyLine = (line: string): string => {
     setHint('已取消自动重试。需要时可手动点批断分析。');
   }
   async function clearResultsOnly() {
-    if (runningLocally()) return;   // 同按钮那道闸门：只看本机有没有在途请求，别被遗留的 pending 列锁住
+    if (editing || runningLocally()) return;   // 同按钮那道闸门：只看本机有没有在途请求，别被遗留的 pending 列锁住
     cancelAutoRetry();
     autoRetryCountRef.current = 0;
     /* 【缺陷 #114】清除结果是一次**全新的开始**(界面文案就写着「只清除不重算」，用户清完必然要再点批断)，
@@ -759,7 +835,7 @@ const sanitizeCopyLine = (line: string): string => {
        requestAnalysis 里那句 `if (!_auto)` 会把它清掉，但走「改语气自动清除」那条内部路径时
        signalAbortedRef 还留着 true ⇒ scheduleAutoRetry 恒早退，这条盘从此再也拿不到一次免费重试。 */
     signalAbortedRef.current = false;
-    const cleared = await saveBaziRecord({ ...record, aiTasks: undefined, aiAnalysis: undefined, aiOverview: undefined, aiError: undefined, aiStatus: 'not_started' });
+    const cleared = await saveAiProgress({ ...record, aiTasks: undefined, aiAnalysis: undefined, aiOverview: undefined, aiError: undefined, aiStatus: 'not_started' }, record.nonAiResult?.factsRevision ?? 0);
     // 缓存清没清掉要如实说：网页版的缓存在服务器库里，离线/未登录时根本清不动，
     // 谎报「已清除」会让人以为下次分析必然重算(其实仍会命中旧缓存)。
     let cacheNote = '';
@@ -775,10 +851,11 @@ const sanitizeCopyLine = (line: string): string => {
      *  record.aiStatus==='pending' 单独不够 —— 换设备同步来的、上次崩在半路的、
      *  或本页刚被别处打开过的盘，那一列会一直停在 pending，把按钮全锁死却什么都没在跑(实测缺陷 #101)。 */
   const runningLocally = () => busy || !!controllerRef.current;
+  useEffect(() => { if (editing) cancelAutoRetry(); }, [editing]);
   useEffect(() => () => { if (noteTimer.current) clearTimeout(noteTimer.current); if (autoTimerRef.current) clearTimeout(autoTimerRef.current); }, []);
 
   return <section className="detail-section" aria-labelledby="ai-title" aria-label="批断分析">
-    <div className="section-heading"><div><p className="eyebrow">叁、批断结果</p><h2 id="ai-title">批断分析</h2></div><div className="button-group"><button className="primary-button" type="button" onClick={() => void requestAnalysis()} disabled={runningLocally()}>{busy ? '分析中，请稍候' : '批断分析'}</button>{runningLocally() && <button className="danger-button stop-button" type="button" onClick={stopAnalysis}>立即停止</button>}<button className="text-button" type="button" onClick={() => void clearResultsOnly()} disabled={runningLocally()}>清除批断结果与缓存，只清除不重算</button></div></div>
+    <div className="section-heading"><div><p className="eyebrow">叁、批断结果</p><h2 id="ai-title">批断分析</h2></div><div className="button-group"><button className="primary-button" type="button" onClick={() => void requestAnalysis()} disabled={editing || runningLocally()}>{busy ? '分析中，请稍候' : editing ? '编辑中，暂不可批断' : '批断分析'}</button>{runningLocally() && <button className="danger-button stop-button" type="button" onClick={stopAnalysis}>立即停止</button>}<button className="text-button" type="button" onClick={() => void clearResultsOnly()} disabled={editing || runningLocally()}>清除批断结果与缓存，只清除不重算</button></div></div>
     <div className="tone-block" aria-label="分析语气">
       <span className="tone-label">措辞语气</span>
       <input id="tone-slider" type="range" min={0} max={100} step={5} value={tone} aria-valuetext={toneLabel(tone)} onChange={(event) => { const v = Number(event.target.value); setTone(v); saveRecordTone(record.id, v); }} />
@@ -845,7 +922,7 @@ const sanitizeCopyLine = (line: string): string => {
     </div>}
   </section>;
 }
-function LocalAnalysisSection({ record }: { record: BaziRecord }) {
+function LocalAnalysisSection({ record, editing }: { record: BaziRecord; editing: boolean }) {
   const [data, setData] = useState<{ lead: string; blocks: Array<{ title: string; text: string }> } | null>(null);
   const [note, setNote] = useState<string>();
   const [loading, setLoading] = useState(false);
@@ -885,7 +962,7 @@ function LocalAnalysisSection({ record }: { record: BaziRecord }) {
   const copyAll = async () => { if (data) { await copy([data.lead, ...data.blocks.map((b) => b.title + '\n' + b.text)].join('\n\n')); setNote('已复制本地批断'); } };
   return <section className="detail-section" aria-label="本地系统">
     <div className="section-heading"><div><p className="eyebrow">本机规则批断</p><h2>本地系统，本机规则引擎</h2></div>
-      <div className="button-group"><button className="primary-button" type="button" onClick={() => void run()} disabled={disabled || loading}>{disabled ? '先算排盘数据' : loading ? '加载引擎中' : '生成本地批断'}</button>{data && <button className="text-button" type="button" onClick={() => void copyAll()}>复制本地批断</button>}</div></div>
+      <div className="button-group"><button className="primary-button" type="button" onClick={() => void run()} disabled={editing || disabled || loading}>{disabled ? '先算排盘数据' : loading ? '加载引擎中' : '生成本地批断'}</button>{data && <button className="text-button" type="button" onClick={() => void copyAll()}>复制本地批断</button>}</div></div>
     <p className="local-note">不联网、不调用云端服务、不消耗额度：由本机规则引擎就上方排盘事实直接批断，含本命、全盘总结与后天调整，供参考与兜底；多因素权衡的综合细断请以批断分析为准。</p>
     {note && <p role="status">{sanitizeAnalysisText(note)}</p>}
     {data && <div className="long-text"><p className="scope-lead">{data.lead}</p>{data.blocks.map((block) => <div className="local-block" key={block.title}><p className="scope-lead">{block.title}</p><PointsView text={block.text} /></div>)}</div>}
@@ -894,15 +971,18 @@ function LocalAnalysisSection({ record }: { record: BaziRecord }) {
 export function PersonDetail({ personId, onBack, refreshKey = 0 }: PersonDetailProps) {
   const [record, setRecord] = useState<BaziRecord>();
   const [notice, setNotice] = useState<string>();
+  const [editing, setEditing] = useState(false);
+  const [sourceDraft, setSourceDraft] = useState<SourceDraft>();
+  const [fieldDraft, setFieldDraft] = useState<ManualNonAiFields>({});
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
   const readLocalVisible = () => localSystemUnlocked();
   const showLocalSection = useSyncExternalStore(subscribeLocalSystem, readLocalVisible, readLocalVisible);
-  // 【#151 可修改功能】「修正四柱」弹窗：把当前命盘的四柱预填进排盘那张表，改完直接重算。
-  const [editOpen, setEditOpen] = useState(false);
   // 删除要二次确认：手机误触一下就把整条命盘连同已生成的 AI 结果全清掉，且无法撤销。
   const [confirmDelete, setConfirmDelete] = useState(false);
   useEffect(() => {
     let active = true;
-    setRecord(undefined);
+    setRecord(undefined); setEditing(false); setSourceDraft(undefined); setFieldDraft({}); setAiBusy(false);
     void getBaziRecord(personId).then((next) => { if (active) setRecord(next); });
     return () => { active = false; };
   }, [personId, refreshKey]);
@@ -911,58 +991,38 @@ export function PersonDetail({ personId, onBack, refreshKey = 0 }: PersonDetailP
   if (!record) return <main className="person-detail placeholder-page"><header className="page-heading"><h1>人物详情</h1></header><p role="status">正在读取命盘，请稍候</p><button className="text-button" type="button" onClick={onBack}>返回记录</button></main>;
   const loadedRecord = record;
   const recordId = loadedRecord.id;
+  function beginEdit() { if (aiBusy || savingEdit) return; setSourceDraft(sourceDraftOf(loadedRecord)); setFieldDraft({}); setNotice(undefined); setEditing(true); }
+  function cancelEdit() { setEditing(false); setSourceDraft(undefined); setFieldDraft({}); setNotice('已取消修改'); }
+  async function saveEdit() {
+    if (!sourceDraft || aiBusy || savingEdit) return;
+    setSavingEdit(true); setNotice(undefined);
+    const original = sourceDraftOf(loadedRecord);
+    const source = Object.fromEntries(SOURCE_KEYS.filter((key) => sourceDraft[key] !== original[key]).map((key) => [key, sourceDraft[key]])) as NonAiEditRequest['source'];
+    const birthDay = sourceDraft.birthDay !== original.birthDay ? sourceDraft.birthDay : undefined;
+    try {
+      const updated = await saveNonAiEdits(recordId, { ...(Object.keys(source ?? {}).length ? { source } : {}), ...(birthDay !== undefined ? { source: { ...source, birthDay } } : {}), fields: fieldDraft });
+      setRecord(await refreshRecord(updated)); setEditing(false); setSourceDraft(undefined); setFieldDraft({});
+      setNotice(updated.nonAiResult?.factsRevision !== loadedRecord.nonAiResult?.factsRevision ? '修改已保存，相关批断结果已清除' : '修改已保存');
+    } catch (error) { setNotice(error instanceof Error ? error.message : '保存失败，请检查修改内容'); }
+    finally { setSavingEdit(false); }
+  }
+  async function resetNonAi() {
+    if (editing || aiBusy || savingEdit) return;
+    setSavingEdit(true); setNotice(undefined);
+    try { const updated = await recalculateBaziRecord(recordId); setRecord(await refreshRecord(updated)); setNotice('排盘数据已恢复自动计算结果'); }
+    catch (error) { setNotice(error instanceof Error ? error.message : '恢复自动计算失败'); }
+    finally { setSavingEdit(false); }
+  }
   async function remove() { await deleteBaziRecord(recordId); setConfirmDelete(false); onBack(); }
-  async function recalculateNonAi() {
-    setNotice(undefined);
-    try {
-      const { calculateNonAi } = await import('../chart/nonAiCalculator');
-      // 带上真实生日与原始出生时刻，换日与精确起运重算都锚回录入时刻。
-      const nonAiResult = calculateNonAi({ birthYear: loadedRecord.birthYear, birthMonth: loadedRecord.birthMonth, birthDay: loadedRecord.nonAiResult?.birthDay, birthTime: loadedRecord.nonAiResult?.birthTime, yearPillar: loadedRecord.yearPillar, monthPillar: loadedRecord.monthPillar, dayPillar: loadedRecord.dayPillar, hourPillar: loadedRecord.hourPillar }, loadedRecord.gender, loadedRecord.createdAt);
-      const updated = await saveBaziRecord({ ...loadedRecord, nonAiResult });
-      // 存回去的是瘦身版(pruneRecord)，返回那份的数组是这次现算的、按点击时刻排的。
-      // 直接用它会绕过读取侧的过期任务清洗，「AI 分析」的预期清单就会和界面上的
-      // 「④未来大运」不同源 —— 已走完的那一运被当成必填槽位，每次点都整轮重算。
-      setRecord(await refreshRecord(updated));
-      // 这句承诺的是「重算了排盘数据」，顺手把 AI 结果一起清了反而与提示不符(而且用户没要求)。
-      setNotice('排盘数据已重新计算');
-    } catch (error) {
-      setNotice(`排盘重算失败：${error instanceof Error ? error.message : '计算失败'}`);
-    }
-  }
-  /** 【#151】修正四柱：复用排盘引擎做校验，改完这一条链必须全量重排。
-   *  走 calculateNonAi(不是只替换 record 里的四柱字符串)有三个理由，都是实测出来的语义差别：
-   *  1) 合法性由引擎裁决 —— 阴阳不合、该月找不到日期、时柱与日干不合(五鼠遁)一律抛中文错，
-   *     界面原样显示；自己写校验会跟引擎口径分叉。
-   *  2) 派生事实跟着变 —— 五行/比例、日主、十神、藏干、纳音、十二长生、生肖关系全部按新柱重算。
-   *  3) 大运起法跟着变 —— forward 由**年干**定、步运从**月柱**往后/前数，起运与九步大运随之重排。
-   *  ⚠ 必须带上 nonAiResult.birthDay：换日盘(23 点后生)的日柱是次日干支，丢了这一栏三柱反查会把
-   *  公历/农历与起运锚到次日去(见 nonAiCalculator.ts:736 注释)。修正后仍保留它 —— 命主真实生日没变。
-   *  存的是 hydrateRecord 之前的完整对象：saveBaziRecord 内部会 pruneRecord 再落库，直接回写视图则带着
-   *  本次现算的数组，refreshRecord 再走一遍读取侧清洗，与「重新排盘」那条同源。 */
-  async function applyPillarEdit(pillars: Pick<BaziRecord, 'yearPillar' | 'monthPillar' | 'dayPillar' | 'hourPillar'>) {
-    setNotice(undefined);
-    try {
-      const { calculateNonAi } = await import('../chart/nonAiCalculator');
-      const unchanged = pillars.yearPillar === loadedRecord.yearPillar && pillars.monthPillar === loadedRecord.monthPillar && pillars.dayPillar === loadedRecord.dayPillar && pillars.hourPillar === loadedRecord.hourPillar;
-      const nonAiResult = calculateNonAi({ birthYear: loadedRecord.birthYear, birthMonth: loadedRecord.birthMonth, birthDay: loadedRecord.nonAiResult?.birthDay, birthTime: unchanged ? loadedRecord.nonAiResult?.birthTime : undefined, ...pillars }, loadedRecord.gender, loadedRecord.createdAt);
-      const updated = await saveBaziRecord({ ...loadedRecord, ...pillars, nonAiResult });
-      setRecord(await refreshRecord(updated));
-      setEditOpen(false);
-      setNotice('已按修正后的四柱重新排盘：五行、日主、十神、大运与起运均已重排');
-    } catch (error) {
-      // 引擎的拒绝必须留在弹窗里：错误在遮罩后面时手机上看不见，用户只会以为「点了保存没反应」。
-      setNotice(error instanceof Error ? error.message : '修正失败，命盘未改动');
-    }
-  }
   return <main className="person-detail">
     <header className="page-heading detail-top"><div><p className="eyebrow">本机命盘档案</p><h1>人物详情</h1><p className="page-description">{readableName(record.name)} 的八字记录与批断分析</p></div><div>{confirmDelete
       ? <div className="button-group" role="group" aria-label="确认删除"><span className="danger-hint">确定删除{readableName(record.name)}这个人吗？四柱、排盘数据与全部批断结果一并清除，无法撤销。</span><button className="danger-button" type="button" onClick={() => void remove()}>确认删除</button><button className="text-button" type="button" onClick={() => setConfirmDelete(false)}>取消</button></div>
       : <button className="text-button" type="button" onClick={onBack}>返回记录</button>}<button className="danger-button" type="button" onClick={() => setConfirmDelete(true)} hidden={confirmDelete}>删除数据</button></div></header>
-    {notice && <p role="status">{notice}</p>}
-    <BasicInfo record={record} /><NonAiAnalysis result={record.nonAiResult} record={record} /><div className="section-actions"><button className="text-button" type="button" onClick={() => void recalculateNonAi()}>重新排盘</button><button className="text-button" type="button" onClick={() => { setNotice(undefined); setEditOpen(true); }}>修正四柱</button></div>
-    {/* 弹窗必须挂在 PersonDetail 这一层：它显示的是**引擎拒绝那句**，而拒绝发生在提交之后。 */}
-    <BirthInputModal open={editOpen} onClose={() => { setNotice(undefined); setEditOpen(false); }} onSubmit={(pillars) => { void applyPillarEdit(pillars); }} error={notice && editOpen ? notice : undefined} initial={{ yearPillar: loadedRecord.yearPillar, monthPillar: loadedRecord.monthPillar, dayPillar: loadedRecord.dayPillar, hourPillar: loadedRecord.hourPillar }} submitLabel="保存修正" />
-    {showLocalSection && <LocalAnalysisSection record={record} />}
-    <AIAnalysis record={record} showLocalSection={showLocalSection} onUpdated={setRecord} />
+    {notice && <p role={editing ? 'alert' : 'status'}>{notice}</p>}
+    <BasicInfo record={record} editing={editing} source={sourceDraft ?? sourceDraftOf(record)} setSource={setSourceDraft} onEdit={beginEdit} onSave={() => void saveEdit()} onCancel={cancelEdit} busy={aiBusy || savingEdit} />
+    <NonAiAnalysis result={record.nonAiResult} record={record} editing={editing} source={sourceDraft ?? sourceDraftOf(record)} setSource={setSourceDraft} fields={fieldDraft} setFields={setFieldDraft} />
+    <div className="section-actions"><button className="text-button" type="button" onClick={() => void resetNonAi()} disabled={editing || aiBusy || savingEdit}>重新排盘</button><span>重新排盘会清除手动修改，并恢复自动计算结果。</span></div>
+    {showLocalSection && <LocalAnalysisSection key={`${record.id}-${record.nonAiResult?.factsRevision ?? 0}`} record={record} editing={editing || savingEdit} />}
+    <AIAnalysis record={record} showLocalSection={showLocalSection} onUpdated={setRecord} editing={editing || savingEdit} onBusyChange={setAiBusy} />
   </main>;
 }

@@ -230,3 +230,12 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .note-editor textarea { width: 100%; min-height: 80px; padding: 8px; }
 .note-toggle, .note-editor button { min-height: 32px; padding: 4px 10px; }
 .note-error { color: #a12b25; font-size: 13px; }
+
+/* 详情编辑沿用每个原值位置；窄屏中输入组允许换行。 */
+.non-ai-inline-field { display: inline-flex; flex-direction: column; gap: .25rem; max-width: 100%; margin: .2rem .4rem .2rem 0; font-size: .85rem; }
+.non-ai-inline-field input, .non-ai-inline-field select { min-width: 0; width: 9rem; max-width: 100%; padding: .4rem; }
+.non-ai-inline-list { min-width: 0; margin: .4rem 0; padding: .4rem; border: 1px solid var(--border, #d9d0bf); border-radius: .4rem; }
+.non-ai-inline-row { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; margin: .25rem 0; }
+.non-ai-inline-row input { min-width: 0; width: 7rem; max-width: 100%; padding: .35rem; }
+.non-ai-edit-message { color: var(--muted, #716658); font-size: .9rem; }
+.luck-table .non-ai-inline-field input { width: 8.5rem; }

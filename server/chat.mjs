@@ -20,6 +20,7 @@ import { natalFactsOf, providerOrder, providerKey, clampTone, toneInstruction, c
 /* 正文中文闸门：与浏览器端共用的唯一一份实现(features/chart/elements.ts 再导出同一模块)。 */
 import { FIELD_NAME_ZH, isChineseOnly, nonChineseKinds, enforceChinese, sanitizeChatText } from '../client/src/shared/chineseGate.ts';
 import { factLabels, sectionNames, stableJson, uncoveredTopics } from '../client/src/shared/chatRetrieval.ts';
+import { effectiveNonAiFacts } from '../client/src/shared/manualNonAi.ts';
 
 /* 「本月/今年」这类相对时间锚点按北京口径读，不用宿主时区的本地字段。
    服务端从未设置 process.env.TZ，于是读数取决于部署机：机器不在东八区时，
@@ -267,6 +268,7 @@ function topicSlice(explanation, labels, cap = 700) {
 
 /** 汇总本次提问需要的全部数据库证据。 */
 export function collectEvidence(db, record, plan, { tone = 80, periodFacts, providers = [] } = {}) {
+  if (record.nonAiResult) record = { ...record, nonAiResult: effectiveNonAiFacts(record.nonAiResult) };
   const tasks = record.aiTasks ? Object.values(record.aiTasks) : [];
   const wantTopics = Array.isArray(plan.topics) ? plan.topics : [];
   const evidence = {

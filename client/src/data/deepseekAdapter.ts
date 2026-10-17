@@ -4,6 +4,7 @@ import { getBrowserCredential, PROVIDER_LABEL, type AiProvider } from './aiSetti
 import { isServerMode, runTaskOnServer, ServerError } from './serverClient';
 import { countElements, sanitizeChatText } from '../features/chart/elements';
 import { cnCode } from '../shared/chineseReadAloud';
+import { effectiveNonAiFacts, effectiveElementFacts, effectiveTaskDecade, manualNatalFacts } from '../shared/manualNonAi';
 
 export type DeepSeekResult = { status: 'completed'; analysis: BaziAIAnalysis } | { status: 'not_configured' | 'failed'; error?: string };
 type SecureRunner = (record: BaziRecord, task?: BaziAnalysisTask, options?: AnalyzeOptions) => Promise<BaziTaskResult>;
@@ -85,7 +86,7 @@ const toTauriRecord = (record: BaziRecord) => ({ ...record,
 
 export function buildAiRequestPayload(record: BaziRecord, task?: BaziAnalysisTask) {
   const forecastRange = record.nonAiResult?.forecastRange ?? [];
-  const nonAiResult = record.nonAiResult ?? null;
+  const nonAiResult = record.nonAiResult ? effectiveNonAiFacts(record.nonAiResult) : null;
   return {
     model: 'deepseek-flash', reasoning_effort: 'low', forecastRange, forecastScopes: ['大运', '流年', '流月'], task,
     nonAiResult,
@@ -276,7 +277,7 @@ export function buildTaskPromptText(record: BaziRecord, kind: PromptTaskKind, ye
 
 /** natal 里跨通道必须同序的键：服务器多带了 gender/birthYear/lunarDate/elementRatio/naYin/
  *  twelveLongevity，两端只比「共有键的相对顺序」；这份清单与 promptSeams.mts 取样器同源。 */
-export const NATAL_SHARED_KEYS = ['pillars', 'dayMaster', 'zodiac', 'solarDate', 'elements', 'tenGods', 'hiddenStems', 'patternFacts', 'strengthScore', 'tiaohouFacts', 'luckStart', 'shenSha', 'relationships'];
+export const NATAL_SHARED_KEYS = ['pillars', 'dayMaster', 'zodiac', 'solarDate', 'elements', 'tenGods', 'hiddenStems', 'patternFacts', 'strengthScore', 'tiaohouFacts', 'luckStart', 'shenSha', 'relationships', 'tenGodDetails', 'chenggu', 'fortuneDirection', 'zodiacCompatibility'];
 
 /** 拆成「跨通道应逐字节相同」的几段：natal 标题/共有键顺序 + 任务指令 + 输出硬性要求 + 语气标题。
  *  供 prompt-parity 测试比对两端**真实拼出的正文**，而不是只比常量定义(常量抄对了、但拼装顺序
@@ -354,7 +355,7 @@ export async function browserDirect(record: BaziRecord, task?: BaziAnalysisTask,
 /** 按「提示词分段顺序」拼出某条任务的 user 正文。单独成函数是为了让测试能只拼装、不发请求，
  *  直接拿它与服务器侧 buildTaskPayload 的正文比对 —— 两条路径不同源时，同一命盘会给出不同口径。 */
 function assembleUserContent(record: BaziRecord, task?: BaziAnalysisTask, tone?: number) {
-  const nonAi = record.nonAiResult;
+  const nonAi = record.nonAiResult ? effectiveNonAiFacts(record.nonAiResult) : undefined;
   // 神煞压缩为「名称@柱位」：与服务器/桌面端同一口径(实测省约 89% 体积)
   const compactShenSha = (shenSha: NonAiChart['shenSha'] | undefined) => {
     if (!shenSha) return undefined;
@@ -381,12 +382,14 @@ function assembleUserContent(record: BaziRecord, task?: BaziAnalysisTask, tone?:
     return [...new Set(out)].sort();
   };
   const gzOf = (row: unknown): string => (row && typeof row === 'object' ? String((row as { ganZhi?: unknown }).ganZhi ?? '') : '');
+  const elementFacts = effectiveElementFacts(nonAi, countElements([record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar]));
+  const extras = manualNatalFacts(nonAi);
   const natal = {
     pillars: { year: record.yearPillar, month: record.monthPillar, day: record.dayPillar, hour: record.hourPillar },
     dayMaster: nonAi?.dayMaster, zodiac: nonAi?.zodiac, solarDate: nonAi?.solarDate,
     // 五行计数按四柱现算，不取库里的存量数字：存储可能来自旧口径引擎，
     // 让模型数到「木+1 水-1」的假配比，比不给这项更糟。
-    elements: countElements([record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar]).elements,
+    elements: elementFacts.elements, elementRatio: elementFacts.elementRatio,
     tenGods: nonAi?.tenGods, hiddenStems: nonAi?.hiddenStems,
     // 引擎算定的格局与旺衰：模型只解读不重判(与服务器/桌面端同口径)
     patternFacts: nonAi?.patternFacts, strengthScore: nonAi?.strengthScore,
@@ -395,6 +398,8 @@ function assembleUserContent(record: BaziRecord, task?: BaziAnalysisTask, tone?:
     tiaohouFacts: nonAi?.tiaohouFacts,
     luckStart: { ...(nonAi?.luckStart ?? {}), onsetDate: nonAi?.luckOnset ?? '' },
     shenSha: compactShenSha(nonAi?.shenSha), relationships: nonAi?.relationships,
+    tenGodDetails: extras.tenGodDetails, chenggu: extras.chenggu,
+    fortuneDirection: extras.fortuneDirection, zodiacCompatibility: extras.zodiacCompatibility,
   };
   // 存储是瘦身过的(流年/流月/大运数组落库即清空)，因此必须优先采用任务自带的内联行，
   // 否则离线直连会发出空的「本时段数据」——模型拿不到本期干支，只能凭空编。与服务器/桌面端口径一致。
@@ -405,7 +410,7 @@ function assembleUserContent(record: BaziRecord, task?: BaziAnalysisTask, tone?:
     if (task?.type !== 'decade') scope.age = y - record.birthYear;
     const annual = hasGz(task?.annual) ? task!.annual : (nonAi?.annualFortunes ?? []).find((row) => row.year === y);
     if (annual) { scope.annual = annual; scope.annualHits = summarizeHits(annual, gzOf(annual)); }
-    const decade = hasGz(task?.decade) ? task!.decade : (nonAi?.greatFortunes ?? []).find((row) => y >= row.startYear && y <= row.endYear);
+    const decade = effectiveTaskDecade(nonAi, y, task?.decade);
     if (decade) { scope.decade = decade; scope.decadeHits = summarizeHits(decade, gzOf(decade)); }
     if (task?.month !== undefined) {
       const monthly = hasGz(task?.monthly) ? task!.monthly : (nonAi?.monthlyFortunes ?? []).find((row) => row.year === y && row.month === task.month);

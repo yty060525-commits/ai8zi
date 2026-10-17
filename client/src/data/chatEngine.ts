@@ -19,6 +19,7 @@ import { isServerMode, serverFetch, ServerError } from './serverClient';
 import { chatDirect, toneInstructionText } from './deepseekAdapter';
 import { getBrowserCredential } from './aiSettings';
 import { countElements, sanitizeChatText } from '../features/chart/elements';
+import { effectiveNonAiFacts, effectiveElementFacts, manualNatalFacts } from '../shared/manualNonAi';
 /* 「本月/今年」这类相对时间锚点必须按北京口径读，不能用设备本地字段：机器时区不是东八区时，
    UTC 16:00–24:00 那段本地日期比北京早一天，「本月」会答成上个月、「今年」会答成去年。
    与详情页起运文案/大运表同一套收口(utils/date)，见 beijing-date-caliber.test.ts。 */
@@ -266,7 +267,7 @@ function summarizeHits(row: any, ownGanZhi: string): string[] {
 /** 时段运势事实：存储是瘦身的(大运/流年/流月数组落库时被清空)，所以记录必须先经 hydrateRecord
  *  重算再进来；否则这里三行查找恒为空，模型只剩一个年龄可引，问「某年某月」就答不出东西。 */
 export function buildPeriodFacts(record: BaziRecord, plan: ChatPlan): Record<string, unknown> | undefined {
-  const n = record.nonAiResult;
+  const n = record.nonAiResult ? effectiveNonAiFacts(record.nonAiResult) : undefined;
   const y = plan.year;
   if (!n || y === undefined) return undefined;
   const out: Record<string, unknown> = {};
@@ -335,19 +336,21 @@ function topicSlice(explanation: unknown, labels: string[], cap = 700): string {
 
 /** 本机离线通道证据组装(口径 = 服务器 collectEvidence，数据源 = 本机 SQLite/镜像库)。 */
 export function buildEvidence(record: BaziRecord, plan: ChatPlan): ChatEvidence {
-  const n = record.nonAiResult;
+  const n = record.nonAiResult ? effectiveNonAiFacts(record.nonAiResult) : undefined;
+  record = { ...record, nonAiResult: n };
   // 五行按四柱现算(与批量分析同一口径)：库里存量可能是旧口径算出的假配比
   const counted = countElements([record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar]);
   const natal: Record<string, unknown> = {
     gender: record.gender, birthYear: record.birthYear,
     pillars: { year: record.yearPillar, month: record.monthPillar, day: record.dayPillar, hour: record.hourPillar },
     solarDate: n?.solarDate, lunarDate: n?.lunarDate, zodiac: n?.zodiac, dayMaster: n?.dayMaster,
-    elements: counted.elements, elementRatio: counted.elementRatio, hiddenStems: n?.hiddenStems, tenGods: n?.tenGods,
+    ...effectiveElementFacts(n, counted), hiddenStems: n?.hiddenStems, tenGods: n?.tenGods,
     naYin: n?.naYin, twelveLongevity: n?.twelveLongevity,
     patternFacts: n?.patternFacts, strengthScore: n?.strengthScore,
     // 调候参考：与服务器/桌面端 natal 同源字段，令三通道聊天在本命/喜忌类问题上口径一致。
     tiaohouFacts: n?.tiaohouFacts,
     shenSha: compactShenSha(n?.shenSha), relationships: n?.relationships,
+    ...manualNatalFacts(n),
   };
   const evidence: ChatEvidence = {
     person: { id: record.id, name: record.name, gender: record.gender, birthYear: record.birthYear },

@@ -52,6 +52,8 @@ const DELIVERED: Array<{ label: string; file: string }> = [
   { label: '逐条点评存储', file: 'client/src/data/scopeNotes.ts' },
   { label: '本地批断引擎', file: 'client/src/data/localAnalysis.ts' },
   { label: '本地系统开关', file: 'client/src/data/localSystem.ts' },
+  { label: '非AI原位编辑控件', file: 'client/src/features/person/NonAiInlineEditor.tsx' },
+  { label: '人工有效事实逐叶契约', file: 'client/src/shared/manualNonAi.ts' },
 ];
 
 /** 当前 HEAD 的树里有哪些路径(不读工作副本：未提交的临时文件不算数)。 */
@@ -199,8 +201,8 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
     { task: '#150 详情页说出大运排法方向', file: 'client/src/features/person/PersonDetail.tsx', text: 'luckDirectionText' },
     /* 【#151 非 AI 侧**可修改**功能】用户能在详情页改四柱并让整张盘重排。
        特征串取函数名 applyPillarEdit(同上：不登记中文文案)，BirthInputModal 那条取新增的预填参数。 */
-    { task: '#151 详情页修正四柱走引擎重算', file: 'client/src/features/person/PersonDetail.tsx', text: 'applyPillarEdit' },
-    { task: '#151 弹窗支持预填当前命盘', file: 'client/src/features/chart/BirthInputModal.tsx', text: 'initialPillars' },
+    { task: '#151 详情页修正四柱走引擎重算', file: 'client/src/features/person/PersonDetail.tsx', text: 'saveNonAiEdits' },
+    { task: '#151 原位控件支持当前命盘草稿', file: 'client/src/features/person/PersonDetail.tsx', text: 'sourceDraftOf(loadedRecord)' },
     /* 【#152 构建期类型闸门收口】钉的是**声明文件里那行通配形**，因为它是唯一能生效的写法：
        兄弟位置的 ai 声明文件、按整条 specifier 写的 declare module 两种「直觉写法」实测都仍红两条 TS7016。
        这条串一旦不在树上(改名、换成那两种写法之一、或整份删掉)，tsc -b 立刻回到 3 条错误 ——

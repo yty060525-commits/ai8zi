@@ -2,7 +2,7 @@
 
    pillar-edit-recompute.test.ts 钉的是引擎语义与源码同源；那份全绿也仍可能
    「按钮没接上 / 提交后没落库 / 界面显示新柱但排盘数据还是旧的」。本文件走真实交互：
-   点「修正四柱」→ 弹窗里把日柱改成另一柱 → 点「保存修正」→ 读回 DOM 与存储。
+   点「编辑数据」→ 原位置修改日柱和时柱 → 点「保存修改」→ 读回 DOM 与存储。
 
    ⚠ 变异口径(每条都要单独跑，见文末)：
      M1 删掉 <BirthInputModal …initial=…/> ⇒ 找不到弹窗，红
@@ -16,7 +16,7 @@ import { PersonDetail } from '../features/person/PersonDetail';
 import { getBaziRecord, initializeMockSession, listBaziRecords, resetMockSession } from '../data/clientRepository';
 import { calculateNonAi, computePillarsFromDate } from '../features/chart/nonAiCalculator';
 import { cnCount } from '../shared/chineseReadAloud';
-import type { BaziRecord, Person, PersonDetailData } from '../types/domain';
+import type { BaziRecord, Person } from '../types/domain';
 
 const ID = 'edit-person';
 
@@ -69,28 +69,16 @@ async function pillarCell(): Promise<string[]> {
   const v = await cell('四柱');
   return v ? v.split('、') : [];
 }
-/** 只在某个容器(如弹窗)内找 role=alert：全局 findByRole 会撞 testing-library 的可见性过滤 ——
- *  主界面在 aria-modal 遮罩后是 inert，「保存修正」失败后那句就落在弹窗里，第一版按全局取反而查不到。 */
-async function alertIn(container: HTMLElement): Promise<string> {
-  try {
-    const el = await waitFor(() => { const a = within(container).getByRole('alert'); if (!a) throw new Error('no alert'); return a; }, { timeout: 2000 });
-    return el.textContent?.trim() ?? '';
-  } catch { return ''; }
-}
-
 /** 打开弹窗 → 把整组四柱换成目标命盘 → 提交。返回提交前后的日柱读数，供前后对比。 */
 async function editToTarget() {
   render(<PersonDetail personId={ID} onBack={vi.fn()} />);
   await screen.findByRole('heading', { name: '人物详情' });
   const before = (await pillarCell())[2];
-  fireEvent.click(screen.getByRole('button', { name: '修正四柱' }));
-  const dialog = await screen.findByRole('dialog');
-  // 弹窗里 input 顺序：0=八字整串，1..4=年/月/日/时柱(见 BirthInputModal 的 field-grid)
-  const inputs = [...dialog.querySelectorAll('input')] as HTMLInputElement[];
-  expect(inputs[3].value, '预填的第三栏不是日柱 ⇒ 顺序假设错了').toBe(PILLARS.dayPillar);
-  const next: Array<[number, string]> = [[1, TARGET.yearPillar], [2, TARGET.monthPillar], [3, TARGET.dayPillar], [4, TARGET.hourPillar]];
-  for (const [i, v] of next) fireEvent.change(inputs[i], { target: { value: v } });
-  fireEvent.click(screen.getByRole('button', { name: '保存修正' }));
+  fireEvent.click(screen.getByRole('button', { name: '编辑数据' }));
+  const dialog = await screen.findByRole('region', { name: '基础信息' });
+  expect(within(dialog).getByLabelText('日柱')).toHaveProperty('value', PILLARS.dayPillar);
+  for (const [label, value] of [['年柱', TARGET.yearPillar], ['月柱', TARGET.monthPillar], ['日柱', TARGET.dayPillar], ['时柱', TARGET.hourPillar]]) fireEvent.change(within(dialog).getByLabelText(label), { target: { value } });
+  fireEvent.click(screen.getByRole('button', { name: '保存修改' }));
   return { before, dialog };
 }
 
@@ -98,36 +86,33 @@ describe('#151 修正四柱：真实交互路径', () => {
   it('前提：入口按钮存在，且弹窗里的四柱预填成当前命盘', async () => {
     render(<PersonDetail personId={ID} onBack={vi.fn()} />);
     await screen.findByRole('heading', { name: '人物详情' });
-    fireEvent.click(screen.getByRole('button', { name: '修正四柱' }));
-    const dialog = await screen.findByRole('dialog');
-    const values = [...dialog.querySelectorAll('input')].map((i) => (i as HTMLInputElement).value);
-    // 整串栏 + 四柱栏：四柱那四个必须逐字等于当前命盘，否则用户是在盲改。
-    expect(values.slice(1)).toEqual([PILLARS.yearPillar, PILLARS.monthPillar, PILLARS.dayPillar, PILLARS.hourPillar]);
+    fireEvent.click(screen.getByRole('button', { name: '编辑数据' }));
+    const dialog = await screen.findByRole('region', { name: '基础信息' });
+    expect(['年柱', '月柱', '日柱', '时柱'].map((label) => (within(dialog).getByLabelText(label) as HTMLInputElement).value)).toEqual([PILLARS.yearPillar, PILLARS.monthPillar, PILLARS.dayPillar, PILLARS.hourPillar]);
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('详情预填后以 composition 修正整串，确认保存并重排到存储', async () => {
     render(<PersonDetail personId={ID} onBack={vi.fn()} />);
     await screen.findByRole('heading', { name: '人物详情' });
-    fireEvent.click(screen.getByRole('button', { name: '修正四柱' }));
-    const dialog = await screen.findByRole('dialog');
-    const inputs = [...dialog.querySelectorAll('input')] as HTMLInputElement[];
-    expect(inputs.slice(1).map((input) => input.value)).toEqual([PILLARS.yearPillar, PILLARS.monthPillar, PILLARS.dayPillar, PILLARS.hourPillar]);
-    const combined = inputs[0];
-    const target = TARGET.yearPillar + TARGET.monthPillar + TARGET.dayPillar + TARGET.hourPillar;
-    fireEvent.compositionStart(combined);
-    fireEvent.change(combined, { target: { value: target + 'p' } });
-    expect(combined.value).toBe(target + 'p');
-    fireEvent.compositionEnd(combined, { data: target });
-    fireEvent.change(combined, { target: { value: target } });
-    fireEvent.click(screen.getByRole('button', { name: '保存修正' }));
+    fireEvent.click(screen.getByRole('button', { name: '编辑数据' }));
+    const dialog = await screen.findByRole('region', { name: '基础信息' });
+    const input = within(dialog).getByLabelText('日柱') as HTMLInputElement;
+    fireEvent.compositionStart(input);
+    fireEvent.change(input, { target: { value: TARGET.dayPillar + 'p' } });
+    expect(input.value).toBe(TARGET.dayPillar + 'p');
+    fireEvent.compositionEnd(input, { data: TARGET.dayPillar });
+    fireEvent.change(input, { target: { value: TARGET.dayPillar } });
+    fireEvent.change(within(dialog).getByLabelText('时柱'), { target: { value: TARGET.hourPillar } });
+    fireEvent.click(screen.getByRole('button', { name: '保存修改' }));
     await waitFor(async () => expect((await getBaziRecord(ID))?.dayPillar).toBe(TARGET.dayPillar));
     expect((await getBaziRecord(ID))?.nonAiResult?.pillars.hour).toBe(TARGET.hourPillar);
     cleanup();
   });
 
   it('整组改柱并保存 ⇒ 四柱、五行、大运跟随重算且不单列日主', async () => {
-    const EXPECTED = calculateNonAi({ birthYear: 1984, birthMonth: 2, ...TARGET }, 'male');
-    const { dialog, before } = await editToTarget();
+    const EXPECTED = calculateNonAi({ birthYear: 1984, birthMonth: 2, birthDay: 6, ...TARGET }, 'male');
+    const { before } = await editToTarget();
     expect(before, '详情页没渲染出「四柱」那一格(或它不是四段)').not.toBe('');
     expect(TARGET.dayPillar).not.toBe(before);
     await waitFor(async () => expect((await pillarCell())[2]).toBe(TARGET.dayPillar));
@@ -172,23 +157,15 @@ describe('#151 修正四柱：真实交互路径', () => {
   it('非法修正被拒绝：留在弹窗里报错，命盘一个字都不改', async () => {
     render(<PersonDetail personId={ID} onBack={vi.fn()} />);
     await screen.findByRole('heading', { name: '人物详情' });
-    fireEvent.click(screen.getByRole('button', { name: '修正四柱' }));
-    const dialog = await screen.findByRole('dialog');
-    /* 走「八字整串」这一栏：cleanPair/阴阳拦网只在逐柱栏上生效，整串只过滤字符本身，
-       因此能把「时柱与日柱不合」这种**只有引擎才知道**的错送进去。
-       ⚠ 我第一版在日柱栏塞「甲丑」，被弹窗自己的 submit() 先拦下(BirthInputModal.tsx:45)，
-       根本没走到引擎 —— 报错文案分叉就是这么来的，不是产品缺陷。 */
-    const badHour = '甲子';   // 与当前日干不匹配的一柱(五鼠遁必不合)，由下面前提句当场证明
-    const combined = dialog.querySelectorAll('input')[0] as HTMLInputElement;
-    fireEvent.change(combined, { target: { value: PILLARS.yearPillar + PILLARS.monthPillar + PILLARS.dayPillar + badHour } });
-    fireEvent.click(within(dialog).getByRole('button', { name: '保存修正' }));
-    const alertText = await alertIn(dialog);
-    const alert = within(dialog).getByRole('alert');
-    expect(alertText, '弹窗里没有可读的报错').not.toBe('');
-    expect(alertText).toContain('时柱与出生日不合');
-    // 报错必须出现在遮罩之上(弹窗内)，手机上才看得见
-    expect(dialog.contains(alert)).toBe(true);
-    expect(await pillarCell()).toEqual([PILLARS.yearPillar, PILLARS.monthPillar, PILLARS.dayPillar, PILLARS.hourPillar]);
+    fireEvent.click(screen.getByRole('button', { name: '编辑数据' }));
+    const dialog = await screen.findByRole('region', { name: '基础信息' });
+    const badHour = '甲子';
+    fireEvent.change(within(dialog).getByLabelText('时柱'), { target: { value: badHour } });
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存修改' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('时柱与出生日不合');
+    expect((within(dialog).getByLabelText('时柱') as HTMLInputElement).value).toBe(badHour);
+    expect(await pillarCell()).not.toEqual([]);
     expect((await getBaziRecord(ID))?.hourPillar).toBe(PILLARS.hourPillar);
     cleanup();
   });
@@ -211,10 +188,11 @@ describe('#151 修正四柱：真实交互路径', () => {
 
     render(<PersonDetail personId={ID} onBack={vi.fn()} />);
     await screen.findByRole('heading', { name: '人物详情' });
-    fireEvent.click(screen.getByRole('button', { name: '修正四柱' }));
-    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(screen.getByRole('button', { name: '编辑数据' }));
+    await screen.findByRole('region', { name: '基础信息' });
     // 只动四柱以外的字段会牵动定位；这里四柱一字不改、直接保存，专测 birthDay 有没有传下去。
-    fireEvent.click(screen.getByRole('button', { name: '保存修正' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存修改' }));
+    await screen.findByRole('button', { name: '编辑数据' });
     await waitFor(async () => expect((await getBaziRecord(ID))?.nonAiResult?.solarDate).toBe('1984-02-06'));
     expect(await cell('公历日期')).toContain('一九八四年二月六日');
     expect((await getBaziRecord(ID))?.nonAiResult?.birthTime).toEqual(birthTime);

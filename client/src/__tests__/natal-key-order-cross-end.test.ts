@@ -59,14 +59,14 @@ describe('natal 键序跨端同源(#132)', () => {
   const adapter = src('../data/deepseekAdapter.ts');
 
   /* 起点锚：三端各写一条，命中数当场自证。 */
-  const RUST_START = /let natal = serde_json::json!\(\{/;
+  const RUST_START = /let (?:mut )?natal = serde_json::json!\(\{/;
   const SERVER_START = /export function natalFactsOf\(record\) \{[\s\S]*?\n  return \{/;
   const ADAPTER_START = /\n  const natal = \{/;
 
   it('尺子能打响：三端各读到一份非空键序，且共有键齐全', () => {
     const shared = /export const NATAL_SHARED_KEYS = \[([^\]]*)\]/.exec(adapter)?.[1]
       .split(',').map((s) => s.trim().replace(/'/g, '')) ?? [];
-    expect(shared.length, 'NATAL_SHARED_KEYS 读不到 ⇒ 前提失效').toBe(13);
+    expect(shared.length, '原十三键及四个人工有效事实键必须全部可读').toBe(17);
 
     const rKeys = keysOf(rust, RUST_START, 'lib.rs natal');
     const sKeys = keysOf(server, SERVER_START, 'server natalFactsOf');

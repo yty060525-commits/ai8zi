@@ -8,7 +8,7 @@ import { createApp } from '../app.mjs';
 let server;
 let base;
 const db = openDatabase(':memory:');
-const { handle } = createApp({ db, allowRegister: true });
+const { handle, setTaskCaller } = createApp({ db, allowRegister: true });
 
 before(async () => {
   server = http.createServer((req, res) => handle(req, res));
@@ -249,4 +249,46 @@ describe('全盘总结任务(服务器通道)', () => {
     assert.notEqual(kOverview, kBaseline);
     assert.ok(kOverview.includes('overview'));
   });
+});
+
+test('人工事实经真实HTTP与SQLite往返进入任务payload，编辑后不命中旧事实缓存', async () => {
+  const { saveProviderKey, buildTaskPayload, cacheKey, PROVIDERS } = await import('../ai.mjs');
+  const { getRecordById, readCache, setSetting } = await import('../db.mjs');
+  const login = await api('POST', 'auth/register', { body: { username: '人工事实接口', password: 'secret123' } });
+  const token = login.data.token;
+  const created = await api('POST', 'records', { token, body: recordBody() });
+  const id = created.data.record.id;
+  saveProviderKey(db, 'deepseek', '受控测试凭据');
+  const actual = [];
+  setTaskCaller(async (_db, record, task, tone) => {
+    const payload = buildTaskPayload(record, task, tone); actual.push(payload);
+    return { analysis: { explanation: actual.length === 1 ? '旧事实回答' : '人工事实回答' } };
+  });
+  const task = { type: 'baseline' };
+  try {
+    const old = await api('POST', `records/${id}/ai/task`, { token, body: { task } });
+    assert.equal(old.data.result.analysis.explanation, '旧事实回答');
+    const before = getRecordById(db, id);
+    const nonAiResult = { ...before.nonAiResult, factsRevision: 1,
+      manualEdits: { version: 1, fields: { elements: { 木: 9 }, zodiac: '兔', chenggu: { totalLiang: 10 }, fortuneDirection: 'backward', zodiacCompatibility: { liuHe: ['狗'] } } } };
+    const updated = await api('PUT', `records/${id}`, { token, body: { ...before, nonAiResult, aiStatus: 'not_started', aiTasks: undefined, aiAnalysis: undefined } });
+    assert.equal(updated.status, 200);
+    const reread = await api('GET', `records/${id}`, { token });
+    assert.deepEqual(reread.data.record.nonAiResult.manualEdits, nonAiResult.manualEdits);
+    assert.equal(reread.data.record.nonAiResult.factsRevision, 1);
+    const fresh = await api('POST', `records/${id}/ai/task`, { token, body: { task } });
+    assert.equal(fresh.data.result.analysis.explanation, '人工事实回答'); assert.equal(actual.length, 2);
+    const sent = actual[1];
+    assert.equal(sent.cacheEvidence.natal.elements.木, 9); assert.equal(sent.cacheEvidence.natal.zodiac, '兔');
+    assert.equal(sent.cacheEvidence.natal.chenggu.totalText, '十两');
+    assert.deepEqual(sent.cacheEvidence.natal.zodiacCompatibility.liuHe, ['狗']);
+    assert.ok(sent.messages[1].content.includes('十两'));
+    const saved = getRecordById(db, id);
+    const model = PROVIDERS.find((p) => p.id === 'deepseek').model;
+    const exact = cacheKey(saved, task, model);
+    assert.equal(JSON.parse(readCache(db, exact)).explanation, '人工事实回答');
+    setSetting(db, 'ai.key.deepseek', '');
+    const hit = await api('POST', `records/${id}/ai/task`, { token, body: { task } });
+    assert.equal(hit.data.result.analysis.explanation, '人工事实回答'); assert.equal(actual.length, 2);
+  } finally { setTaskCaller(undefined); setSetting(db, 'ai.key.deepseek', ''); }
 });

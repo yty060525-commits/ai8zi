@@ -24,6 +24,7 @@
 export const FIELD_NAME_ZH: Record<string, string> = {
   patternFacts: '格局事实', strengthScore: '旺衰评分', tiaohouFacts: '调候参考', dayMaster: '日主', elementRatio: '五行比例',
   elements: '五行', hiddenStems: '藏干', tenGods: '十神', naYin: '纳音', twelveLongevity: '十二长生',
+  tenGodDetails: '藏干十神', chenggu: '袁天罡称骨', fortuneDirection: '大运排法', zodiacCompatibility: '生肖人际适配',
   shenSha: '神煞', relationships: '刑冲合害', solarDate: '公历日期', lunarDate: '农历日期',
   zodiac: '生肖', gender: '性别', birthYear: '出生年', pillars: '四柱', natal: '命盘事实',
   periodFacts: '时段运势', analyses: '已算批断', missing: '数据缺口', plan: '检索计划',

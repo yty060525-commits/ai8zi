@@ -94,39 +94,25 @@ describe('#151 引擎语义：改四柱必须带动全部派生事实', () => {
   });
 });
 
-describe('#151 同源钉子：详情页的修正确实走引擎', () => {
+describe('#151 同源钉子：详情原位编辑统一走仓储重算', () => {
   const view = norm(readFileSync(rel('../features/person/PersonDetail.tsx'), 'utf8'));
-
-  it('applyPillarEdit 里调的是 calculateNonAi，不是只替换字符串', () => {
-    // 锚点唯一性当场自证：这两句在本文件各只出现一次，命中数≠1 说明锚点选坏了。
-    expect(count(view, 'async function applyPillarEdit')).toBe(1);
-    const start = view.indexOf('async function applyPillarEdit');
-    const body = view.slice(start, start + 2200);
-    expect(body, '修正四柱必须重新调用排盘引擎').toContain('calculateNonAi({');
-    expect(body, '必须把新的四柱展开进去，否则存的还是旧柱').toContain('...loadedRecord, ...pillars, nonAiResult');
-    expect(body, '必须带上真实出生日，否则换日盘重算会漂到次日').toContain('birthDay: loadedRecord.nonAiResult?.birthDay');
-    expect(body, '落库后要走 refreshRecord，与「重新排盘」同一读取侧清洗').toContain('refreshRecord(updated)');
+  const repository = norm(readFileSync(rel('../data/clientRepository.ts'), 'utf8'));
+  it('原位保存把源差异和人工叶子交给统一仓储入口，再走读取侧清洗', () => {
+    expect(view).toContain('await saveNonAiEdits(recordId,');
+    expect(view).toContain('sourceDraft[key] !== original[key]');
+    expect(view).toContain('fields: fieldDraft');
+    expect(view).toContain('refreshRecord(updated)');
   });
-
-  it('弹窗挂在 PersonDetail 层，且预填的是当前命盘四柱', () => {
-    expect(count(view, '<BirthInputModal')).toBe(1);
-    expect(view).toContain('initial={{ yearPillar: loadedRecord.yearPillar');
-    expect(view).toContain('submitLabel="保存修正"');
-    // 引擎的拒绝必须显示在弹窗内(遮罩后面看不见＝用户以为没反应)，这是 #143 那条老教训。
-    expect(view).toContain('error={notice && editOpen ? notice : undefined}');
+  it('仓储源变更调用引擎并保留真实生日与人工叶子', () => {
+    const body = repository.slice(repository.indexOf('export function saveNonAiEdits('), repository.indexOf('export function recalculateBaziRecord('));
+    expect(body).toContain('calculateNonAi({');
+    expect(body).toContain('birthDay');
+    expect(body).toContain('applyManualNonAi(chart, manual)');
   });
-
-  it('反向钉子：不存在「只改 record 四柱、不重算」的第二条路', () => {
-    // 把四柱写进 saveBaziRecord 的地方必须都带着 nonAiResult，否则界面会出现新柱配旧派生事实。
-    const saves = [...view.matchAll(/saveBaziRecord\(\{[^)]*\}/g)].map((m) => m[0]);
-    const pillarWrites = saves.filter((s) => /\.\.\.pillars/.test(s));
-    expect(pillarWrites.length, '应至少有一条修正写入').toBeGreaterThan(0);
-    for (const s of pillarWrites) expect(s, '写四柱却不写 nonAiResult ⇒ 界面自相矛盾').toContain('nonAiResult');
+  it('详情不再挂独立修正弹窗或直接快照写入', () => {
+    expect(view).not.toContain('<BirthInputModal');
+    expect(view).not.toContain('applyPillarEdit');
+    expect(view).not.toContain('saveBaziRecord(');
+    expect(view).toContain('InlineEditActions');
   });
 });
-
-function count(hay: string, needle: string): number {
-  let n = 0, i = hay.indexOf(needle);
-  while (i !== -1) { n += 1; i = hay.indexOf(needle, i + needle.length); }
-  return n;
-}

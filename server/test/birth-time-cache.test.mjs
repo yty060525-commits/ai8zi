@@ -1,7 +1,7 @@
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDatabase, writeCache, readCache, clearChartCache, insertRecord, getRecordById } from '../db.mjs';
-import { birthTimeSignature, cacheKey } from '../ai.mjs';
+import { birthTimeSignature, cacheKey, buildTaskPayload, runOneTask } from '../ai.mjs';
 import { chatCacheKey } from '../chat.mjs';
 
 const chart = { id: 'birth-time', userId: 'u', gender: 'male', birthYear: 1984, birthMonth: 2, yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午' };
@@ -51,5 +51,32 @@ describe('完整出生时刻缓存隔离', () => {
     assert.equal(birthTimeSignature({ year: 2000.0, month: 2.0, day: 29.0, hour: 0.0, minute: 0.0 }), '2000-02-29T00:00');
     assert.equal(birthTimeSignature({ year: 1900, month: 2, day: 29, hour: 0, minute: 0 }), '');
     assert.equal(birthTimeSignature({ year: '2000', month: 2, day: 29, hour: 0, minute: 0 }), '');
+  });
+
+  test('真实payload事实摘要隔离手改值和任务时段，忽略墙钟及未发送内容，并按盘清全部版本', async () => {
+    const first = { ...chart, nonAiResult: { solarDate: '1984-02-06', elements: { 木: 1 }, elementRatio: { 木: .125 },
+      annualFortunes: [{ year: 2027, ganZhi: '丁未' }], greatFortunes: [], monthlyFortunes: [],
+      manualEdits: { version: 1, fields: { elements: { 木: 9 }, zodiac: '兔', fortuneDirection: 'backward', chenggu: { totalLiang: 10 } } } } };
+    const task = { type: 'annual', year: 2027 };
+    const one = cacheKey(first, task, 'deepseek-flash');
+    const payload = buildTaskPayload(first, task);
+    assert.equal(payload.cacheEvidence.natal.elements.木, 9);
+    assert.equal(payload.cacheEvidence.natal.chenggu.totalText, '十两');
+    assert.equal(payload.cacheEvidence.natal.fortuneDirection, 'backward');
+    assert.ok(payload.messages[1].content.includes('十两'));
+    const reordered = { ...first, nonAiResult: { ...first.nonAiResult, currentTime: '2099', savedAt: 'now', factsRevision: 99,
+      manualEdits: { fields: { chenggu: { totalLiang: 10 }, fortuneDirection: 'backward', zodiac: '兔', elements: { 木: 9 } }, version: 1 },
+      annualFortunes: [...first.nonAiResult.annualFortunes, { year: 2028, ganZhi: '戊申' }] } };
+    assert.equal(cacheKey(reordered, task, 'deepseek-flash'), one);
+    const next = structuredClone(first); next.nonAiResult.manualEdits.fields.elements.木 = 8;
+    const two = cacheKey(next, task, 'deepseek-flash'); assert.notEqual(two, one);
+    assert.notEqual(cacheKey(first, { ...task, annual: { year: 2027, ganZhi: '庚申' } }, 'deepseek-flash'), one);
+    assert.equal(one.split('|').length, 14); assert.equal(one.split('|').at(-1), '');
+    writeCache(db, one, JSON.stringify({ explanation: '旧有效事实' }));
+    assert.equal((await runOneTask(db, first, task)).analysis.explanation, '旧有效事实');
+    assert.equal((await runOneTask(db, next, task)).status, 'not_configured');
+    writeCache(db, two, JSON.stringify({ explanation: '新有效事实' }));
+    assert.equal(clearChartCache(db, chart.gender, chart.yearPillar, chart.monthPillar, chart.dayPillar, chart.hourPillar), 2);
+    assert.equal(readCache(db, one), null); assert.equal(readCache(db, two), null);
   });
 });

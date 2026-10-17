@@ -296,8 +296,11 @@ export async function ensureLocalChartComplete<T extends { id?: string; nonAiRes
       birthYear: Number(r.birthYear), birthMonth: Number(r.birthMonth), birthDay: r.nonAiResult?.birthDay, birthTime: r.nonAiResult?.birthTime,
       yearPillar: r.yearPillar ?? '', monthPillar: r.monthPillar ?? '', dayPillar: r.dayPillar ?? '', hourPillar: r.hourPillar ?? '',
     }, r.gender === 'female' ? 'female' : 'male', anchor);
-    if (hasPeriodFacts(nonAiResult)) markLocalChartHydrated(record.id);
-    return { ...record, nonAiResult } as T;
+    const { applyManualNonAi } = await import('../shared/manualNonAi');
+    const previous = record.nonAiResult as import('../types/domain').NonAiChart | undefined;
+    const effective = applyManualNonAi({ ...nonAiResult, factsRevision: previous?.factsRevision }, previous?.manualEdits);
+    if (hasPeriodFacts(effective)) markLocalChartHydrated(record.id);
+    return { ...record, nonAiResult: effective } as T;
   } catch {
     return record;
   }

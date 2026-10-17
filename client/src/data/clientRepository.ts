@@ -1,4 +1,6 @@
-import type { ClientRepository, PersonDetailData, Person, BaziRecord } from '../types/domain';
+import type { ClientRepository, PersonDetailData, Person, BaziRecord, ManualNonAiFields, NonAiChart, NonAiEditRequest } from '../types/domain';
+import { applyManualNonAi, effectiveNonAiFacts, mergeManualNonAiEdits, validNonAiDate, validateManualNonAiFields } from '../shared/manualNonAi';
+import { stableJson } from '../shared/chatRetrieval';
 import { invoke } from '@tauri-apps/api/core';
 import { apiAdmin, apiRecords, getServerSession, isServerMode } from './serverClient';
 import { sqlMirror } from './offlineSql';
@@ -305,10 +307,10 @@ export function __resetSyncStateForTests(): void {
 export function pruneRecord(record: BaziRecord): BaziRecord {
   const n = record.nonAiResult;
   if (!n) return record;
-  return { ...record, nonAiResult: { ...n, greatFortunes: [], annualFortunes: [], monthlyFortunes: [] } };
+  return { ...record, nonAiResult: { ...n, greatFortunes: n.manualEdits?.fields.greatFortunes ? n.greatFortunes : [], annualFortunes: [], monthlyFortunes: [] } };
 }
 function isPruned(nonAi: BaziRecord['nonAiResult']): boolean {
-  return !!nonAi && Array.isArray(nonAi.greatFortunes) && nonAi.greatFortunes.length === 0
+  return !!nonAi && Array.isArray(nonAi.greatFortunes) && (nonAi.greatFortunes.length === 0 || !!nonAi.manualEdits?.fields.greatFortunes)
     && Array.isArray(nonAi.annualFortunes) && nonAi.annualFortunes.length === 0
     && Array.isArray(nonAi.monthlyFortunes) && nonAi.monthlyFortunes.length === 0;
 }
@@ -320,7 +322,7 @@ export function repairElementCounts(record: BaziRecord): BaziRecord {
   const pillars = [record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar];
   if (!pillars.every((p) => typeof p === 'string' && p.length === 2)) return record;
   const { elements, elementRatio } = countElements(pillars);
-  return { ...record, nonAiResult: { ...n, elements, elementRatio, elementRuleVersion: ELEMENT_RULE_VERSION } };
+  return { ...record, nonAiResult: applyManualNonAi({ ...n, elements, elementRatio, elementRuleVersion: ELEMENT_RULE_VERSION }, n.manualEdits) };
 }
 /** 存量任务的时段若已不在本轮窗口内(如去年排的大运段、去年的流月)，就不该再顶着一句
  *  「从今天起 · 未来十二个月」摆出多年前的条目。只在带完整排盘数据时做：存储里的 nonAiResult
@@ -380,10 +382,16 @@ async function queuePruneWrite(record: BaziRecord): Promise<void> {
   // 本地 + 服务器都要收到这一份。导出的 saveBaziRecord 用不了：它会再 hydrate →
   // 再判定过期 → 再回写，自己转圈；而直接调 baziRepository.saveBaziRecord 又只写本机，
   // 服务器上仍留着上一年的时段，换一台设备一同步就「复活」。所以这里复用它的推送半边。
-  await baziRepository.saveBaziRecord(pruneRecord(record)).catch(() => { /* 回写失败下次读取再试 */ });
+  let persisted = false;
+  await withFactWrite(record.id, async () => {
+    const current = await baziRepository.getBaziRecord(record.id);
+    if ((current?.nonAiResult?.factsRevision ?? 0) !== (record.nonAiResult?.factsRevision ?? 0)) return;
+    await baziRepository.saveBaziRecord(pruneRecord(record)).catch(() => { /* 回写失败下次读取再试 */ });
+    persisted = true;
+  });
   recentlyPruned.delete(record.id);
   // 推送单独兜住：uploadRecord 内部已 catch，走到这里只是保险
-  if (serverActive() || (isTauri && isServerMode())) await pushRemote(record);
+  if (persisted && (serverActive() || (isTauri && isServerMode()))) await pushRemote(record);
 }
 
 /** 等出所有在途的清洗回写(含推送)结束 —— 供测试断言，界面路径不需要。 */
@@ -409,7 +417,7 @@ export async function hydrateRecord(record: BaziRecord): Promise<BaziRecord> {
 
 /** 批量还原：历法库只要动态导入一次。 */
 async function hydrateRecords(records: BaziRecord[]): Promise<BaziRecord[]> {
-  const fixed = await Promise.all(records.map(async (record) => stripStaleLocalAnalysis(repairElementCounts(record))));
+  const fixed = await Promise.all(records.map(async (record) => stripStaleLocalAnalysis(repairElementCounts(record.nonAiResult ? { ...record, nonAiResult: effectiveNonAiFacts(record.nonAiResult) } : record))));
   const needs = fixed.filter((record) => isPruned(record.nonAiResult) && canRecompute(record));
   if (!needs.length) return fixed;
   let calculateNonAi: typeof import('../features/chart/nonAiCalculator').calculateNonAi;
@@ -440,7 +448,7 @@ async function hydrateRecords(records: BaziRecord[]): Promise<BaziRecord[]> {
   }));
   return fixed.map((record, i) => {
     const full = charts[i];
-    return full ? pruneOnRead({ ...record, nonAiResult: full }) : record;
+    return full ? pruneOnRead({ ...record, nonAiResult: applyManualNonAi({ ...full, factsRevision: record.nonAiResult?.factsRevision }, record.nonAiResult?.manualEdits) }) : record;
   });
 }
 
@@ -563,6 +571,10 @@ const fromRemote = (record: BaziRecord, dirty: Set<string>): BaziRecord => {
   // 还在待推送名单里 = 那次改动还没推上去，服务器那份必然是旧版，整条沿用本机。
   // 补推就在下一轮做，推的是这一份完整值；中途不能先把它写成残缺行(见 pullAndMergeLocal)。
   if (dirty.has(local.id)) return local;
+  const remoteRevision = record.nonAiResult?.factsRevision ?? 0;
+  const localRevision = local.nonAiResult?.factsRevision ?? 0;
+  if (remoteRevision !== localRevision) return remoteRevision > localRevision ? record : local;
+  if (remoteRevision > 0 && factIdentity(pruneRecord(record)) !== factIdentity(pruneRecord(local))) return record;
   if (fpOf(record) !== fpOf(local) || record.name !== local.name) return record;
   // 只有这几样是「本机可能比服务器新」的：AI 正文与语气由用户操作产生，而产生它的同一次保存
   // 必定已把新值推上去(saveBaziRecord 先落库再推送)，所以另一台设备不可能拿着更新的这类数据。
@@ -580,14 +592,18 @@ const fromRemote = (record: BaziRecord, dirty: Set<string>): BaziRecord => {
 };
 
 /** 保存成功后推送到服务器(失败则本机保留并标 dirty，稍后自动补推)。 */
-async function pushRemote(record: BaziRecord): Promise<void> {
-  if (!serverActive()) return;
-  try {
-    if (await uploadRecord(record)) unmarkDirty(record.id);
-    else markDirty(record.id); // 推送失败：留待同步标记，下轮补推
-  } catch {
-    markDirty(record.id);
-  }
+const remotePushes = new Map<string, Promise<void>>();
+function pushRemote(record: BaziRecord): Promise<void> {
+  const pushed = (remotePushes.get(record.id) ?? Promise.resolve()).catch(() => undefined).then(async () => {
+    if (!serverActive()) return;
+    try {
+      if (await uploadRecord(record)) unmarkDirty(record.id);
+      else markDirty(record.id);
+    } catch { markDirty(record.id); }
+  });
+  remotePushes.set(record.id, pushed);
+  void pushed.finally(() => { if (remotePushes.get(record.id) === pushed) remotePushes.delete(record.id); }).catch(() => undefined);
+  return pushed;
 }
 
 /** 把当前内存视图整体落到存储层，让下一次 listBaziRecords 读到的就是这一份。
@@ -614,8 +630,8 @@ async function saveToStorage(record: BaziRecord): Promise<void> {
  *  产品代码维护；只写存储的话这条盘「存下来了但这一轮看不见」——实测：新建一条盘、推送又没通，
  *  紧接着读列表就是空的，界面显示「暂无记录」，用户以为数据丢了。
  *  端口自己就读写视图(mirrorsView，内存库那条)时不再 push，否则同一条盘在视图里出现两次。 */
-async function saveLocalRecord(record: BaziRecord): Promise<BaziRecord> {
-  const stored = await baziRepository.saveBaziRecord(record).catch(() => record);
+async function saveLocalRecord(record: BaziRecord, strict = false): Promise<BaziRecord> {
+  const stored = await baziRepository.saveBaziRecord(record).catch((error) => { if (strict) throw error; return record; });
   if (baziRepository.mirrorsView?.()) return stored;
   const i = baziRecords.findIndex((x) => x.id === record.id);
   if (i >= 0) baziRecords[i] = structuredClone(record); else baziRecords.push(structuredClone(record));
@@ -861,6 +877,106 @@ export const saveBaziRecord = async (record: Omit<BaziRecord, 'id' | 'aiStatus'>
   }
   return full;
 };
+// Editing and AI progress share a per-record write queue: a late AI snapshot cannot race a fact save.
+const factWrites = new Map<string, Promise<unknown>>();
+function withFactWrite<T>(id: string, write: () => Promise<T>): Promise<T> {
+  const result = (factWrites.get(id) ?? Promise.resolve()).catch(() => undefined).then(write);
+  factWrites.set(id, result);
+  void result.finally(() => { if (factWrites.get(id) === result) factWrites.delete(id); }).catch(() => undefined);
+  return result;
+}
+async function currentForEdit(id: string): Promise<BaziRecord> {
+  const record = await baziRepository.getBaziRecord(id);
+  if (!record) throw new Error('命盘不存在，请刷新后重试');
+  return hydrateRecord(record);
+}
+async function persistFactEdit(record: BaziRecord): Promise<BaziRecord> {
+  const stored = await saveLocalRecord(pruneRecord(record), true);
+  const full = await hydrateRecord(stored);
+  if (serverActive() || (isTauri && isServerMode())) trackPush(pushRemote(full));
+  return full;
+}
+function factIdentity(record: BaziRecord): string {
+  const { currentTime: _now, forecastRange: _range, annualFortunes: _annual, monthlyFortunes: _monthly, manualEdits: _edits, factsRevision: _revision, ...facts } = record.nonAiResult ?? {};
+  return stableJson({ gender: record.gender, birthYear: record.birthYear, birthMonth: record.birthMonth, yearPillar: record.yearPillar, monthPillar: record.monthPillar, dayPillar: record.dayPillar, hourPillar: record.hourPillar, facts });
+}
+const clearAiFacts = (record: BaziRecord): BaziRecord => ({ ...record, aiStatus: 'not_started', aiTasks: undefined, aiAnalysis: undefined, aiOverview: undefined, aiError: undefined });
+function changedLeaves(current: unknown, patch: unknown): unknown {
+  if (Array.isArray(patch) || patch === null || typeof patch !== 'object') return stableJson(current) === stableJson(patch) ? undefined : patch;
+  const next: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    const changed = changedLeaves(current && typeof current === 'object' ? (current as Record<string, unknown>)[key] : undefined, value);
+    if (changed !== undefined) next[key] = changed;
+  }
+  return Object.keys(next).length ? next : undefined;
+}
+function editableFields(chart: NonAiChart): ManualNonAiFields {
+  const columns = <T,>(values: T[] = []) => ({ year: values[0], month: values[1], day: values[2], hour: values[3] });
+  return { elements: chart.elements, elementRatio: chart.elementRatio, hiddenStems: columns(chart.hiddenStems), tenGods: columns(chart.tenGods), naYin: columns(chart.naYin), twelveLongevity: columns(chart.twelveLongevity), tenGodDetails: { hidden: columns(chart.tenGodDetails?.hidden) }, luckStart: chart.luckStart ?? undefined, luckOnset: chart.luckOnset, chenggu: chart.chenggu, greatFortunes: Object.fromEntries((chart.greatFortunes ?? []).map((row, index) => [index, row])), relationships: chart.relationships, zodiac: chart.zodiac, zodiacCompatibility: chart.zodiacCompatibility, fortuneDirection: chart.fortuneDirection };
+}
+function validateEffectiveEdit(chart: NonAiChart, fields: ManualNonAiFields): void {
+  if (fields.elementRatio) {
+    const sum = Object.values(chart.elementRatio).reduce((a, b) => a + b, 0);
+    if (Math.abs(sum) > 1e-8 && Math.abs(sum - 1) > 1e-8) throw new Error('五行比例合计须为百分之百或全部为零');
+  }
+  if (fields.greatFortunes) {
+    const rows = chart.greatFortunes;
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i]; const previous = rows[i - 1];
+      if (row.startYear > row.endYear || (row.onsetDate && row.endDate && row.onsetDate > row.endDate)
+        || (previous && (previous.endYear >= row.startYear || (previous.endDate && row.onsetDate && previous.endDate >= row.onsetDate)))) throw new Error('大运起止区间须有序且不能重叠');
+    }
+  }
+}
+export function saveNonAiEdits(recordId: string, edits: NonAiEditRequest): Promise<BaziRecord> {
+  return withFactWrite(recordId, async () => {
+    const old = await currentForEdit(recordId);
+    const source = edits.source ?? {};
+    const allowed = ['name', 'gender', 'birthYear', 'birthMonth', 'birthDay', 'yearPillar', 'monthPillar', 'dayPillar', 'hourPillar'];
+    if (Object.keys(source).some((key) => !allowed.includes(key))) throw new Error('包含不支持修改的源字段');
+    const { birthDay: _sourceDay, ...recordSource } = source;
+    const candidate = { ...old, ...recordSource, name: source.name === undefined ? old.name : source.name.trim() };
+    if (!candidate.name || !['male', 'female'].includes(candidate.gender) || !Number.isInteger(candidate.birthYear) || candidate.birthYear < 1 || candidate.birthYear > 9999 || !Number.isInteger(candidate.birthMonth) || candidate.birthMonth < 1 || candidate.birthMonth > 12) throw new Error('姓名、性别或出生年月无效');
+    const birthDay = source.birthDay ?? old.nonAiResult?.birthDay;
+    if (birthDay !== undefined && (!Number.isInteger(birthDay) || !validNonAiDate(`${String(candidate.birthYear).padStart(4, '0')}-${String(candidate.birthMonth).padStart(2, '0')}-${String(birthDay).padStart(2, '0')}`))) throw new Error('出生日期无效');
+    const check = validateManualNonAiFields(edits.fields ?? {});
+    if (!check.valid) throw new Error(check.errors.join('；'));
+    const fields = (changedLeaves(old.nonAiResult ? editableFields(old.nonAiResult) : {}, edits.fields ?? {}) ?? {}) as ManualNonAiFields;
+    const sourceChanged = ['gender', 'birthYear', 'birthMonth', 'yearPillar', 'monthPillar', 'dayPillar', 'hourPillar'].some((key) => candidate[key as keyof BaziRecord] !== old[key as keyof BaziRecord]) || birthDay !== old.nonAiResult?.birthDay;
+    const dateOrPillarsChanged = ['birthYear', 'birthMonth', 'yearPillar', 'monthPillar', 'dayPillar', 'hourPillar'].some((key) => candidate[key as keyof BaziRecord] !== old[key as keyof BaziRecord]) || birthDay !== old.nonAiResult?.birthDay;
+    let chart = old.nonAiResult;
+    if (sourceChanged || !chart) {
+      const { calculateNonAi } = await import('../features/chart/nonAiCalculator');
+      chart = calculateNonAi({ birthYear: candidate.birthYear, birthMonth: candidate.birthMonth, birthDay, birthTime: dateOrPillarsChanged ? undefined : old.nonAiResult?.birthTime, yearPillar: candidate.yearPillar, monthPillar: candidate.monthPillar, dayPillar: candidate.dayPillar, hourPillar: candidate.hourPillar }, candidate.gender, new Date().toISOString());
+    }
+    const manual = Object.keys(fields).length ? mergeManualNonAiEdits(old.nonAiResult?.manualEdits, fields) : old.nonAiResult?.manualEdits;
+    chart = applyManualNonAi(chart, manual);
+    validateEffectiveEdit(chart, manual?.fields ?? {});
+    let next: BaziRecord = { ...candidate, nonAiResult: { ...chart, factsRevision: old.nonAiResult?.factsRevision } };
+    const changed = factIdentity(old) !== factIdentity(next);
+    if (changed) next = clearAiFacts({ ...next, nonAiResult: { ...next.nonAiResult!, factsRevision: (old.nonAiResult?.factsRevision ?? 0) + 1 } });
+    if (!changed && candidate.name === old.name) return old;
+    return persistFactEdit(next);
+  });
+}
+export function recalculateBaziRecord(recordId: string): Promise<BaziRecord> {
+  return withFactWrite(recordId, async () => {
+    const old = await currentForEdit(recordId);
+    const { calculateNonAi } = await import('../features/chart/nonAiCalculator');
+    const chart = calculateNonAi({ birthYear: old.birthYear, birthMonth: old.birthMonth, birthDay: old.nonAiResult?.birthDay, birthTime: old.nonAiResult?.birthTime, yearPillar: old.yearPillar, monthPillar: old.monthPillar, dayPillar: old.dayPillar, hourPillar: old.hourPillar }, old.gender, new Date().toISOString());
+    let next: BaziRecord = { ...old, nonAiResult: { ...chart, factsRevision: old.nonAiResult?.factsRevision } };
+    if (factIdentity(next) !== factIdentity(old)) next = clearAiFacts({ ...next, nonAiResult: { ...chart, factsRevision: (old.nonAiResult?.factsRevision ?? 0) + 1 } });
+    return persistFactEdit(next);
+  });
+}
+export function saveAiProgress(record: BaziRecord, expectedFactsRevision: number): Promise<BaziRecord> {
+  return withFactWrite(record.id, async () => {
+    const current = await currentForEdit(record.id);
+    if ((current.nonAiResult?.factsRevision ?? 0) !== expectedFactsRevision) return current;
+    const { aiTasks, aiAnalysis, aiOverview, aiStatus, aiError } = record;
+    return persistFactEdit({ ...current, aiTasks, aiAnalysis, aiOverview, aiStatus, aiError });
+  });
+}
 export const listBaziRecords = async (): Promise<BaziRecord[]> => {
   await pullAndMergeLocal();
   // 列表也要校正五行计数：聊天证据直接读列表记录，不走 hydrate(避免为读数拖入历法库)。
