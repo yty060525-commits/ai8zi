@@ -13,10 +13,16 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../../../');
 const SCAN_SCRIPT = resolve(repo, 'scripts', 'beijing-caliber-scan.cjs');
 const PERSON_DETAIL = resolve(repo, 'client', 'src', 'features', 'person', 'PersonDetail.tsx');
+const CALCULATOR = 'client/src/features/chart/nonAiCalculator.ts';
+type ScanEntry = { file: string; line: number; text: string };
+const { scanSource } = createRequire(import.meta.url)(SCAN_SCRIPT) as {
+  scanSource: (file: string, code: string) => Record<'routed' | 'neutral' | 'uncovered', ScanEntry[]>;
+};
 
 /** 跑一次扫描并解析 stdout 里的计数行。 */
 function runScan() {
@@ -35,6 +41,39 @@ function runScan() {
 }
 
 describe('北京口径全空间枚举扫描', () => {
+  it('新增历法接收者由 Solar/EightChar 来源识别，不依赖任意变量名白名单', () => {
+    const found = scanSource(CALCULATOR, readFileSync(resolve(repo, CALCULATOR), 'utf8'));
+    expect(found.uncovered).toEqual([]);
+    expect(found.neutral.some((entry) => entry.text.includes('calendarEight.getMonth()'))).toBe(true);
+    expect(found.neutral.some((entry) => entry.text.includes('luckSolar.getMonth()'))).toBe(true);
+  });
+
+  it.each(['calendarEight', 'luckSolar'])('同名 %s 若来自原生 Date，仍报告本地字段读取', (name) => {
+    const original = readFileSync(resolve(repo, CALCULATOR), 'utf8');
+    const definition = new RegExp('const ' + name + '\\s*=[^;]+;');
+    expect(original.match(definition)).toBeTruthy();
+    const mutant = original.replace(definition, `const ${name} = new Date();`);
+    const found = scanSource(CALCULATOR, mutant);
+    expect(found.uncovered.some((entry) => entry.text.includes(`${name}.getMonth()`))).toBe(true);
+  });
+
+  it.each(['calendarEight', 'luckSolar'])('同名 Date 参数 %s 不能继承外层历法对象的豁免', (name) => {
+    const original = readFileSync(resolve(repo, CALCULATOR), 'utf8');
+    const shadow = `function probe(${name}: Date) { return ${name}.getMonth(); }`;
+    const found = scanSource(CALCULATOR, original + '\n' + shadow);
+    expect(found.uncovered.some((entry) => entry.text === shadow)).toBe(true);
+  });
+
+  it('Solar 三元分支不能掩盖原生 Date 回退，同一行混合读取也不能被放行', () => {
+    const original = readFileSync(resolve(repo, CALCULATOR), 'utf8');
+    const candidate = /candidate = Solar\.fromYmdHms\([^;]+;/;
+    expect(original.match(candidate)).toBeTruthy();
+    const mutant = original.replace(candidate, 'candidate = new Date();');
+    expect(scanSource(CALCULATOR, mutant).uncovered.some((entry) => entry.text.includes('luckSolar.getMonth()'))).toBe(true);
+    const mixed = original + '\nconst mixed = calendarEight.getMonth() + new Date().getMonth();';
+    expect(scanSource(CALCULATOR, mixed).uncovered.some((entry) => entry.text.startsWith('const mixed'))).toBe(true);
+  });
+
   it('基线：uncovered 必须为 0', () => {
     const r = runScan();
     expect(r.uncovered, '扫描发现未覆盖的本地字段读取:\n' + r.stdout).toBe(0);

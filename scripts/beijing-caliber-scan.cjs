@@ -87,13 +87,54 @@ function isNeutral(relPath, line) {
   });
 }
 
-function scan() {
-  const results = { routed: [], neutral: [], uncovered: [] };
+/** 仅识别排盘器新增的两条库对象来源；变量名本身不是中性凭证。
+ * candidate 的回退必须仍来自 Solar 构造器或只返回 Solar/undefined 的 scanRange。
+ * 来源或写法改变时保守地报 uncovered，交由新判据确认，而不猜测任意表达式类型。 */
+function calendarReceivers(relPath, code) {
+  const trusted = new Set();
+  if (relPath !== 'client/src/features/chart/nonAiCalculator.ts') return trusted;
+  const source = code.split(/\r?\n/).filter((line) => !/^\s*(?:\/\/|\/\*|\*)/.test(line)).join('\n');
+  const assignments = (name) => [...source.matchAll(new RegExp('\\b' + name + '\\s*=(?!=)\\s*([^;]+);', 'g'))].map((m) => m[1].trim());
+  // 本扫描不解析作用域：遇到同名参数/第二声明便撤销整文件豁免，宁可要求人工确认。
+  const hasShadow = (name) => {
+    const declarations = source.match(new RegExp('\\b(?:const|let|var)\\s+' + name + '\\b', 'g')) ?? [];
+    return declarations.length !== 1
+      || new RegExp('\\b' + name + '\\s*\\??\\s*:|\\b' + name + '\\s*=>').test(source)
+      || new RegExp('\\([^)]*\\b' + name + '\\b[^)]*\\)\\s*(?:=>|\\{)').test(source)
+      || new RegExp('\\b(?:const|let|var)\\s*[\\{\\[][^;=]*\\b' + name + '\\b').test(source);
+  };
+  const isCall = (expr, callee) => {
+    if (!expr.startsWith(callee + '(')) return false;
+    let depth = 0;
+    for (let i = callee.length; i < expr.length; i += 1) {
+      if (expr[i] === '(') depth += 1;
+      if (expr[i] === ')' && --depth === 0) return i === expr.length - 1;
+    }
+    return false;
+  };
+  const calendar = assignments('calendarEight');
+  const eightSuffix = '.getLunar().getEightChar()';
+  if (!hasShadow('calendarEight') && calendar.length === 1 && calendar[0].endsWith(eightSuffix)
+    && isCall(calendar[0].slice(0, -eightSuffix.length), 'Solar.fromYmdHms')) trusted.add('calendarEight');
 
-  for (const abs of files) {
-    const rel = path.relative(ROOT, abs).replace(/\\/g, '/');
-    const code = fs.readFileSync(abs, 'utf8');
+  const rangeBody = /\bconst scanRange\s*=[\s\S]*?\n\s*};/.exec(source)?.[0] ?? '';
+  const rangeNoons = [...rangeBody.matchAll(/\batNoon\s*=(?!=)\s*([^;]+);/g)];
+  const rangeReturns = [...rangeBody.matchAll(/\breturn\s+([^;]+);/g)];
+  const solarRange = rangeNoons.length === 1 && isCall(rangeNoons[0][1].trim(), 'Solar.fromYmdHms')
+    && rangeReturns.length > 0 && rangeReturns.every((m) => /^(atNoon|undefined)$/.test(m[1].trim()));
+  const candidates = assignments('candidate');
+  const solarCandidate = candidates.length > 0 && candidates.every((expr) => isCall(expr, 'Solar.fromYmdHms') || (solarRange && isCall(expr, 'scanRange')));
+  const luck = assignments('luckSolar');
+  const luckBranch = luck.length === 1 ? /^input\.birthTime\s*\?\s*([\s\S]+)\s*:\s*candidate$/.exec(luck[0])?.[1].trim() : undefined;
+  if (!hasShadow('luckSolar') && solarCandidate && luckBranch && isCall(luckBranch, 'Solar.fromYmdHms')) trusted.add('luckSolar');
+  return trusted;
+}
+
+/** 内存源码入口供分类器回归使用，避免测试新增库对象时改写真实生产文件。 */
+function scanSource(rel, code) {
+  const results = { routed: [], neutral: [], uncovered: [] };
     const lines = code.split(/\r?\n/);
+    const calendar = calendarReceivers(rel, code);
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -115,7 +156,11 @@ function scan() {
 
       if (hasBeijingHelper) {
         results.routed.push(entry);
-      } else if (isNeutral(rel, line)) {
+      } else if (isNeutral(rel, line) || (() => {
+        const fields = [...line.matchAll(/\.(getFullYear|getMonth|getDate|getDay|getHours|getMinutes|getSeconds)\s*\(/g)];
+        const receivers = [...line.matchAll(/\b([\w$]+)\.(getFullYear|getMonth|getDate|getDay|getHours|getMinutes|getSeconds)\s*\(/g)];
+        return fields.length > 0 && fields.length === receivers.length && receivers.every((m) => calendar.has(m[1]));
+      })()) {
         results.neutral.push(entry);
       } else if (hasLocalField) {
         results.uncovered.push(entry);
@@ -125,8 +170,16 @@ function scan() {
         results.neutral.push(entry);
       }
     }
-  }
+  return results;
+}
 
+function scan() {
+  const results = { routed: [], neutral: [], uncovered: [] };
+  for (const abs of files) {
+    const rel = path.relative(ROOT, abs).replace(/\\/g, '/');
+    const found = scanSource(rel, fs.readFileSync(abs, 'utf8'));
+    for (const key of Object.keys(results)) results[key].push(...found[key]);
+  }
   return results;
 }
 
@@ -157,4 +210,5 @@ function main() {
   }
 }
 
-main();
+module.exports = { scanSource };
+if (require.main === module) main();

@@ -250,7 +250,8 @@ server 目录 `node --test`；`client/src-tauri` 目录 `cargo test --lib`；工
 | Luna local 代数与正文实现 | 完成并冻结 | 2 / 2 | 最终 local-analysis 23/23，.scratch/local-analysis-v8-round2.log；相邻本地三套 49/49；第二轮补齐男女正反例、真实星与字段回退一致性 |
 | Luna cache 签名与跨端实现 | 完成并冻结 | 2 / 2 | server 专项 4/4、client 三套 14/14、Rust 22/22；Sol low 发现整值 JSON 浮点接受差异后已修并复审关闭；原红测文件是工具失败输出摘要，绿测完整日志在 .scratch/core-cache-* |
 | Wiki 与跨模块整合 | 完成并冻结 | — | 架构/时间/本地/缓存/测试 Wiki 已同步，扫描 OK 11 477 0，文档 4/4；账本只登记两个新核心判据，最终待 HEAD 提交后验收 |
-| 全量、类型、构建、服务器、Rust | 后端与类型通过，前端全量/构建待验 | — | 主代理独立服务器 145/145、Rust 22/22、tsc --noEmit 退出 0；前端全量与提交后构建尚未执行，不用旧轮结果替代 |
+| Sol high 扫描器兼容修复接管 | 完成并冻结 | — | 仅 scanner 与原测试两文件；来源/回退/混合读取/同名影射回归通过，46/46 后补影射 35/35；扫描未覆盖 0，Sol low 发现的影射 P2 已修并复审关闭 |
+| 全量、类型、构建、服务器、Rust | 后端、类型与构建通过，前端全量待返修复验 | — | 独立服务器 145/145、Rust 22/22、类型退出 0；ec78a55 提交后构建退出 0、HEAD/Wiki 95/95；首轮前端 974 通过/2 失败，须修扫描器后重新不筛选全量 |
 | GPT-6.1 Sol low 最终审查 | 预提交源码与 Wiki 审查通过 | — | 实际 diff、相关日志、需求覆盖与原 WIP 已核对；当前无未关闭 P1/P2，最终还需 HEAD/全量/type/build 日志 |
 
 自修按失败后的“一次修改并运行相关测试”计数，每个 Luna owner 最多两轮；初次实现验证不算自修。仍失败由 GPT-6.1 Sol high 接管。主代理只在全部必要门禁实际通过、审查问题关闭后更新完成状态。
@@ -260,3 +261,7 @@ server 目录 `node --test`；`client/src-tauri` 目录 `cargo test --lib`；工
 主代理独立类型检查 `.scratch/core-types.log` 对应 `tsc --noEmit` 退出 0。Sol high 日期输入校验的真实红/绿日志在 `.scratch/core-chart-ui-tz-red.log` 和 `core-chart-ui-tz-green.log`，常规时区与中文界面日志为 `core-chart-ui-regular.log`（37/37）和 `core-chart-ui-chinese.log`（19/19）。Sol low 已复核这些日志、完整时间持久链及两项新判据登记，允许精准本地提交后进行正式全量；此处仍不代表前端全量已完成。
 
 配套 Wiki：[入口与架构](docs/wiki/01-架构总览.md)、[排盘与界面链](docs/wiki/11-客户端-特性层.md)、[本地规则/仓储/缓存](docs/wiki/12-客户端-数据层.md)、[跨端契约](docs/wiki/13-跨端共享与三端一致性.md)、[类型接口](docs/wiki/31-类型契约.md)、[运行方式](docs/wiki/41-构建与发布.md)、[测试与缺项](docs/wiki/51-测试矩阵.md)。
+
+首轮整合代码提交为 `ec78a5528786e3b1020092604244547086fb37d1`，仅包含本轮 31 个文件，原 auto WIP 未暂存。提交后构建 `.scratch/core-build.log` 退出 0；HEAD/文档两套 `.scratch/core-head-wiki.log` 为 95/95。原样前端全量 `.scratch/core-front-full.log` 实际为 124 文件通过/1 文件失败、974 项通过/2 项失败，耗时 419.14 秒、退出 1。失败均来自北京时间扫描器：`calendarEight.getMonth()` 与 `luckSolar.getMonth()` 属于 lunar-javascript 对象，旧的按变量名白名单不能辨认新增别名。Sol high 接管扫描器及其测试，用实际对象来源判别补齐兼容，并要求同名原生 Date 仍被拦截；不通过重命名业务对象、删除断言或跳过全量消除失败。修复后另行精准提交、构建并完整重跑前端，当前不能标全绿。
+
+扫描器修复证据：`.scratch/core-scan-suite-red.log` 实际 2 项失败（基线误报 2、既有原生 Date 变异误报 3）；来源识别修复后 `.scratch/core-scan-suites-green.log` 五套 46/46。Sol low 进一步发现整文件变量名可能让其他函数同名 Date 参数继承豁免；`.scratch/core-scan-shadow-red.log` 两个影射新例实际 2 失败/6 通过，Sol high 添加同名参数/第二声明的保守拒绝后 `.scratch/core-scan-shadow-green.log` 三套 35/35。`.scratch/core-scan-shadow-cli.log` 为 49 文件、routed 5、neutral 64、uncovered 0；原 baseline=0、既有变异恰为 1 的断言保留。Sol low 亲读最终 diff 与日志后关闭该 P2；主代理独立 `.scratch/core-types-final.log` 为 TSC_EXIT=0。源码与相应 Wiki 已冻结，下一步提交、构建和不筛选前端全量。
