@@ -321,10 +321,69 @@ GPT-6.1 Sol low 已亲读上述最终代码、完整前端/服务器/Rust/type/b
 
 | 阶段 | 状态 | 自修次数 | 证据/待办 |
 | --- | --- | --- | --- |
-| Sol high发布审计与计划 | 完成，待主代理整合 | 0 | 基线115-bb52f9d；既有脚本、版本链与Wiki逐项读审；无网络写入/构建 |
-| 主代理冻结、提交与远端核实 | 远端只读核实完成，提交待执行 | — | Releases为空；Pages built、gh-pages:/；main为HEAD祖先，精确SHA见执行步骤；保护原WIP |
-| Luna新产物、短测与Pages执行 | 待执行 | 0 / 2 | 填实际命令/日志/退出码/构建版本/gh-pages SHA |
-| 线上版本与浏览器验证 | 待执行 | — | 实际HTTP、静态资源及界面证据；不能由脚本exit0代替 |
-| Sol low独立最终审查 | 待执行 | — | 核对远端结果与实际产物，关闭问题后方可交付 |
+| Sol high发布审计与计划 | 完成 | 0 | 基线115-bb52f9d；既有脚本、版本链与Wiki逐项读审；主代理整合后精准提交 |
+| 主代理冻结、提交与远端核实 | 完成 | — | 正常快进推送 main 到 bd4fdbb02d897a18f2a65db588a77f9f61f8acc3，ls-remote 独立读回相同；原 WIP SHA 不变 |
+| Luna新产物、短测与Pages执行 | 完成 | 0 / 2 | 构建退出0；六套115/115；版本116-bd4fdbb；安全副本仅force:false；Pages提交c3f98625d5876d6b02c56dd0736e11c1736d2237 |
+| 线上版本与浏览器验证 | HTTP及部署核验完成；浏览器渲染受限 | — | Pages built、Actions completed/success；13/13线上文件HTTP200且SHA256匹配，版本/SW一致；浏览器环境失败且无头浏览器启动被自动审批拒绝，未声称UI通过 |
+| Sol low独立最终审查 | 发布目标验收通过，保留浏览器证据缺口 | — | 亲读真实build/115专项/ref/parent/HTTP哈希/Pages/Actions证据；无需业务返修，浏览器限制单列记录 |
 
 自修计数沿用用户规则：首次执行不是自修；失败后的每次修改并运行相关验证计一次，最多两轮，然后交Sol high。规划完成不等于发布完成；最终执行结果由主代理依据实际证据追加到本节，不预填成功。
+
+发布后本地审计记录（不包含在已上线的116-bd4fdbb源码提交中）：已发布源代码为 `bd4fdbb02d897a18f2a65db588a77f9f61f8acc3`，Pages产物提交为 `c3f98625d5876d6b02c56dd0736e11c1736d2237`，parent精确等于发布前 `e157b118a49b60c1bc23dda34a88e314f8b0a44e`。远端树26项包含13项本次产物和13项保留哈希资源。`.scratch/release-build.log` 构建退出0，`.scratch/release-preflight-tests.log` 为6文件115/115、退出0；`.scratch/release-deploy.log` 与 `.scratch/release-live-proof.json` 保留实际部署、ref读回、逐文件哈希及Pages/Actions证据。CDN传播时CSS短暂404，稍后及Actions成功后复验13/13资源均HTTP200且SHA256与dist相同；线上bundle为116-bd4fdbb，SW缓存戳1792225893943且无占位符。Actions运行39017824446已completed/success。主代理独立ls-remote与实际线上HTML对比也通过。原auto WIP哈希仍与基线完全相同，未暂存或发布。
+
+浏览器渲染未完成：Cua初始化/重置均返回内核资产路径不存在（OS error 3）；备用无头Chrome的启动命令被自动审批以“blocked by policy”拒绝，进程未启动，也未换壳绕过。该限制已告知用户，Sol low按真实部署状态与全部线上资源核验验收发布目标，不能把这些证据表述为浏览器交互或视觉验收。本段及执行表的最终状态属于发布后本地记录，保持已部署版本与GitHub main不变，不再为记录额外递增发布版本。
+
+## 2026-10-17 四柱中文分次输入丢字修复
+
+### 范围与已核实机制
+
+用户反馈“八字输入的时候直接输入四柱的时候输入下两个字会抹除上两个字”。本轮基线为源码 `bd4fdbb02d897a18f2a65db588a77f9f61f8acc3`、版本 `116-bd4fdbb`；线上发布证据沿用上一节。主代理对无参数与 verify 参数入口的 HTTP 读取仍得到该版本，但用户实际地址、页底版本与浏览器输入法尚未确认，因此不得把另一个“刷新看不到116”现象直接归因于缓存。本轮先修可从源码及事件回归证明的输入生命周期问题，不修改 SW、版本链、部署策略或其他业务模块。
+
+`BirthInputModal` 当前为受控输入：整串每次 onChange 即删除非干支，单柱每次即 cleanPair，均没有 composition 生命周期处理；浏览器还分别施加 maxLength=8/2。中文输入法预编辑包含拉丁字母或尚未确认的候选字，组件会立即改写该值，长度限制还可能在应用清洗前截断预编辑或带分隔符的粘贴。这个机制可信；不能将 jsdom 事件模拟称为用户设备的真实输入法复现，也不能认定 onCombined 的两次 setState 本身就是丢前缀的独立根因。先补旧实现会失败的 composition 草稿保留与长度约束回归，再最小修复。
+
+### 角色、文件归属与接口
+
+| 角色 | 显式配置 | 唯一归属与输出 |
+| --- | --- | --- |
+| 规划/两轮失败诊断 | GPT-6.1 Sol high（`gpt-6.1-sol`） | 只读组件、相邻测试与 Wiki；仅追加本节 PLAN；Luna 自修两轮仍失败后在同一范围接管 |
+| 实现/测试/自修 | GPT-6-Luna medium（`gpt-6-luna`） | `client/src/features/chart/BirthInputModal.tsx`；现有 `birth-input-modal.test.tsx`、`chart-page.test.tsx`、`pillar-edit-rendered.test.tsx`；精准同步 `docs/wiki/11-客户端-特性层.md`、`docs/wiki/51-测试矩阵.md`；不新增共享输入框抽象 |
+| 最终审查 | GPT-6.1 Sol low（`gpt-6.1-sol`） | 亲读实际 diff、红绿日志、类型输出和需求覆盖；有问题退回实现，不采信报告代替验证 |
+| 整合/发布/终验 | 主代理 | 保护 WIP、独立验收，精准提交后构建，按既有发布授权更新 Pages 并真实核实 HTTP/远端 SHA；执行状态写回本节 |
+
+上表三个测试文件均在 `client/src/__tests__`。`ChartPage.tsx`、`PersonDetail.tsx`、`Modal.tsx`、排盘引擎、仓储、服务器与 Rust 均只读。组件 props、onSubmit 的四柱对象、initial 预填、submitLabel 与现有错误优先级不变；输入草稿/组合输入状态只在组件内维护，不加入 domain 或存储。字段组成时保留浏览器给出的完整当前值；确认后才执行原干支过滤及逻辑长度上限（整串最多八个合法字、单柱仍一天干一地支），不用会截断拼音或分隔符的原生 maxLength 控制草稿。不要把一次 onChange 的增量字串猜成追加操作；受控 input 的 target.value 始终按当前完整值处理。
+
+整串满八字后仍按原顺序拆入年/月/日/时四栏；未满八字不新增自动拆分行为。修改单柱仍清空整串栏并仅更新该柱，保留其他柱与现有过滤语义。组合输入期间不得提交；IME 用 Enter 确认候选时不得提前触发建盘/保存修正，必须检查真实 composition 标志与必要的兼容事件，不为普通 Enter 引入永久禁止提交。原合法粘贴、非法字符清洗、阴阳校验、引擎错误显示及详情页重排落库契约继续成立。不得顺带重构校验、变更干支取法或增加工具依赖。
+
+### 验收与执行顺序
+
+1. 在既有弹窗套件补行为红测：整串依次通过四次 composition 提交甲子、丙寅、戊辰、庚申，预编辑阶段原前缀及本次拼音都保留，compositionEnd 后整串与四栏正确；年柱先提交甲、再输入子以及编辑预填单柱时其他柱保持。同时覆盖非 composition 的合法汉字分次输入，避免仅对测试合成路径有效。保留真实失败日志，不以新断言只测 helper 或源码形状代替输入行为。
+2. 最小实现 compositionStart/change/end 的草稿与确认边界，保证普通 change 与最终 compositionEnd 的重复确认幂等；取消/清空输入仍可清空。对按键事件及提交事件添加有界保护：预编辑期间强行 submit 与候选 Enter 均不能调用 onSubmit，确认完成后显式点击正常提交一次。补原生 maxLength 不截断预编辑/分隔符的约束及确认后长度上限回归。
+3. 保留原整串带空格标点粘贴、单柱噪声过滤、缺柱/阴阳错误、引擎错误显示全部断言；补真实 ChartPage 手录入口的分次中文输入保存，以及详情预填后用 composition 修正四柱的保存/重排结果。集成夹具必须来自现有真实引擎，不能手拼一组引擎拒绝的四柱让失败变成错误需求。
+4. 先运行三套定向回归与独立类型检查；失败由同一 Luna 每次修复后运行相关测试计一次自修，最多两轮，仍失败交 Sol high。再同步两页 Wiki，仅写实际已验结果与 jsdom/真实浏览器证据边界。主代理执行原样前端全量、Wiki 与生产构建；本轮无服务器/Rust修改，不为本次输入修复重跑其已验全量。若出现新关联失败由主代理判断扩大范围，不修改既有断言制造通过。
+5. Sol low 审查实际 diff/日志；全部必要门禁通过后主代理精准提交，提交后重建版本产物并按既有 Pages授权发布、读回远端 main/gh-pages/ref/parent 与线上资源版本/哈希。浏览器环境此前失败、无头启动此前被自动审批拒绝，本轮不得换壳绕过或宣称浏览器真实输入法已测；真实线上 HTTP 证据与 jsdom 行为证据分别列明。
+
+### 测试命令、知识库与执行状态
+
+client 目录：
+
+```powershell
+.\node_modules\.bin\vitest.cmd run src/__tests__/birth-input-modal.test.tsx src/__tests__/chart-page.test.tsx src/__tests__/pillar-edit-rendered.test.tsx --pool=forks --maxWorkers=2 --testTimeout=30000
+.\node_modules\.bin\tsc.cmd --noEmit
+.\node_modules\.bin\vitest.cmd run --pool=forks --maxWorkers=2 --testTimeout=30000
+npm.cmd run build
+.\node_modules\.bin\vitest.cmd run src/__tests__/version-chain.test.ts src/__tests__/sw-cache-version.test.ts src/__tests__/deploy-retain-rule.test.ts src/__tests__/delivered-files-in-tree.test.ts --pool=forks --maxWorkers=2 --testTimeout=30000
+```
+
+根目录 `node scripts/check-wiki-links.cjs`；Wiki 文档相关门禁沿用现有 `wiki-links-reachable.test.ts`。完整日志保存在被忽略的 `.scratch/pillar-input-*` 或 `client/.scratch/pillar-input-*`，记录命令、退出码、实际通过数，不预填历史982/982为本轮结果。配套知识库：[架构与模块入口](docs/wiki/01-架构总览.md)、[排盘/详情完整界面流程](docs/wiki/11-客户端-特性层.md)、[类型接口](docs/wiki/31-类型契约.md)、[运行与发布](docs/wiki/41-构建与发布.md)、[测试验收与已知缺项](docs/wiki/51-测试矩阵.md)。
+
+| 阶段 | 状态 | 自修次数 | 验收证据/待办 |
+| --- | --- | --- | --- |
+| Sol high 规划与范围冻结 | 完成 | 0 | 已读实际组件、Modal及三套既有测试；仅追加本节，不声称设备复现 |
+| Luna 红测、实现与定向类型检查 | 完成并冻结 | 1 / 2 | 旧组件红测1失败/7通过；初次绿测31/31；Sol low补测后34/34、type退出0，原断言保留 |
+| Wiki、主代理独立全量与构建 | 待执行 | — | 只有真实退出0后登记完成 |
+| Sol low 最终审查 | 源码及专项审查通过，等待完整终验 | — | 已亲读diff与红/绿/补测/type/Wiki日志，三处覆盖缺口已补，无已知业务P2 |
+| 精准提交、构建、上线核验 | 待执行 | — | 先提交后构建；版本/页面现象未有用户设备证据时保持分开 |
+
+唯一旧用户 WIP `client/src/__tests__/auto-retry-schedule.test.tsx` 不得改、覆盖、暂存或提交，SHA256 必须保持 `2063B6AD382AD2996D2BF98CAE8ABE20EEEC5DAE58A3B9E0C39024BB65287290`。本节保留上一节已存在的发布后本地审计记录；不得为本任务覆盖 PLAN 的其他任务记录。
+
+定向证据：`.scratch/pillar-input-red.log` 真实1失败/7通过，预编辑草稿 `甲p` 被旧组件回写成 `甲`；初次实现三套31/31（`.scratch/pillar-input-green.log`），Sol low要求补普通分次汉字、整串compositionEnd无尾随change、Enter确认事件顺序后，`.scratch/pillar-input-review1-green.log` 为3文件34/34、退出0，自修/补测计1/2。类型 `.scratch/pillar-input-review1-types.log` 及主代理独立 `.scratch/pillar-input-root-types.log` 均为TSC_EXIT=0；Wiki回归4/4与扫描OK11/477/0分别在review1-wiki与review1-wiki-scan日志。源码只改BirthInputModal，未包装Modal onClose；低强度审查已核对实际代码、原断言和以上日志，允许精准提交后进行正式全量与构建，不能把定向通过等同全量或线上设备输入法已验。

@@ -42,6 +42,35 @@ describe('ChartPage simplified form', () => {
     vi.useRealTimers();
   });
 
+  it('手录四柱用分次 composition 输入整串后仍保存完整命盘', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2025-03-08T12:34:56.000Z'));
+    const onRecordCreated = vi.fn();
+    render(<ChartPage onRecordCreated={onRecordCreated} />);
+    fireEvent.click(screen.getByRole('button', { name: '手录四柱' }));
+    fireEvent.change(screen.getByLabelText('姓名'), { target: { value: '分次录入' } });
+    fireEvent.change(screen.getByLabelText('出生年'), { target: { value: '1984' } });
+    fireEvent.change(screen.getByLabelText('出生月'), { target: { value: '2' } });
+    fireEvent.click(screen.getByRole('button', { name: '录入四柱八字' }));
+    const input = screen.getByLabelText(/八字整串/) as HTMLInputElement;
+    let prefix = '';
+    for (const pair of ['甲子', '丙寅', '庚午', '壬午']) {
+      fireEvent.compositionStart(input);
+      fireEvent.change(input, { target: { value: prefix + pair[0] + 'p' } });
+      const next = prefix + pair;
+      fireEvent.compositionEnd(input, { data: pair });
+      fireEvent.change(input, { target: { value: next } });
+      prefix = next;
+    }
+    fireEvent.click(screen.getByRole('button', { name: '提交' }));
+    await act(async () => { for (let i = 0; i < 60; i += 1) await Promise.resolve(); });
+    expect(onRecordCreated).toHaveBeenCalledWith(expect.objectContaining({
+      name: '分次录入', yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午',
+      nonAiResult: expect.objectContaining({ dayMaster: '庚' }),
+    }));
+    vi.useRealTimers();
+  });
+
   it('按生日自动排盘：填日期时辰即算出四柱并保存，无需手录', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2025-03-08T12:34:56.000Z'));

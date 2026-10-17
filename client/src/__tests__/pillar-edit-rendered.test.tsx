@@ -105,6 +105,26 @@ describe('#151 修正四柱：真实交互路径', () => {
     expect(values.slice(1)).toEqual([PILLARS.yearPillar, PILLARS.monthPillar, PILLARS.dayPillar, PILLARS.hourPillar]);
   });
 
+  it('详情预填后以 composition 修正整串，确认保存并重排到存储', async () => {
+    render(<PersonDetail personId={ID} onBack={vi.fn()} />);
+    await screen.findByRole('heading', { name: '人物详情' });
+    fireEvent.click(screen.getByRole('button', { name: '修正四柱' }));
+    const dialog = await screen.findByRole('dialog');
+    const inputs = [...dialog.querySelectorAll('input')] as HTMLInputElement[];
+    expect(inputs.slice(1).map((input) => input.value)).toEqual([PILLARS.yearPillar, PILLARS.monthPillar, PILLARS.dayPillar, PILLARS.hourPillar]);
+    const combined = inputs[0];
+    const target = TARGET.yearPillar + TARGET.monthPillar + TARGET.dayPillar + TARGET.hourPillar;
+    fireEvent.compositionStart(combined);
+    fireEvent.change(combined, { target: { value: target + 'p' } });
+    expect(combined.value).toBe(target + 'p');
+    fireEvent.compositionEnd(combined, { data: target });
+    fireEvent.change(combined, { target: { value: target } });
+    fireEvent.click(screen.getByRole('button', { name: '保存修正' }));
+    await waitFor(async () => expect((await getBaziRecord(ID))?.dayPillar).toBe(TARGET.dayPillar));
+    expect((await getBaziRecord(ID))?.nonAiResult?.pillars.hour).toBe(TARGET.hourPillar);
+    cleanup();
+  });
+
   it('整组改柱并保存 ⇒ 界面上的四柱、日主、五行、大运全部换成新盘读数', async () => {
     const EXPECTED = calculateNonAi({ birthYear: 1984, birthMonth: 2, ...TARGET }, 'male');
     const { dialog, before } = await editToTarget();
