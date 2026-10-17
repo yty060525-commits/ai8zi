@@ -269,3 +269,62 @@ server 目录 `node --test`；`client/src-tauri` 目录 `cargo test --lib`；工
 最终源码提交 `14d3d61ed29ece2982fface1753d2585ecb50513`：主代理先完成生产构建（`.scratch/core-build-repaired.log`，退出 0），再运行原样、不筛选的完整前端（`.scratch/core-front-final.log`），实际为 `Test Files 125 passed (125)`、`Tests 982 passed (982)`，428.81 秒、退出 0，无跳过汇总。服务器 145/145、Rust 22/22、独立类型检查退出 0 的原始日志如上；扫描器返修未改变后端或 Rust。全量结束后 Wiki 扫描 `OK 11 477 0`，工作树仍仅有原 auto WIP，其 SHA256 与本轮基线完全相同。后续只更新本计划与 Wiki 验收记录、文档提交后重建版本产物并短验 HEAD/Wiki/版本链，不再改业务源码；首轮失败与中间“待验”描述均为当时状态，最终状态以本段和执行表为准。
 
 GPT-6.1 Sol low 已亲读上述最终代码、完整前端/服务器/Rust/type/build 原始日志并验收通过，确认计划范围均覆盖、已报两项 P2 全部关闭，无已知未解决 P1/P2。文档收口仅修改 PLAN 与 Wiki 测试矩阵的本轮结果登记、当前命令计数及旧盘时刻限制；其后重建和短测日志使用 `.scratch/core-build-docs-final.log`、`.scratch/core-docs-head-final.log`，实际读数由最终执行输出确认，不预填成功。
+
+## 2026-10-17 GitHub 下一版本与 Pages 正式发布
+
+### 授权、范围与版本口径
+
+用户已明确要求“上线到 GitHub 下一个版本，然后把链接发给我”，本节授权范围为将本聊天已验收源码推送至现有 `origin/main`，按既有 GitHub Pages 流程发布 Web/PWA，并回传可打开的线上链接和可核对的源码版本。真实仓库为 `yty060525-commits/ai8zi`；本节规划基线 HEAD 为 `bb52f9d`、提交计数为 115。源码全量验收证据沿用本计划上一节已核实记录：前端 125 文件 982/982、server 145/145、Rust 22/22、类型/构建通过，最终 HEAD/Wiki/版本短测 112 项通过。正式上线仍需本次新产物与真实远端结果，历史离线测试不能代替上线证据。
+
+运行时版本由 `client/vite.config.ts` 读取 `git rev-list --count HEAD` 与短 SHA，UI 与 `scripts/version.sh` 同源；不是 `client/package.json` 的固定 `1.0.0`。本节精确提交后预计自然进入第 116 版，具体版本始终以构建前最后 HEAD 的实际计数和短 SHA 为准。主代理已真实核实 GitHub Releases 返回空数组，没有现有 Release 惯例；本轮采用既有 Pages 版本口径，不新建语义版本 Release，不改 package/锁文件或将桌面包声明为已发布。用户请求的必要结果是源码已到 GitHub、Pages 新版本真实可访问。
+
+只允许本节 PLAN、发布必需的已有文档和生成产物变化；无需修改业务代码、部署策略或无关依赖。原用户 WIP `client/src/__tests__/auto-retry-schedule.test.tsx` 保持未暂存、未提交且 SHA256 逐字等于 `2063B6AD382AD2996D2BF98CAE8ABE20EEEC5DAE58A3B9E0C39024BB65287290`，不得 stash/restore/覆盖它。禁止 `git add -A`、main 强推、Qoder 与未经本项目授权的 Pi。无必要不重新生成 Windows 安装包、不部署服务器、不触及 `server/data`。
+
+### 角色、文件归属、依赖与接口
+
+| 角色 | 显式配置 | 归属与输出 |
+| --- | --- | --- |
+| 发布规划 | GPT-6.1 Sol high（`gpt-6.1-sol`） | 只读发布脚本/Wiki/版本链与仓库元数据；仅追加本节 PLAN；给出冻结的执行路径及风险 |
+| 执行与必要自修 | GPT-6-Luna medium（`gpt-6-luna`） | 根据主代理冻结的源码 HEAD 构建 `client/dist`、执行现有 Pages 脚本、必要时同步本地 PWA zip；仅在主代理分配后精确维护发布证据文档；输出退出码、脱敏日志、构建版本、gh-pages SHA与HTTP核对结果 |
+| 两轮失败接管 | GPT-6.1 Sol high（`gpt-6.1-sol`） | 同一 Luna 最多两次“修复后验证”仍失败时诊断；不删判据或降低发布验收 |
+| 最终发布审查 | GPT-6.1 Sol low（`gpt-6.1-sol`） | 独立核对实际 diff、GitHub main/gh-pages/Pages 状态、产物版本及浏览器结果；未关闭的问题返回执行 |
+| 主代理整合 | 当前主代理 | 保护 WIP，精确暂存/提交/推送、确定实际 Release 习惯、分配执行与独立复核、向用户回传链接；不声称自身模型已切换 |
+
+依赖接口：前端构建依赖本地完整 git HEAD、现有 node_modules 与 TypeScript 门禁；`client/dist` 是 `scripts/deploy-pages2.mjs` 的唯一产物输入。脚本在仓库根执行，读取 `.git/config` 并优先使用进程内 `GH_TOKEN`；令牌由现有凭据途径取得且不得打印、写入日志或写入源码。网络按本机实际连通性使用现有代理；Wiki 提示 `HTTPS_PROXY=http://127.0.0.1:7897`，执行者须核实 Node fetch 的代理支持或采用已经验证的现有连接方式，不能只设置变量便断言有效。部署输出是 Git Data API 创建的新 gh-pages commit，parent 必须等于发布前 gh-pages HEAD；随后 Pages/CDN 异步生效。
+
+### 执行顺序、命令与验收条件
+
+1. **冻结与提交。** 主代理核对 `git status --short`、WIP 摘要、当前 main 与远端目标身份，检查实际 diff，仅暂存本节计划和本轮明确需要的发布文件。主代理已核实仓库公开，Pages为legacy、source为gh-pages:/、状态built；origin/main为`f04e7cf76c7602865d6493407bf912b8d6cd62be`，是规划基线HEAD祖先（0 behind/17 ahead）；发布前gh-pages为`e157b118a49b60c1bc23dda34a88e314f8b0a44e`。正式推送前再次确认远端没有并发变化；若main已变化，停止覆盖并整合，不强推。提交后记录 `git rev-parse HEAD`、`git rev-list --count HEAD`、`git rev-parse --short HEAD`；后续正式构建必须来自这个最终 HEAD。交付的GitHub源码链接绑定同一个已验证源码SHA，不把gh-pages产物SHA误作源码版本。
+2. **新产物与发布短测。** 在 `client` 运行 `npm.cmd run build`，记录完整退出码与日志；运行下方版本、SW与部署保留判据，根目录跑 Wiki 链接检查。核对 dist JS 含最终 `计数-短SHA`、`dist/sw.js` 无 `__BUILD_ID__` 且缓存名已变化，index引用的静态文件存在。若文档又提交改变 HEAD，必须重新构建，不发布旧 HEAD 产物。原完整业务回归已通过，本次没有业务源码修改时不重复耗时全量。
+3. **推送与实际发布。** 显式 `git push origin main` 并独立读回 GitHub main SHA；在仓库根将现有部署脚本复制至被忽略的`.scratch`临时脚本，精确且仅将`force: true`替换为`force: false`，断言原匹配恰为一处；保留全部chunk保留/parent/令牌策略及仓库根cwd，使用凭据仅留进程内的方式执行这个临时脚本。受测生产脚本保持不变。保存发布前与发布后 gh-pages SHA、提交 parent、文件清单与部署日志；旧哈希 chunk 保留规则继续生效。生产脚本目前 `PATCH force:true`，临时副本改成false以阻止并发覆盖；但其仍将HTTP 422视为不抛错，因此必须独立读回ref：新 ref 必须等于实际创建的提交 SHA，不能只凭脚本退出 0 或 `gh-pages updated` 日志判成功。若远端在发布期间被其他部署推进，先重读状态，不反复盲目强写。不要输出 Authorization/header、凭据填充结果或完整 .git/config。
+4. **等待并真实验收。** 轮询 GitHub Pages 构建/部署状态；CDN约需30–90秒，但使用实际状态作判断。用 `https://yty060525-commits.github.io/ai8zi/` 的真实 HTTP 和浏览器验证入口、主JS/CSS及SW，确认线上版本等于本次最终HEAD、主要界面正常。可用不缓存请求或查询参数核对，不能由本地 dist 或旧缓存页面推断线上更新成功。若已有连接可实际显示版本，则直接核实；否则比对线上静态文件与本地 SHA/内容并保留证据。源码 main成功但 Pages失败只记录部分完成，继续处理，不能宣称上线完成。
+5. **审查与交付。** Sol low独立读实际 diff/日志/远端状态；主代理复核原WIP摘要仍不变。本次无GitHub Release惯例，不新增Release或桌面附件。最终回复至少给出可打开的Pages地址、实际发布版本与GitHub源码链接，不把计划或部署触发当作已上线。
+
+```powershell
+# 仓库根：只读版本与文档门禁
+ git status --short
+ git rev-parse HEAD
+ git rev-list --count HEAD
+ git rev-parse --short HEAD
+ node scripts/check-wiki-links.cjs
+# client：最终源码提交后构建与本次发布相关判据
+ npm.cmd run build
+ .\node_modules\.bin\vitest.cmd run src/__tests__/version-chain.test.ts src/__tests__/sw-cache-version.test.ts src/__tests__/deploy-retain-rule.test.ts --pool=forks --maxWorkers=2 --testTimeout=30000
+# 仓库根：显式推送；GH_TOKEN由执行进程内安全注入，临时部署副本只关闭强推
+ git push origin main
+ node .scratch/deploy-pages-release.mjs
+```
+
+配套 Wiki：[架构与模块入口](docs/wiki/01-架构总览.md)、[完整构建/发布/回退流程](docs/wiki/41-构建与发布.md)、[跨端契约](docs/wiki/13-跨端共享与三端一致性.md)、[测试验收及已知缺项](docs/wiki/51-测试矩阵.md)。发布无代码/接口变化时无需改写架构页；只有实际流程变化才精准同步对应Wiki。现有Wiki提及的Windows workflow在本地HEAD未见追踪文件，因此不能据此声称能用云构建完成桌面交付。
+
+### 发布状态与自修次数
+
+| 阶段 | 状态 | 自修次数 | 证据/待办 |
+| --- | --- | --- | --- |
+| Sol high发布审计与计划 | 完成，待主代理整合 | 0 | 基线115-bb52f9d；既有脚本、版本链与Wiki逐项读审；无网络写入/构建 |
+| 主代理冻结、提交与远端核实 | 远端只读核实完成，提交待执行 | — | Releases为空；Pages built、gh-pages:/；main为HEAD祖先，精确SHA见执行步骤；保护原WIP |
+| Luna新产物、短测与Pages执行 | 待执行 | 0 / 2 | 填实际命令/日志/退出码/构建版本/gh-pages SHA |
+| 线上版本与浏览器验证 | 待执行 | — | 实际HTTP、静态资源及界面证据；不能由脚本exit0代替 |
+| Sol low独立最终审查 | 待执行 | — | 核对远端结果与实际产物，关闭问题后方可交付 |
+
+自修计数沿用用户规则：首次执行不是自修；失败后的每次修改并运行相关验证计一次，最多两轮，然后交Sol high。规划完成不等于发布完成；最终执行结果由主代理依据实际证据追加到本节，不预填成功。
