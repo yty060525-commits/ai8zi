@@ -249,10 +249,10 @@ server 目录 `node --test`；`client/src-tauri` 目录 `cargo test --lib`；工
 | Sol high 日期输入校验接管 | 完成并冻结 | — | 显式 GPT-6.1 Sol high 接管 UTC 校验与真实 UI 回归，独立跳日时区由 1 失败/9 通过转为 10/10；常规时区 37/37、中文 UI 19/19、类型退出 0；root 已亲读日志 |
 | Luna local 代数与正文实现 | 完成并冻结 | 2 / 2 | 最终 local-analysis 23/23，.scratch/local-analysis-v8-round2.log；相邻本地三套 49/49；第二轮补齐男女正反例、真实星与字段回退一致性 |
 | Luna cache 签名与跨端实现 | 完成并冻结 | 2 / 2 | server 专项 4/4、client 三套 14/14、Rust 22/22；Sol low 发现整值 JSON 浮点接受差异后已修并复审关闭；原红测文件是工具失败输出摘要，绿测完整日志在 .scratch/core-cache-* |
-| Wiki 与跨模块整合 | 完成并冻结 | — | 架构/时间/本地/缓存/测试 Wiki 已同步，扫描 OK 11 477 0，文档 4/4；账本只登记两个新核心判据，最终待 HEAD 提交后验收 |
+| Wiki 与跨模块整合 | 完成 | — | 架构/时间/本地/缓存/测试 Wiki 已同步，扫描 OK 11 477 0；账本只登记两个新核心判据，已在正式全量中通过 |
 | Sol high 扫描器兼容修复接管 | 完成并冻结 | — | 仅 scanner 与原测试两文件；来源/回退/混合读取/同名影射回归通过，46/46 后补影射 35/35；扫描未覆盖 0，Sol low 发现的影射 P2 已修并复审关闭 |
-| 全量、类型、构建、服务器、Rust | 后端、类型与构建通过，前端全量待返修复验 | — | 独立服务器 145/145、Rust 22/22、类型退出 0；ec78a55 提交后构建退出 0、HEAD/Wiki 95/95；首轮前端 974 通过/2 失败，须修扫描器后重新不筛选全量 |
-| GPT-6.1 Sol low 最终审查 | 预提交源码与 Wiki 审查通过 | — | 实际 diff、相关日志、需求覆盖与原 WIP 已核对；当前无未关闭 P1/P2，最终还需 HEAD/全量/type/build 日志 |
+| 全量、类型、构建、服务器、Rust | 完成，均通过 | — | 14d3d61 原样前端 125 文件 982/982、退出 0；服务器 145/145、Rust 22/22、独立类型与提交后构建均退出 0；首轮 974/2 失败保留为返修历史 |
+| GPT-6.1 Sol low 最终审查 | 源码与全量终验通过 | — | 亲读 982/982、145/145、22/22、类型与构建真实日志，实际 diff 和需求覆盖已核对；两项 P2 均关闭，无已知未解决 P1/P2；文档提交后只复核版本与 HEAD 短测 |
 
 自修按失败后的“一次修改并运行相关测试”计数，每个 Luna owner 最多两轮；初次实现验证不算自修。仍失败由 GPT-6.1 Sol high 接管。主代理只在全部必要门禁实际通过、审查问题关闭后更新完成状态。
 
@@ -265,3 +265,7 @@ server 目录 `node --test`；`client/src-tauri` 目录 `cargo test --lib`；工
 首轮整合代码提交为 `ec78a5528786e3b1020092604244547086fb37d1`，仅包含本轮 31 个文件，原 auto WIP 未暂存。提交后构建 `.scratch/core-build.log` 退出 0；HEAD/文档两套 `.scratch/core-head-wiki.log` 为 95/95。原样前端全量 `.scratch/core-front-full.log` 实际为 124 文件通过/1 文件失败、974 项通过/2 项失败，耗时 419.14 秒、退出 1。失败均来自北京时间扫描器：`calendarEight.getMonth()` 与 `luckSolar.getMonth()` 属于 lunar-javascript 对象，旧的按变量名白名单不能辨认新增别名。Sol high 接管扫描器及其测试，用实际对象来源判别补齐兼容，并要求同名原生 Date 仍被拦截；不通过重命名业务对象、删除断言或跳过全量消除失败。修复后另行精准提交、构建并完整重跑前端，当前不能标全绿。
 
 扫描器修复证据：`.scratch/core-scan-suite-red.log` 实际 2 项失败（基线误报 2、既有原生 Date 变异误报 3）；来源识别修复后 `.scratch/core-scan-suites-green.log` 五套 46/46。Sol low 进一步发现整文件变量名可能让其他函数同名 Date 参数继承豁免；`.scratch/core-scan-shadow-red.log` 两个影射新例实际 2 失败/6 通过，Sol high 添加同名参数/第二声明的保守拒绝后 `.scratch/core-scan-shadow-green.log` 三套 35/35。`.scratch/core-scan-shadow-cli.log` 为 49 文件、routed 5、neutral 64、uncovered 0；原 baseline=0、既有变异恰为 1 的断言保留。Sol low 亲读最终 diff 与日志后关闭该 P2；主代理独立 `.scratch/core-types-final.log` 为 TSC_EXIT=0。源码与相应 Wiki 已冻结，下一步提交、构建和不筛选前端全量。
+
+最终源码提交 `14d3d61ed29ece2982fface1753d2585ecb50513`：主代理先完成生产构建（`.scratch/core-build-repaired.log`，退出 0），再运行原样、不筛选的完整前端（`.scratch/core-front-final.log`），实际为 `Test Files 125 passed (125)`、`Tests 982 passed (982)`，428.81 秒、退出 0，无跳过汇总。服务器 145/145、Rust 22/22、独立类型检查退出 0 的原始日志如上；扫描器返修未改变后端或 Rust。全量结束后 Wiki 扫描 `OK 11 477 0`，工作树仍仅有原 auto WIP，其 SHA256 与本轮基线完全相同。后续只更新本计划与 Wiki 验收记录、文档提交后重建版本产物并短验 HEAD/Wiki/版本链，不再改业务源码；首轮失败与中间“待验”描述均为当时状态，最终状态以本段和执行表为准。
+
+GPT-6.1 Sol low 已亲读上述最终代码、完整前端/服务器/Rust/type/build 原始日志并验收通过，确认计划范围均覆盖、已报两项 P2 全部关闭，无已知未解决 P1/P2。文档收口仅修改 PLAN 与 Wiki 测试矩阵的本轮结果登记、当前命令计数及旧盘时刻限制；其后重建和短测日志使用 `.scratch/core-build-docs-final.log`、`.scratch/core-docs-head-final.log`，实际读数由最终执行输出确认，不预填成功。
