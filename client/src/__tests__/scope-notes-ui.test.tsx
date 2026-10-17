@@ -55,6 +55,15 @@ beforeEach(() => { resetAiSettingsForTests(); resetLocalSystemForTests(); resetS
 afterEach(() => { cleanup(); resetMockSession(); resetAiSettingsForTests(); resetLocalSystemForTests(); resetScopeNotesForTests(); localStorage.clear(); });
 
 describe('详情页逐条「点评」留言', () => {
+  it('已编号点评正文原样显示，不追加批断序号', async () => {
+    await seed();
+    saveScopeNote('p1', 'task-01', '一、点评原句保持原样。');
+    await openDetail();
+    const note = document.querySelector('p.note-text');
+    expect(note?.textContent).toBe('一、点评原句保持原样。');
+    expect(note?.querySelector('.point-index')).toBeNull();
+  });
+
   it('每一条已完成的批断旁边都有一个点评入口（含全盘总结那一格）', async () => {
     await seed();
     await openDetail();

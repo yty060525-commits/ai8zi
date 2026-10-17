@@ -3,16 +3,30 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { ChartChat, clearChatThread, scrollToChat } from '../features/chart/ChartChat';
 import { askChat } from '../data/chatEngine';
 import { listBaziRecords } from '../data/clientRepository';
+import { saveRecordTone } from '../features/person/PersonDetail';
 
 vi.mock('../data/chatEngine', async (importOriginal) => ({ ...(await importOriginal<typeof import('../data/chatEngine')>()), askChat: vi.fn() }));
 vi.mock('../data/clientRepository', () => ({ listBaziRecords: vi.fn(async () => []), hydrateRecord: vi.fn(async (r) => r) }));
 vi.mock('../data/deepseekAdapter', () => ({ cancelAiSession: vi.fn() }));
 
-afterEach(() => { cleanup(); clearChatThread(); vi.mocked(askChat).mockReset(); vi.clearAllMocks(); vi.mocked(listBaziRecords).mockResolvedValue([] as never); });
+afterEach(() => { cleanup(); clearChatThread(); vi.mocked(askChat).mockReset(); vi.clearAllMocks(); vi.mocked(listBaziRecords).mockResolvedValue([] as never); localStorage.removeItem('mingli.analysis.tone.a'); localStorage.removeItem('mingli.analysis.tone.b'); });
 
 const flush = async () => { await act(async () => { for (let i = 0; i < 20; i += 1) await Promise.resolve(); }); };
 
 describe('排盘页「问问 AI」', () => {
+  it('AI回答中已有序号的正文保持原样，不套用批断列表编号', async () => {
+    const answer = '一、引用的原文保持完整。';
+    vi.mocked(askChat).mockResolvedValue({ status: 'completed', answer } as never);
+    render(<ChartChat />);
+    await flush();
+    fireEvent.change(screen.getByLabelText('命理问题'), { target: { value: '请解释这条引用' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    const rendered = await screen.findByText(answer);
+    expect(rendered.classList.contains('chat-body')).toBe(true);
+    expect(rendered.textContent).toBe(answer);
+    expect(rendered.querySelector('.point-index')).toBeNull();
+  });
+
   it('输入问题发送 → 展示 AI 回答，并把问题/历史传给 askChat', async () => {
     vi.mocked(askChat).mockResolvedValue({ status: 'completed', answer: '以金为日主，喜火土。' } as never);
     render(<ChartChat />);
@@ -101,6 +115,74 @@ describe('排盘页「问问 AI」', () => {
     fireEvent.change(screen.getByLabelText('命理问题'), { target: { value: '张三2027年事业？' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     expect(await screen.findByText('依据：张三，二零二七年')).toBeTruthy();
+  });
+
+  it('本轮文本点名命主优先于先前点选，并把实际目标写回当前命主', async () => {
+    saveRecordTone('a', 10); saveRecordTone('b', 90);
+    vi.mocked(listBaziRecords).mockResolvedValue([{ id: 'a', name: '张三' }, { id: 'b', name: '李四' }] as never);
+    vi.mocked(askChat)
+      .mockResolvedValueOnce({ status: 'completed', answer: '李四的答案', evidence: { recordId: 'b', personName: '李四', plan: { topics: ['事业'] } } } as never)
+      .mockResolvedValueOnce({ status: 'completed', answer: '李四后续答案', evidence: { recordId: 'b', personName: '李四', plan: { topics: ['事业'] } } } as never);
+    render(<ChartChat />);
+    await flush();
+    fireEvent.click(await screen.findByRole('button', { name: '张三' }));
+    fireEvent.change(screen.getByLabelText('命理问题'), { target: { value: '李四明年事业如何' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await screen.findByText('李四的答案');
+    expect(vi.mocked(askChat).mock.lastCall?.[0]).toEqual(expect.objectContaining({ recordId: 'b', tone: 90 }));
+    expect(screen.getByRole('button', { name: '切换当前命主' }).textContent).toBe('李四');
+    fireEvent.change(screen.getByLabelText('命理问题'), { target: { value: '那财运呢' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await screen.findByText('李四后续答案');
+    expect(vi.mocked(askChat).mock.lastCall?.[0]).toEqual(expect.objectContaining({ recordId: 'b', tone: 90 }));
+  });
+
+  it('assistant气泡按本次metadata显示检索资料和缺口', async () => {
+    vi.mocked(askChat).mockResolvedValue({ status: 'completed', answer: '事业稳中有进。', evidence: {
+      recordId: 'a', personName: '张三', plan: { year: 2027, month: 3, topics: ['事业'] },
+      sources: [{ kind: 'analysis', recordId: 'a', heading: '流月批断', taskType: 'monthly', year: 2027, month: 3, sections: ['事业'], text: '【事业】稳中有进。' }],
+      missing: ['二零二七年流年事业小节尚未生成'],
+    } } as never);
+    render(<ChartChat />);
+    await flush();
+    fireEvent.change(screen.getByLabelText('命理问题'), { target: { value: '张三二零二七年三月事业如何' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await screen.findByText('事业稳中有进。');
+    expect(await screen.findByText('本次检索资料')).toBeTruthy();
+    expect(screen.getByText('流月批断')).toBeTruthy();
+    expect(screen.getByText((_text, element) => element?.tagName === 'BLOCKQUOTE' && element.textContent?.replace(/\s+/g, '') === '【事业】稳中有进。')).toBeTruthy();
+    expect(screen.getByText(/尚未生成/)).toBeTruthy();
+  });
+
+  it('换命主后每条回答保留自己的来源快照，历史只传正文，旧格式不虚构资料', async () => {
+    vi.mocked(listBaziRecords).mockResolvedValue([{ id: 'a', name: '张三' }, { id: 'b', name: '李四' }] as never);
+    vi.mocked(askChat)
+      .mockResolvedValueOnce({ status: 'completed', answer: '张三回答。', evidence: {
+        recordId: 'a', personName: '张三', sources: [{ kind: 'analysis', recordId: 'a', heading: '张三本命批断', sections: ['健康'], text: '【健康】张三原始资料。' }], missing: ['张三流月缺口'],
+      } } as never)
+      .mockResolvedValueOnce({ status: 'completed', answer: '李四回答。', evidence: {
+        recordId: 'b', personName: '李四', sources: [{ kind: 'analysis', recordId: 'b', heading: '李四流年批断', sections: ['事业'], text: '【事业】李四新资料。' }], missing: ['李四流月缺口'],
+      } } as never)
+      .mockResolvedValueOnce({ status: 'completed', answer: '旧格式回答。' } as never);
+    render(<ChartChat />);
+    await flush();
+    for (const [question, answer] of [['张三健康如何', '张三回答。'], ['李四事业如何', '李四回答。'], ['请继续解释', '旧格式回答。']]) {
+      fireEvent.change(screen.getByLabelText('命理问题'), { target: { value: question } });
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await screen.findByText(answer);
+    }
+    const bubbles = [...document.querySelectorAll('.chat-assistant')];
+    expect(bubbles).toHaveLength(3);
+    expect(bubbles[0].textContent).toContain('张三原始资料');
+    expect(bubbles[0].textContent).toContain('张三流月缺口');
+    expect(bubbles[0].textContent).not.toContain('李四');
+    expect(bubbles[1].textContent).toContain('李四新资料');
+    expect(bubbles[1].textContent).not.toContain('张三');
+    expect(bubbles[2].querySelector('details')).toBeNull();
+    expect(vi.mocked(askChat).mock.calls[1][0].history).toEqual([
+      { role: 'user', content: '张三健康如何' }, { role: 'assistant', content: '张三回答。' },
+    ]);
+    for (const message of vi.mocked(askChat).mock.calls[2][0].history ?? []) expect(Object.keys(message).sort()).toEqual(['content', 'role']);
   });
 
   it('切页导致组件卸载后，对话仍在(会话常驻)', async () => {
@@ -208,6 +290,71 @@ describe('排盘页「问问 AI」', () => {
     act(() => { release({ status: 'completed', answer: '迟到的答案' } as never); });
     await flush();
     expect(screen.queryByText('迟到的答案'), '清空后迟到答案又把会话填上了').toBeNull();
+    expect(document.querySelectorAll('.chat-msg')).toHaveLength(0);
+  });
+
+  it('仅 assistant 回答可复制，逐气泡复制精确正文并在成功后提示', async () => {
+    vi.mocked(askChat)
+      .mockResolvedValueOnce({ status: 'completed', answer: '一、第一条回答。' } as never)
+      .mockResolvedValueOnce({ status: 'completed', answer: '二、第二条回答。' } as never);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    render(<ChartChat />);
+    await flush();
+    for (const question of ['第一问', '第二问']) {
+      fireEvent.change(screen.getByLabelText('命理问题'), { target: { value: question } });
+      fireEvent.click(screen.getByRole('button', { name: '发送' }));
+      await screen.findByText(question);
+    }
+    const copyButtons = screen.getAllByRole('button', { name: '复制回答' });
+    expect(copyButtons).toHaveLength(2);
+    expect(screen.getByText('第一问').closest('.chat-user')?.querySelector('button')).toBeNull();
+
+    writeText.mockImplementation(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    fireEvent.click(copyButtons[1]);
+    expect(writeText).toHaveBeenLastCalledWith('二、第二条回答。');
+    expect(screen.queryByText('已复制回答')).toBeNull();
+    await screen.findByText('已复制回答');
+
+    fireEvent.click(screen.getAllByRole('button', { name: '复制回答' })[0]);
+    expect(writeText).toHaveBeenLastCalledWith('一、第一条回答。');
+  });
+
+  it('剪贴板不可用或拒绝时显示失败反馈', async () => {
+    vi.mocked(askChat).mockResolvedValue({ status: 'completed', answer: '可复制正文。' } as never);
+    render(<ChartChat />);
+    await flush();
+    fireEvent.change(screen.getByLabelText('命理问题'), { target: { value: '问' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await screen.findByText('可复制正文。');
+    const button = screen.getByRole('button', { name: '复制回答' });
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
+    fireEvent.click(button);
+    expect(await screen.findByText('复制失败，请手动选择回答文字复制')).toBeTruthy();
+
+    const writeText = vi.fn().mockRejectedValue(new Error('denied'));
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    fireEvent.click(button);
+    expect(await screen.findByText('复制失败，请手动选择回答文字复制')).toBeTruthy();
+  });
+
+  it('复制等待期间清空会话，迟到的结果不污染新对话', async () => {
+    vi.mocked(askChat).mockResolvedValue({ status: 'completed', answer: '旧会话回答。' } as never);
+    let release!: () => void;
+    const writeText = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    render(<ChartChat />);
+    await flush();
+    fireEvent.change(screen.getByLabelText('命理问题'), { target: { value: '旧问题' } });
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await screen.findByText('旧会话回答。');
+    fireEvent.click(screen.getByRole('button', { name: '复制回答' }));
+    expect(writeText).toHaveBeenCalledWith('旧会话回答。');
+    fireEvent.click(screen.getByRole('button', { name: '清空对话' }));
+    act(() => { release(); });
+    await flush();
+    expect(screen.queryByText('已复制回答')).toBeNull();
+    expect(screen.queryByText('复制失败，请手动选择回答文字复制')).toBeNull();
     expect(document.querySelectorAll('.chat-msg')).toHaveLength(0);
   });
 });

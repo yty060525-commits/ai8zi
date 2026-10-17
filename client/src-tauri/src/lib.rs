@@ -63,7 +63,7 @@ fn initialize(connection: &Connection) -> Result<(), String> {
 }
 
 /// 从缓存键派生命盘签名：键格式恒为 [版本, 模型, 性别, 年柱, 月柱, 日柱, 时柱, …]
-/// (任务键 v7|… 与聊天键 chatv1|… 同位)，据此把「清某盘全部缓存」从 LIKE 全表扫描降为索引查找。
+/// (任务键 v7|… 与聊天键 chatv8|… 同位)，据此把「清某盘全部缓存」从 LIKE 全表扫描降为索引查找。
 pub(crate) fn chart_sig_from_key(key: &str) -> Option<String> {
     let parts: Vec<&str> = key.split('|').collect();
     if parts.len() < 8 { return None; }
@@ -812,7 +812,7 @@ pub async fn run_ai_task(state: State<'_, Database>, record: BaziRecord, task: A
 
 /* ---------- 排盘页 AI 聊天(本机离线通道) ----------
  * 证据(命盘事实/已算批断)由客户端 chatEngine 从本机 SQLite 组装成 messages；
- * 这里负责：首轮问题按「命盘签名+问题哈希+模型+语气档」查/写 ai_cache(索引命中)，
+ * 这里负责：首轮问题按「命盘签名+问题与实际消息哈希+模型+语气档」查/写 ai_cache(索引命中)，
  * 未命中再按通道顺序调用上游，返回纯文本。删盘/清缓存时 chart_sig 精确连带清除。 */
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -833,16 +833,56 @@ pub(crate) fn fnv1a(text: &str) -> u64 {
 }
 
 /// 聊天缓存键：第 2..6 段与任务键同位(性别+四柱)，chart_sig 索引自动覆盖。
-/// chatv7 与服务端同名键对齐(桌面端曾停在 chatv1，提示词早已分叉)：系统提示词现为
+/// chatv8 将实际发给模型的消息摘要置于出生时刻前，避免证据/资料变化后重用旧答案；前段和问题hash锚点不变。
+/// chatv7 曾与服务端同名键对齐(桌面端一度停在 chatv1，提示词早已分叉)：系统提示词现为
 /// 「正文限死纯中文 + 禁止引用出处」，旧答案带英文字段名/数字/出处说明，一律作废重写。
 /// chatv6 这一跳：证据标题与缺口提示不再出现括号、斜杠与「AI」字样(改读成中文)，
 /// 指向入口的说法也从「点「AI 分析」」改成「点批断分析」。聊天证据由客户端 chatEngine
 /// 构建、三通道共用同一份字节，所以服务端升键的那批措辞同样作用于桌面旧答案 —— 一并作废重答。
-pub(crate) fn chat_cache_key(chat: &ChatRequest, model: &str) -> String {
+fn append_stable_json(value: &Value, out: &mut String) {
+    match value {
+        Value::Null => out.push_str("null"),
+        Value::Bool(value) => out.push_str(if *value { "true" } else { "false" }),
+        Value::Number(value) => out.push_str(&value.to_string()),
+        Value::String(value) => out.push_str(&serde_json::to_string(value).expect("JSON string serialization cannot fail")),
+        Value::Array(values) => {
+            out.push('[');
+            for (index, value) in values.iter().enumerate() {
+                if index > 0 { out.push(','); }
+                append_stable_json(value, out);
+            }
+            out.push(']');
+        }
+        Value::Object(values) => {
+            let mut keys: Vec<_> = values.keys().collect();
+            keys.sort_unstable();
+            out.push('{');
+            for (index, key) in keys.into_iter().enumerate() {
+                if index > 0 { out.push(','); }
+                out.push_str(&serde_json::to_string(key).expect("JSON key serialization cannot fail"));
+                out.push(':');
+                append_stable_json(&values[key], out);
+            }
+            out.push('}');
+        }
+    }
+}
+
+fn chat_messages_hash(messages: &[Value]) -> u64 {
+    let mut serialized = String::from("[");
+    for (index, message) in messages.iter().enumerate() {
+        if index > 0 { serialized.push(','); }
+        append_stable_json(message, &mut serialized);
+    }
+    serialized.push(']');
+    fnv1a(&serialized)
+}
+
+pub(crate) fn chat_cache_key(chat: &ChatRequest, model: &str, messages: &[Value]) -> String {
     let qhash = fnv1a(chat.question.trim());
-    format!("chatv7|{}|{}|{}|{}|{}|{}|chat|{:016x}|{}|{}|{}", model, chat.gender,
+    format!("chatv8|{}|{}|{}|{}|{}|{}|chat|{:016x}|{}|{}|{:016x}|{}", model, chat.gender,
         chat.year_pillar, chat.month_pillar, chat.day_pillar, chat.hour_pillar,
-        qhash, chat.birth_year, tone_bucket(chat.tone), birth_time_signature(chat.birth_time.as_ref()))
+        qhash, chat.birth_year, tone_bucket(chat.tone), chat_messages_hash(messages), birth_time_signature(chat.birth_time.as_ref()))
 }
 
 #[tauri::command]
@@ -851,7 +891,7 @@ pub async fn run_ai_chat(state: State<'_, Database>, chat: ChatRequest, messages
     let want_cache = chat.cached.unwrap_or(false);
     for provider in provider_order(&selected_provider()) {
         let model = provider_model(&provider);
-        let cache = chat_cache_key(&chat, model);
+        let cache = chat_cache_key(&chat, model, &messages);
         if want_cache {
             let connection = state.0.lock().map_err(|e| e.to_string())?;
             if let Ok(Some(payload)) = read_cache(&connection, &cache) {
@@ -1288,24 +1328,62 @@ mod tests {
     fn chat_cache_key_is_stable_and_purged_with_the_chart() {
         let connection = Connection::open_in_memory().unwrap(); initialize(&connection).unwrap();
         let chat = commands::ChatRequest { gender: "male".into(), birth_year: 1984, year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "戊辰".into(), hour_pillar: "庚申".into(), question: "2027年事业如何？".into(), tone: Some(80), cached: Some(true), birth_time: Some(serde_json::json!({"year":1984,"month":2,"day":3,"hour":9,"minute":10})) };
-        let k1 = commands::chat_cache_key(&chat, "deepseek-flash");
-        let k2 = commands::chat_cache_key(&chat, "deepseek-flash");
+        let messages: Vec<Value> = vec![
+            serde_json::from_str(r#"{"role":"system","content":"只根据提供的资料回答","context":{"topics":["事业","流年"],"recordId":"r1"}}"#).unwrap(),
+            serde_json::json!({"role":"user","content":"2027年事业如何？"}),
+        ];
+        let k1 = commands::chat_cache_key(&chat, "deepseek-flash", &messages);
+        let k2 = commands::chat_cache_key(&chat, "deepseek-flash", &messages);
         assert_eq!(k1, k2, "同一问题+同盘+同模型+同语气 => 同一缓存键");
+        let parts: Vec<_> = k1.split('|').collect();
+        assert_eq!(parts.len(), 13, "messages摘要应在原出生分钟尾段之前增加一段");
+        assert_eq!(parts[0], "chatv8");
+        assert_eq!(parts[7], "chat");
+        assert!(parts[8].len() == 16 && parts[8].chars().all(|c| c.is_ascii_hexdigit()), "原问题hash仍为16位：{}", parts[8]);
+        assert_eq!(parts[9], "1984");
+        assert_eq!(parts[10], "80");
+        assert!(parts[11].len() == 16 && parts[11].chars().all(|c| c.is_ascii_hexdigit()), "messages摘要应为16位hex：{}", parts[11]);
+        assert_eq!(parts[12], "1984-02-03T09:10", "出生分钟仍为最后一段");
+
+        let mut changed_messages = messages.clone();
+        changed_messages[0]["context"]["topics"][0] = serde_json::json!("爱情");
+        let k_evidence = commands::chat_cache_key(&chat, "deepseek-flash", &changed_messages);
+        assert_ne!(k1, k_evidence, "实际消息资料变化必须缓存失效");
+
+        let reordered: Vec<Value> = vec![
+            serde_json::from_str(r#"{"context":{"recordId":"r1","topics":["事业","流年"]},"content":"只根据提供的资料回答","role":"system"}"#).unwrap(),
+            messages[1].clone(),
+        ];
+        assert_eq!(commands::chat_cache_key(&chat, "deepseek-flash", &reordered), k1,
+            "对象属性顺序变化不应使等价消息失效");
+        let reordered_array: Vec<Value> = vec![
+            serde_json::from_str(r#"{"role":"system","content":"只根据提供的资料回答","context":{"topics":["流年","事业"],"recordId":"r1"}}"#).unwrap(),
+            messages[1].clone(),
+        ];
+        assert_ne!(commands::chat_cache_key(&chat, "deepseek-flash", &reordered_array), k1,
+            "消息数组及其嵌套数组顺序仍有意义");
+
         let other = commands::ChatRequest { question: "换个问法".into(), ..chat.clone() };
-        assert_ne!(k1, commands::chat_cache_key(&other, "deepseek-flash"));
+        assert_ne!(k1, commands::chat_cache_key(&other, "deepseek-flash", &messages));
         let other_minute = commands::ChatRequest { birth_time: Some(serde_json::json!({"year":1984,"month":2,"day":3,"hour":9,"minute":11})), ..chat.clone() };
-        let k_minute = commands::chat_cache_key(&other_minute, "deepseek-flash");
+        let k_minute = commands::chat_cache_key(&other_minute, "deepseek-flash", &messages);
         assert_ne!(k1, k_minute, "分钟变化必须区分聊天缓存");
         let float_chat = commands::ChatRequest { birth_time: Some(serde_json::from_str(r#"{"year":1984.0,"month":2.0,"day":3.0,"hour":0.0,"minute":0.0}"#).unwrap()), ..chat.clone() };
-        assert!(commands::chat_cache_key(&float_chat, "deepseek-flash").ends_with("|1984-02-03T00:00"));
+        assert!(commands::chat_cache_key(&float_chat, "deepseek-flash", &messages).ends_with("|1984-02-03T00:00"));
+        let legacy_chat = commands::ChatRequest { birth_time: None, ..chat.clone() };
+        assert!(commands::chat_cache_key(&legacy_chat, "deepseek-flash", &messages).ends_with('|'), "旧盘缺出生时刻时仍保留空尾段");
         commands::write_cache(&connection, &k1, "答案正文").unwrap();
+        assert_eq!(commands::read_cache(&connection, &k1).unwrap().as_deref(), Some("答案正文"), "首轮真实缓存键可读回");
+        assert_eq!(commands::read_cache(&connection, &k_evidence).unwrap(), None, "资料变化后的键不得命中旧答案");
+        commands::write_cache(&connection, &k_evidence, "新资料答案").unwrap();
+        assert_eq!(commands::read_cache(&connection, &k_evidence).unwrap().as_deref(), Some("新资料答案"));
         commands::write_cache(&connection, &k_minute, "另一时刻答案").unwrap();
         assert_eq!(commands::read_cache(&connection, &k_minute).unwrap().as_deref(), Some("另一时刻答案"));
-        assert_eq!(commands::read_cache(&connection, &commands::chat_cache_key(&commands::ChatRequest { birth_time: Some(serde_json::json!({"year":1984,"month":2,"day":3,"hour":9,"minute":12})), ..chat.clone() }, "deepseek-flash")).unwrap(), None, "聊天缓存读取按出生分钟隔离");
+        assert_eq!(commands::read_cache(&connection, &commands::chat_cache_key(&commands::ChatRequest { birth_time: Some(serde_json::json!({"year":1984,"month":2,"day":3,"hour":9,"minute":12})), ..chat.clone() }, "deepseek-flash", &messages)).unwrap(), None, "聊天缓存读取按出生分钟隔离");
         commands::write_cache(&connection, "v7|deepseek-flash|male|甲子|丙寅|戊辰|庚申|annual|2027|0|1984|80", "{}").unwrap();
         commands::write_cache(&connection, "v7|deepseek-flash|female|乙丑|丁卯|己巳|辛未|annual|2027|0|1985|80", "{}").unwrap();
         let removed = commands::purge_chart_cache(&connection, "male", "甲子", "丙寅", "戊辰", "庚申").unwrap();
-        assert_eq!(removed, 3, "同盘的两个时刻聊天缓存须随任务缓存一并清除");
+        assert_eq!(removed, 4, "同盘的两种证据版本和不同出生分钟聊天缓存须随任务缓存一并清除");
         let left: i64 = connection.query_row("SELECT COUNT(*) FROM ai_cache", [], |row| row.get(0)).unwrap();
         assert_eq!(left, 1);
     }

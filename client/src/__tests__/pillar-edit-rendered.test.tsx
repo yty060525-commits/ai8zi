@@ -125,14 +125,16 @@ describe('#151 修正四柱：真实交互路径', () => {
     cleanup();
   });
 
-  it('整组改柱并保存 ⇒ 界面上的四柱、日主、五行、大运全部换成新盘读数', async () => {
+  it('整组改柱并保存 ⇒ 四柱、五行、大运跟随重算且不单列日主', async () => {
     const EXPECTED = calculateNonAi({ birthYear: 1984, birthMonth: 2, ...TARGET }, 'male');
     const { dialog, before } = await editToTarget();
     expect(before, '详情页没渲染出「四柱」那一格(或它不是四段)').not.toBe('');
     expect(TARGET.dayPillar).not.toBe(before);
     await waitFor(async () => expect((await pillarCell())[2]).toBe(TARGET.dayPillar));
     // 派生事实必须跟着换 —— 这三格是「只换字符串不重算」最能露形的一组合。
-    expect(await cell('日主'), '日柱改了、日主还是旧盘 ⇒ 没走引擎重算').toBe(EXPECTED.dayMaster);
+    const chart = screen.getByRole('region', { name: '基础排盘数据' });
+    expect([...chart.querySelectorAll('dt')].map((dt) => dt.textContent?.trim())).not.toContain('日主');
+    await waitFor(async () => expect((await getBaziRecord(ID))?.nonAiResult?.dayMaster).toBe(EXPECTED.dayMaster));
     /* 「贰、排盘数据」那一格走 mapText，计数读成中文数(实测读数「木三、火三、土一、金零、水一」)。
        第一版我按引擎原始值拼了阿拉伯数字，红在文案层而不是语义层 —— 期望值必须来自被测口径本身。 */
     expect(await cell('五行'), '五行还是旧盘计数 ⇒ 没走引擎重算').toBe(

@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { formatCopyBody, pickDimensionSections, splitSections, toPointBlocks } from '../features/person/PersonDetail';
 import type { BaziAIAnalysis } from '../types/domain';
 
@@ -88,6 +90,19 @@ describe('正文分点化(toPointBlocks / 复制)', () => {
     expect(blocks[0]?.points).toEqual(['注意肝胆。', '避免熬夜。']);
     expect(formatCopyBody({ pattern: '', strength: '', usefulElements: [], avoidElements: [], explanation: '【健康】注意肝胆。避免熬夜。' }, null))
       .toBe('健康\n一、注意肝胆。\n二、避免熬夜。');
+  });
+
+  it('编号不会把句中的普通中文短语误当成前缀删除', () => {
+    const text = '【健康】人人都应看一、一、健康短语。普通健康建议。';
+    const out = formatCopyBody({ pattern: '', strength: '', usefulElements: [], avoidElements: [], explanation: text }, null);
+    expect(out).toContain('人人都应看一、一、健康短语。');
+    expect(out).toContain('二、普通健康建议。');
+  });
+
+  it('分点列表不再用CSS伪元素叠加第二层序号', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf8');
+    expect(css).not.toContain('.point-list li::before');
+    expect(css).not.toMatch(/\.point-list\s*\{\s*counter-reset:/);
   });
 
   it('bullets the copied body too', () => {

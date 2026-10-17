@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { askChat, readableName, type ChatMessage, type ChatReply } from '../../data/chatEngine';
+import type { ChatSource } from '../../shared/chatRetrieval';
 import { listBaziRecords } from '../../data/clientRepository';
 import { cancelAiSession } from '../../data/deepseekAdapter';
 import { isServerMode } from '../../data/serverClient';
@@ -12,7 +13,8 @@ import { cnCount, cnYear } from '../../shared/chineseReadAloud';
 interface PendingPick { question: string; options: Array<{ id: string; name: string }> }
 
 /** 会话消息：assistant 可带「答谁 / 答哪年」的来源标注。 */
-type StoredMessage = ChatMessage & { about?: string };
+type StoredMessage = ChatMessage & { about?: string; sources?: ChatSource[]; missing?: string[] };
+type CopyFeedback = { message: StoredMessage; text: string };
 
 type ChatState = {
   thread: StoredMessage[];
@@ -73,16 +75,31 @@ export function ChartChat() {
   const [people, setPeople] = useState<Array<{ id: string; name: string }>>([]);
   /* 命主列表默认收起：选中后若一直摊开，会长期占着输入区上方；点「当前命主」的名字才展开改选。 */
   const [pickOpen, setPickOpen] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState<CopyFeedback | null>(null);
+  const mountedRef = useRef(false);
   const logRef = useRef<HTMLDivElement | null>(null);
   const { thread: messages, busy, error, needKey, pending, selected } = state;
 
   // 重新挂载时接回常驻会话；卸载时退订，避免向已销毁组件 setState。
   useEffect(() => {
+    mountedRef.current = true;
     const notify = (next: ChatState) => setState(next);
     listeners.add(notify);
     setState(shared);
-    return () => { listeners.delete(notify); };
+    return () => { listeners.delete(notify); mountedRef.current = false; };
   }, []);
+
+  async function copyAnswer(message: StoredMessage) {
+    setCopyFeedback(null);
+    try {
+      const clipboard = navigator.clipboard;
+      if (typeof clipboard?.writeText !== 'function') throw new Error('Clipboard unavailable');
+      await clipboard.writeText(message.content);
+      if (mountedRef.current && shared.thread.includes(message)) setCopyFeedback({ message, text: '已复制回答' });
+    } catch {
+      if (mountedRef.current && shared.thread.includes(message)) setCopyFeedback({ message, text: '复制失败，请手动选择回答文字复制' });
+    }
+  }
 
   // 新消息总是出现在底部：日志区是定高滚动容器，不自动滚就等于「回答没出来」。
   useEffect(() => {
@@ -103,12 +120,13 @@ export function ChartChat() {
     const trimmed = question.trim();
     if (shared.busy || !trimmed) return;
     publish({ busy: true, error: '', needKey: false, pending: null });
-    const history = shared.thread;
+    const history: ChatMessage[] = shared.thread.map(({ role, content }) => ({ role, content }));
     const controller = new AbortController();
     sharedAbort = controller;
     publish({ thread: [...shared.thread, { role: 'user', content: trimmed }] });
     setInput('');
-    const recId = recordId ?? shared.selected?.id ?? null;
+    const named = [...people].sort((a, b) => b.name.length - a.name.length).find((person) => trimmed.includes(person.name));
+    const recId = named?.id ?? recordId ?? shared.selected?.id ?? null;
     const reply = await askChat({ question: trimmed, history, tone: recordTone(recId), recordId: recId, signal: controller.signal }).catch(() => null);
     /* 「停止」/「清空对话」/新一问都已经把 sharedAbort 换走或置空时，这一问的回包不再写进会话。
        引擎侧配合：chatEngine 把 AbortError 转成 {status:'failed',error:'已取消'} 而非外抛，
@@ -119,7 +137,8 @@ export function ChartChat() {
     // 当成一条错误摆在用户眼前。
     if (reply === null) return;
     if (reply.status === 'completed' && reply.answer) {
-      publish({ busy: false, thread: [...shared.thread, { role: 'assistant', content: reply.answer as string, about: aboutOf(reply) }] });
+      const actual = reply.evidence?.recordId && reply.evidence.personName ? { id: reply.evidence.recordId, name: reply.evidence.personName } : null;
+      publish({ busy: false, ...(actual ? { selected: actual } : {}), thread: [...shared.thread, { role: 'assistant', content: reply.answer as string, about: aboutOf(reply), sources: reply.evidence?.sources, missing: reply.evidence?.missing }] });
       return;
     }
     if (reply.status === 'need_record') {
@@ -164,7 +183,22 @@ export function ChartChat() {
     {messages.length > 0 ? <div className="chat-log" role="log" ref={logRef}>
       {messages.map((item, index) => <div key={index} className={item.role === 'user' ? 'chat-msg chat-user' : 'chat-msg chat-assistant'}>
         <span className="chat-role">{item.role === 'user' ? '我' : '批断'}</span>
-        <div className="chat-body">{item.content}{item.about ? <span className="chat-about">{item.about}</span> : null}</div>
+        <div className="chat-body">{item.content}{item.about ? <span className="chat-about">{item.about}</span> : null}
+          {item.sources?.length || item.missing?.length ? <details className="chat-sources">
+            <summary>本次检索资料</summary>
+            {item.sources?.length ? <ul>{item.sources.map((source, sourceIndex) => <li key={sourceIndex}>
+              <strong>{sanitizeAnalysisText(source.heading)}</strong>
+              {source.year !== undefined ? <span>，{cnYear(source.year)}年{source.month !== undefined ? cnCount(source.month) + '月' : ''}</span> : null}
+              {source.sections.length ? <p>{sanitizeAnalysisText(source.sections.join('、'))}</p> : null}
+              {source.text ? <blockquote>{sanitizeAnalysisText(source.text)}</blockquote> : null}
+            </li>)}</ul> : null}
+            {item.missing?.length ? <div><strong>数据缺口</strong><ul>{item.missing.map((gap, gapIndex) => <li key={gapIndex}>{sanitizeAnalysisText(gap)}</li>)}</ul></div> : null}
+          </details> : null}
+        </div>
+        {item.role === 'assistant' ? <>
+          <button type="button" className="text-button tiny" aria-label="复制回答" onClick={() => void copyAnswer(item)}>复制</button>
+          {copyFeedback?.message === item ? <span role="status">{copyFeedback.text}</span> : null}
+        </> : null}
       </div>)}
       {busy ? <div className="chat-msg chat-assistant"><span className="chat-role">批断</span><div className="chat-body chat-thinking">正在查库思考，请稍候</div></div> : null}
     </div> : null}

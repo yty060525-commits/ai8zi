@@ -191,7 +191,7 @@ export function RecordsPage({ onOpenPerson, refreshKey = 0 }: RecordsPageProps) 
                       旧盘里那个字段是库按春节(正月初一)切的，立春后·春节前出生会存成与年柱相矛盾的属相
                       (实测 2024-02-06 甲辰年却显示「生肖 兔」，与同一行左侧「甲辰年」自相矛盾)。
                       年柱缺失时才回退存量值。 */}
-                  {record.nonAiResult && <span className="chart-summary">公历{cnDate(record.nonAiResult.solarDate)}，生肖{zodiacOfBranch(record.yearPillar?.[1] ?? '') || record.nonAiResult.zodiac}，日主{record.nonAiResult.dayMaster}</span>}
+                  {record.nonAiResult && <span className="chart-summary">公历{cnDate(record.nonAiResult.solarDate)}，生肖{zodiacOfBranch(record.yearPillar?.[1] ?? '') || record.nonAiResult.zodiac}</span>}
                   <span className="ai-status">批断：{record.aiStatus === 'completed' ? '已完成' : record.aiStatus === 'not_configured' ? '未配置' : record.aiStatus === 'failed' ? '失败' : record.aiStatus === 'pending' ? '分析中' : '未开始'}</span>
                   {/* 还没推上服务器的盘：不标出来，用户会先在同机「问问批断」上撞到「还没有任何命盘」。
                       方位词写「右上角」与详情页/聊天那两句提示同一口径(unconfigured-guidance 立的规矩)：

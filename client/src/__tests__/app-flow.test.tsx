@@ -9,6 +9,16 @@ import { analyzeBazi } from '../data/deepseekAdapter';
 
 vi.mock('../data/deepseekAdapter', () => ({ analyzeBazi: vi.fn(), beginAiSession: vi.fn(), cancelAiSession: vi.fn() }));
 
+function expectNoIndependentDayMaster() {
+  const basic = screen.getByRole('region', { name: '基础信息' });
+  const chart = screen.getByRole('region', { name: '基础排盘数据' });
+  for (const region of [basic, chart]) {
+    expect([...region.querySelectorAll('dt')].map((dt) => dt.textContent?.trim())).not.toContain('日主');
+  }
+  const tenGods = [...chart.querySelectorAll('.chart-columns > div')].find((row) => row.querySelector('dt')?.textContent?.trim() === '十神');
+  expect(tenGods?.textContent).toContain('日主');
+}
+
 describe('simplified chart application flow', () => {
   beforeEach(() => { initializeMockSession(mockPeople, mockPersonDetails); vi.mocked(analyzeBazi).mockResolvedValue({ status: 'not_configured' }); });
   afterEach(() => { cleanup(); resetMockSession(); });
@@ -63,7 +73,7 @@ describe('simplified chart application flow', () => {
     expect(screen.getByText('月柱')).toBeTruthy();
     expect(screen.getByText('日柱')).toBeTruthy();
     expect(screen.getByText('时柱')).toBeTruthy();
-    expect(screen.getByText('日主')).toBeTruthy();
+    expectNoIndependentDayMaster();
     expect(screen.getByText('五行')).toBeTruthy();
     expect(screen.getByText('公历日期')).toBeTruthy();
     expect(screen.getByText('五行比例')).toBeTruthy();
@@ -93,6 +103,7 @@ describe('simplified chart application flow', () => {
     expect(copied).toContain('年柱：甲子');
     expect(copied).not.toContain('行动建议');
     expect(copied).not.toContain('甲戌大运');
+    expect(copied).not.toContain('日主：');
   });
 
   it('saves a submitted record, refreshes records, and opens its stored detail', async () => {
@@ -113,7 +124,7 @@ describe('simplified chart application flow', () => {
     await screen.findByRole('heading', { name: '人物详情' });
     expect(screen.getByText('甲子')).toBeTruthy();
     expect(screen.getByText('状态：未开始')).toBeTruthy();
-    expect(screen.getByText('日主')).toBeTruthy();
+    expectNoIndependentDayMaster();
     expect(screen.getByText('生肖关系')).toBeTruthy();
     expect(screen.getByText('五行')).toBeTruthy();
     expect(screen.queryByText(/分类|运势|行动改变|提问/)).toBeNull();

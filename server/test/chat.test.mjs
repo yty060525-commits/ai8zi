@@ -21,6 +21,9 @@ describe('提问理解(检索计划)', () => {
     assert.deepEqual(extractWhen('下个月要注意什么', now), { year: 2026, month: 10 });
     assert.deepEqual(extractWhen('12月能找到工作吗', now), { year: 2026, month: 12 });
     assert.deepEqual(extractWhen('12月找到工作', new Date('2026-12-20T00:00:00')), { year: 2026, month: 12 });
+    assert.deepEqual(extractWhen('下个月事业如何', new Date('2026-12-31T15:00:00Z')), { year: 2027, month: 1 });
+    assert.deepEqual(extractWhen('下个月事业如何', new Date('2026-12-31T17:00:00Z')), { year: 2027, month: 2 });
+    assert.deepEqual(extractWhen('上个月事业如何', new Date('2027-01-01T00:30:00Z')), { year: 2026, month: 12 });
   });
   test('人名命中：长名优先，避免「张三丰」被「张三」截胡；主题抽取得到 健康/事业', () => {
     const records = [{ id: 'a', name: '张三' }, { id: 'b', name: '张三丰' }];
@@ -192,6 +195,26 @@ describe('追问继承上文(防复读)', () => {
 
 /* ---------- 证据摘录 ---------- */
 describe('查库取证', () => {
+  test('泛问空本命标题不构成来源且提示已完成但缺正文，旧无节正文仍保留', () => {
+    const d = openDatabase(':memory:');
+    try {
+      const make = (explanation) => ({ ...baseRecord, aiTasks: {
+        baseline: { task: { type: 'baseline' }, status: 'completed', analysis: { explanation } },
+      } });
+      insertRecord(d, make('【健康】   '));
+      const empty = collectEvidence(d, getRecordById(d, 'r1'), { topics: [], general: true });
+      assert.deepEqual(empty.analyses, []);
+      assert.deepEqual(empty.sources.filter((source) => source.kind === 'analysis'), []);
+      assert.equal(empty.sectionIndex, undefined);
+      assert.ok(empty.missing.includes('本命批断已完成，但没有可用于回答的正文'));
+      insertRecord(d, make('早睡保持健康。'));
+      const legacy = collectEvidence(d, getRecordById(d, 'r1'), { topics: [], general: true });
+      assert.deepEqual(legacy.analyses, [{ heading: '本命批断', text: '早睡保持健康。' }]);
+      assert.ok(legacy.sources.some((source) => source.kind === 'analysis' && source.sections.length === 0 && source.text === '早睡保持健康。'));
+      assert.deepEqual(legacy.missing, []);
+    } finally { d.close(); }
+  });
+
   const baseRecord = {
     id: 'r1', userId: 'u1', name: '张三', gender: 'male', birthYear: 1984, birthMonth: 2,
     createdAt: '2025-01-01', yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午',
@@ -234,6 +257,67 @@ describe('查库取证', () => {
     assert.ok(ev27.missing.some((m) => m.includes('2027')));
     db.close();
   });
+  test('精确时期缺主题正文时不产生空来源并报告主题缺口', () => {
+    const d = openDatabase(':memory:');
+    insertRecord(d, { ...baseRecord, aiTasks: { 'task-03': { task: { taskId: 'task-03', type: 'annual', year: 2026 }, status: 'completed', analysis: { title: '丙午', explanation: '【健康】注意休息。' } } } });
+    const ev = collectEvidence(d, getRecordById(d, 'r1'), { year: 2026, topics: ['事业'] }, { providers: [] });
+    assert.equal(ev.analyses.some((a) => a.heading.includes('流年')), false);
+    assert.ok(ev.missing.some((m) => m.includes('事业')));
+    assert.deepEqual(ev.sources.filter((s) => s.kind === 'analysis'), []);
+    d.close();
+  });
+  test('空小节不构成来源；多主题只命中部分时保留命中正文并逐项说明缺口', () => {
+    const d = openDatabase(':memory:');
+    insertRecord(d, { ...baseRecord, aiTasks: { annual: { task: { taskId: 'annual-2026', type: 'annual', year: 2026 }, status: 'completed', analysis: { title: '丙午', explanation: '【事业】   ' } } } });
+    const record = getRecordById(d, 'r1');
+    const empty = collectEvidence(d, record, { year: 2026, topics: ['事业'] }, { providers: [] });
+    assert.deepEqual(empty.sources.filter((source) => source.kind === 'analysis'), []);
+    assert.ok(empty.missing.some((item) => item.includes('事业')));
+    insertRecord(d, { ...baseRecord, aiTasks: { annual: { task: { taskId: 'annual-2026', type: 'annual', year: 2026 }, status: 'completed', analysis: { title: '丙午', explanation: '【事业】稳中有进。' } } } });
+    const partial = collectEvidence(d, getRecordById(d, 'r1'), { year: 2026, topics: ['事业', '爱情'] }, { providers: [] });
+    assert.ok(partial.sources.some((source) => source.kind === 'analysis' && source.sections.includes('事业') && source.text.includes('稳中有进')));
+    assert.ok(partial.missing.some((item) => item.includes('爱情')));
+    d.close();
+  });
+  test('空主题具体年份保留本命缺口与时段来源；扫年早返回保留有效时期事实', () => {
+    const d = openDatabase(':memory:');
+    insertRecord(d, { ...baseRecord, aiTasks: { annual: { task: { taskId: 'annual-2026', type: 'annual', year: 2026 }, status: 'completed', analysis: { title: '丙午', explanation: '【事业】稳中有进。' } } } });
+    const record = getRecordById(d, 'r1');
+    const yearFacts = { annual: { year: 2026, ganZhi: '丙午' }, annualHits: [], age: 42 };
+    const year = collectEvidence(d, record, { year: 2026, topics: [] }, { providers: [], periodFacts: yearFacts });
+    assert.ok(year.missing.some((item) => item.includes('本命批断')));
+    assert.ok(year.analyses.some((item) => item.heading.includes('2026年流年批断')));
+    assert.ok(year.sources.some((source) => source.kind === 'period' && source.year === 2026));
+    const scanFacts = { annual: { year: 2026, ganZhi: '丙午' }, annualHits: [], age: 42 };
+    const scan = collectEvidence(d, record, { scan: true, scanFrom: 2026, topics: ['事业'] }, { providers: [], periodFacts: scanFacts });
+    assert.deepEqual(scan.periodFacts, scanFacts);
+    assert.ok(scan.sources.some((source) => source.kind === 'period' && source.year === 2026));
+    d.close();
+  });
+  test('来源元数据逐条对应实际非空批断摘录', () => {
+    const d = openDatabase(':memory:');
+    insertRecord(d, baseRecord);
+    const ev = collectEvidence(d, getRecordById(d, 'r1'), { year: 2026, topics: ['事业'] }, { providers: [] });
+    assert.ok(ev.sources.some((s) => s.kind === 'analysis' && s.recordId === 'r1' && s.taskType === 'annual' && s.year === 2026 && s.sections.includes('事业') && s.text.includes('有升迁')));
+    assert.ok(ev.sources.filter((s) => s.kind === 'analysis').every((s) => s.text !== '' && !s.text.includes('心火旺')));
+    d.close();
+  });
+  test('扫年部分命中仅报告缺失主题，有效事业年份不列入全空清单', () => {
+    const d = openDatabase(':memory:');
+    try {
+      insertRecord(d, { ...baseRecord, aiTasks: {
+        career: { task: { type: 'annual', year: 2026 }, status: 'completed', analysis: { explanation: '【事业】事业稳中有进。' } },
+        health: { task: { type: 'annual', year: 2027 }, status: 'completed', analysis: { explanation: '【健康】注意休息。' } },
+      } });
+      const ev = collectEvidence(d, getRecordById(d, 'r1'), { scan: true, scanFrom: 2026, topics: ['事业', '爱情'] });
+      assert.ok(ev.sources.some((source) => source.kind === 'analysis' && source.year === 2026 && source.sections.join('、') === '事业' && source.text.includes('事业稳中有进')));
+      assert.deepEqual(ev.missing.filter((gap) => gap.startsWith('2026年')), ['2026年流年批断缺少所问主题：爱情']);
+      const emptyYears = ev.missing.find((gap) => gap.includes('没有与所问主题相关的小节'));
+      assert.ok(emptyYears.includes('2027'));
+      assert.equal(emptyYears.includes('2026'), false);
+      assert.ok(ev.analyses.find((item) => item.heading.includes('逐年批断')).text.includes('2027年('));
+    } finally { d.close(); }
+  });
   test('大运按「覆盖年」取证：问起运年以外的中段/止运年，也要端出所处大运批断', () => {
     const db = openDatabase(':memory:');
     // 大运任务按「起运年 2025」存，但 丙寅 运覆盖 2025-2034；旧代码只在问 2025 时命中，其余九年静默丢失。
@@ -253,6 +337,7 @@ describe('查库取证', () => {
       const dec = ev.analyses.find((a) => a.heading.includes('大运'));
       assert.ok(dec, y + ' 年应取到所处大运批断(覆盖该年的 2025-2034 运)');
       assert.ok(dec.text.includes('丙寅运'), y + ' 年拿到的应是覆盖它的那步运(丙寅)');
+      assert.equal(ev.sources.find((source) => source.kind === 'analysis' && source.taskType === 'decade')?.year, 2025, '来源年份应是任务实际起运年，而非提问落在大运中段的年份');
     }
     db.close();
   });
@@ -363,7 +448,7 @@ describe('索引优化(EXPLAIN QUERY PLAN)', () => {
   test('writeCache 自动派生 chart_sig；清盘时任务缓存与聊天缓存一并精确删除', () => {
     const d = openDatabase(':memory:');
     writeCache(d, 'v10|deepseek-flash|male|甲子|丙寅|庚午|壬午|annual|2027|0|1984|80', '{}');
-    writeCache(d, chatCacheKey({ gender: 'male', yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午', birthYear: 1984 }, '事业运？', 'deepseek-flash', 80), '答案');
+    writeCache(d, chatCacheKey({ gender: 'male', yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午', birthYear: 1984 }, '事业运？', 'deepseek-flash', 80, []), '答案');
     writeCache(d, 'v10|deepseek-flash|female|乙丑|丁卯|己巳|辛未|annual|2027|0|1985|80', '{}');
     const sig = d.prepare('SELECT chart_sig FROM ai_cache WHERE payload=?').get('答案');
     assert.equal(sig.chart_sig, 'male|甲子|丙寅|庚午|壬午');
@@ -390,7 +475,7 @@ describe('索引优化(EXPLAIN QUERY PLAN)', () => {
 
 /* ---------- HTTP 路由 ---------- */
 const db = openDatabase(':memory:');
-const { handle } = createApp({ db, allowRegister: true });
+  const { handle, setProviderCaller } = createApp({ db, allowRegister: true });
 let server; let base;
 async function api(method, route, { token, body } = {}) {
   const headers = { 'Content-Type': 'application/json' };
@@ -453,6 +538,19 @@ describe('/api/chat 路由', () => {
     const r = await api('POST', 'chat', { token: t, body: { question: '王五的2027年健康运势？' } });
     assert.ok(['not_configured', 'completed', 'failed'].includes(r.data.status));
   });
+  test('HTTP聊天真实SQLite取证回传来源，provider接缝收到同一摘录', async () => {
+    const t = (await api('POST', 'auth/register', { body: { username: 'sources用户', password: 'secret123' } })).data.token;
+    await api('POST', 'records', { token: t, body: recordBody({ id: 'src1', name: '王五', aiTasks: { a: { task: { taskId: 'annual-2027', type: 'annual', year: 2027 }, status: 'completed', analysis: { title: '丁未', explanation: '【事业】有升迁机会。\n【健康】注意休息。' } } } }) });
+    saveProviderKey(db, 'deepseek', 'test-secret');
+    let sent;
+    setProviderCaller(async (_provider, _key, messages) => { sent = messages; return { text: '事业有升迁机会。' }; });
+    const r = await api('POST', 'chat', { token: t, body: { question: '王五2027年事业如何' } });
+    assert.equal(r.data.status, 'completed');
+    assert.equal(r.data.evidence.personName, '王五');
+    assert.ok(r.data.evidence.sources.some((s) => s.taskId === 'annual-2027' && s.text.includes('有升迁机会')));
+    assert.ok(sent.at(-1).content.includes('有升迁机会'));
+    setProviderCaller(null);
+  });
 });
 
 /* ---------- runChat 直连调用(服务器内单元) ---------- */
@@ -461,14 +559,37 @@ describe('runChat 解析路径', () => {
     const d = openDatabase(':memory:');
     insertRecord(d, { id: 'ck1', userId: 'u7', name: '王二', gender: 'male', birthYear: 1984, birthMonth: 2, createdAt: '2025-01-01', yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午', nonAiResult: { greatFortunes: [], annualFortunes: [], monthlyFortunes: [] }, aiStatus: 'completed' });
     const rec = getRecordById(d, 'ck1');
-    writeCache(d, chatCacheKey(rec, '我的喜用五行是什么？', 'deepseek-flash', 80), '身弱喜土金，缓存答案。');
-    return runChat(d, { id: 'u7', role: 'user' }, { question: '我的喜用五行是什么？' }).then((reply) => {
+    const question = '我的喜用五行是什么？';
+    const plan = { ...analyzeQuestion(question, [{ id: rec.id, name: rec.name }]), recordId: rec.id, personName: rec.name };
+    const evidence = collectEvidence(d, rec, plan, { tone: 80, providers: [] });
+    const messages = buildChatMessages({ question, history: [], evidence, tone: 80 });
+    writeCache(d, chatCacheKey(rec, question, 'deepseek-flash', 80, messages), '身弱喜土金，缓存答案。');
+    return runChat(d, { id: 'u7', role: 'user' }, { question }).then((reply) => {
       assert.equal(reply.status, 'completed');
       assert.equal(reply.cached, true);
       assert.equal(reply.answer, '身弱喜土金，缓存答案。');
       assert.equal(reply.evidence.recordId, 'ck1');
       d.close();
     });
+  });
+  test('无密钥时仍从SQLite任务缓存恢复真实取证并命中同证据聊天缓存', async () => {
+    const d = openDatabase(':memory:');
+    insertRecord(d, { id: 'task-cache-chat', userId: 'u12', name: '缓存人', gender: 'male', birthYear: 1984, birthMonth: 2, createdAt: '2025-01-01', yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午', nonAiResult: { greatFortunes: [], annualFortunes: [], monthlyFortunes: [] }, aiStatus: 'completed' });
+    const record = getRecordById(d, 'task-cache-chat');
+    const question = '2026年事业如何';
+    const task = { type: 'annual', year: 2026, month: undefined };
+    writeCache(d, cacheKey(record, task, 'deepseek-flash', 80), JSON.stringify({ title: '丙午', explanation: '【事业】稳中有进。' }));
+    const plan = { ...analyzeQuestion(question, [{ id: record.id, name: record.name }]), recordId: record.id, personName: record.name };
+    const evidence = collectEvidence(d, record, plan, { tone: 80, providers: [] });
+    assert.ok(evidence.sources.some((source) => source.kind === 'analysis' && source.origin === 'task_cache' && source.text.includes('稳中有进')));
+    const messages = buildChatMessages({ question, history: [], evidence, tone: 80 });
+    writeCache(d, chatCacheKey(record, question, 'deepseek-flash', 80, messages), '已有缓存答案。');
+    const reply = await runChat(d, { id: 'u12', role: 'user' }, { question });
+    assert.equal(reply.status, 'completed');
+    assert.equal(reply.cached, true);
+    assert.equal(reply.answer, '已有缓存答案。');
+    assert.ok(reply.evidence.sources.some((source) => source.origin === 'task_cache'));
+    d.close();
   });
   test('按姓名锁定命主：evidence 回传 recordId/plan 供 UI 展示', async () => {
     const d = openDatabase(':memory:');
@@ -484,6 +605,51 @@ describe('runChat 解析路径', () => {
     } else {
       assert.equal(reply.status, 'not_configured');
     }
+    d.close();
+  });
+  test('本轮明确姓名胜过selected recordId，且错位periodFacts不进入证据', async () => {
+    const d = openDatabase(':memory:');
+    saveProviderKey(d, 'deepseek', 'k');
+    const common = { gender: 'male', birthYear: 1984, birthMonth: 2, createdAt: '2025-01-01', yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午', nonAiResult: { greatFortunes: [], annualFortunes: [], monthlyFortunes: [] }, aiStatus: 'completed' };
+    insertRecord(d, { ...common, id: 'a', userId: 'u10', name: '张三' });
+    insertRecord(d, { ...common, id: 'b', userId: 'u10', name: '李四', gender: 'female', birthYear: 1992, yearPillar: '乙丑' });
+    let sent;
+    const reply = await runChat(d, { id: 'u10', role: 'user' }, {
+      question: '李四2026年事业如何', recordId: 'a',
+      periodFacts: { annual: { year: 2025, ganZhi: '错误来源' }, marker: '错误来源' },
+      periodFactsContext: { recordId: 'a', year: 2025 },
+    }, { callProvider: async (_p, _k, messages) => { sent = messages; return { text: '事业稳中有进。' }; } });
+    assert.equal(reply.evidence.recordId, 'b');
+    assert.equal(reply.evidence.personName, '李四');
+    assert.equal(reply.evidence.plan.recordId, 'b');
+    assert.equal(reply.evidence.plan.personName, '李四');
+    assert.equal(JSON.stringify(sent).includes('错误来源'), false);
+    const denied = await runChat(d, { id: 'u10', role: 'user' }, { question: '李四事业如何', recordId: '不存在的旧选择' });
+    assert.equal(denied.status, 'failed', '明确姓名不能绕过传入记录ID的授权校验');
+    assert.match(denied.error, /记录不存在或无权访问/);
+    d.close();
+  });
+  test('同题相关批断变化后缓存失效，无关的旧答案不复用', async () => {
+    const d = openDatabase(':memory:');
+    saveProviderKey(d, 'deepseek', 'k');
+    const common = { name: '缓存人', gender: 'male', birthYear: 1984, birthMonth: 2, createdAt: '2025-01-01', yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午', nonAiResult: { greatFortunes: [], annualFortunes: [], monthlyFortunes: [] }, aiStatus: 'completed' };
+    insertRecord(d, { ...common, id: 'cache-source', userId: 'u11', aiTasks: {} });
+    let calls = 0;
+    const callProvider = async () => { calls += 1; return { text: calls === 1 ? '现有资料尚未覆盖事业。' : '事业批断显示稳中有进。' }; };
+    await runChat(d, { id: 'u11', role: 'user' }, { question: '2026年事业如何' }, { callProvider });
+    insertRecord(d, { ...common, id: 'cache-source', userId: 'u11', aiTasks: { annual: { task: { taskId: 'annual-2026', type: 'annual', year: 2026 }, status: 'completed', analysis: { explanation: '【事业】稳中有进。' } } } });
+    const second = await runChat(d, { id: 'u11', role: 'user' }, { question: '2026年事业如何' }, { callProvider });
+    assert.equal(calls, 2);
+    assert.equal(second.cached, false);
+    assert.equal(second.answer, '事业批断显示稳中有进。');
+    const same = await runChat(d, { id: 'u11', role: 'user' }, { question: '2026年事业如何' }, { callProvider });
+    assert.equal(same.cached, true);
+    assert.equal(calls, 2, '同证据重复提问不应再次调用通道');
+    const stored = getRecordById(d, 'cache-source');
+    insertRecord(d, { ...stored, aiTasks: { ...stored.aiTasks, unrelated: { task: { taskId: 'annual-2030', type: 'annual', year: 2030 }, status: 'completed', analysis: { explanation: '【健康】未来注意休息。' } } } });
+    const unrelated = await runChat(d, { id: 'u11', role: 'user' }, { question: '2026年事业如何' }, { callProvider });
+    assert.equal(unrelated.cached, true);
+    assert.equal(calls, 2, '未取入本次证据的任务变化不得使同证据缓存失效');
     d.close();
   });
 });
@@ -527,7 +693,11 @@ describe('聊天正文中文闸门(防英文字段名与符号漏进正文)', ()
     insertRecord(d, { id: 'san1', userId: 'usan', name: '洗衣', gender: 'male', birthYear: 1984, birthMonth: 2, createdAt: '2025-01-01', yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午', nonAiResult: { greatFortunes: [], annualFortunes: [], monthlyFortunes: [] }, aiStatus: 'completed' });
     const stored = getRecordById(d, 'san1');
     // 不配密钥 → 走「缓存优先于密钥检查」分支，只验证读出的答案已被洗净
-    writeCache(d, chatCacheKey(stored, '我的喜用五行是什么？', 'deepseek-flash', 80), '身弱（strengthScore 42）喜土金。');
+    const question = '我的喜用五行是什么？';
+    const plan = { ...analyzeQuestion(question, [{ id: stored.id, name: stored.name }]), recordId: stored.id, personName: stored.name };
+    const evidence = collectEvidence(d, stored, plan, { tone: 80, providers: [] });
+    const messages = buildChatMessages({ question, history: [], evidence, tone: 80 });
+    writeCache(d, chatCacheKey(stored, question, 'deepseek-flash', 80, messages), '身弱（strengthScore 42）喜土金。');
     const reply = await runChat(d, { id: 'usan', role: 'user' }, { question: '我的喜用五行是什么？' });
     assert.equal(reply.status, 'completed');
     assert.equal(reply.cached, true);

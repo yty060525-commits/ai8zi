@@ -246,7 +246,7 @@ function NonAiAnalysis({ result, record }: { result?: NonAiChart; record: BaziRe
     ['四柱', [result.pillars.year, result.pillars.month, result.pillars.day, result.pillars.hour].join('、')],
     ['公历日期', solarDateText(result, record)],
     ['五行', mapText(result.elements)], ['五行比例', formatElementRatio(result.elementRatio)],
-    ['日主', result.dayMaster], ['十二长生', listText(result.twelveLongevity)],
+    ['十二长生', listText(result.twelveLongevity)],
     ['起运', luckStartText(result, chinaYear(new Date()))],
     ['袁天罡称骨', result.chenggu ? `${result.chenggu.totalText}，年${result.chenggu.parts.year}、月${result.chenggu.parts.month}、日${result.chenggu.parts.day}、时${result.chenggu.parts.hour}` : '暂无'],
   ];
@@ -359,17 +359,19 @@ export function toPointBlocks(text: string): PointBlock[] {
 const CN_BULLETS = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '十一', '十二', '十三', '十四', '十五', '十六', '十七', '十八', '十九', '二十'];
 /** 条目行自己已经带编号(「一、」「1.」)时不再冠名，否则 pointBodyText 会拼成「一、一、」。 */
 const hasOwnIndex = (point: string) => ALREADY_INDEXED.test(point);
+const pointDisplayEntries = (points: string[]) => {
+  let n = 0;
+  return points.map((point) => {
+    if (hasOwnIndex(point)) return { index: '', point };
+    const index = (CN_BULLETS[n] ?? String(n + 1)) + '、';
+    n += 1;
+    return { index, point };
+  });
+};
 export function pointBodyText(blocks: PointBlock[], marker?: 'bullet' | 'ordinal'): string {
   return blocks.map((block) => {
     const head = block.head ? block.head + '\n' : '';
-    let n = 0;
-    return head + block.points.map((point) => {
-      if (hasOwnIndex(point)) return point;
-      const label = (CN_BULLETS[n] ?? String(n + 1)) + '、';
-      n += 1;
-      // 复制出去的是纯文本，条目要自己带序号；屏幕上的列表由 CSS 负责编号，不能再拼一层。
-      return marker === 'ordinal' ? label + point : point;
-    }).join('\n');
+    return head + pointDisplayEntries(block.points).map(({ index, point }) => marker === 'ordinal' ? index + point : point).join('\n');
   }).join('\n\n');
 }
 
@@ -406,7 +408,7 @@ function PointsView({ text }: { text?: string }) {
   const blocks = toPointBlocks(sanitizeAnalysisText(text || ''));
   if (blocks.length === 0) return <p>暂无正文</p>;
   return <div className="points-view">{blocks.map((block, index) => (
-    <div className="point-block" key={index}>{block.head ? <p className="point-head">{block.head}</p> : null}{block.points.length > 0 && <ul className="point-list">{block.points.map((point, i) => <li key={i}>{point}</li>)}</ul>}</div>
+    <div className="point-block" key={index}>{block.head ? <p className="point-head">{block.head}</p> : null}{block.points.length > 0 && <ul className="point-list">{pointDisplayEntries(block.points).map(({ index: pointIndex, point }, i) => <li key={i}>{pointIndex && <span className="point-index">{pointIndex}</span>}{point}</li>)}</ul>}</div>
   ))}</div>;
 }
 

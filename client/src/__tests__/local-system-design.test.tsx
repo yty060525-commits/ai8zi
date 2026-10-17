@@ -576,6 +576,9 @@ describe('详情页本地批断由按需加载的引擎产出', () => {
     for (const block of local.querySelectorAll('.local-block')) {
       expect(copied.replace(/[\s【】]/g, '')).toContain((block.textContent ?? '').replace(/[\s【】]/g, ''));
     }
+    for (const point of local.querySelectorAll('.local-block .point-list li')) {
+      expect(copied.replace(/[\s【】]/g, '')).toContain((point.textContent ?? '').replace(/[\s【】]/g, ''));
+    }
 
   });
 });

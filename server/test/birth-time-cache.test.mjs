@@ -13,7 +13,8 @@ describe('完整出生时刻缓存隔离', () => {
   after(() => db.close());
 
   test('同盘任务和聊天键同刻稳定、分钟变化分叉，旧盘使用空尾签名', () => {
-    for (const [make, args] of [[(r) => cacheKey(r, { type: 'baseline' }, 'model'), []], [(r) => chatCacheKey(r, '问事业', 'model', 80), []]]) {
+    const messages = [{ role: 'user', content: '问事业' }];
+    for (const [make, args] of [[(r) => cacheKey(r, { type: 'baseline' }, 'model'), []], [(r) => chatCacheKey(r, '问事业', 'model', 80, messages), []]]) {
       const base = { ...chart, nonAiResult: { birthTime: early } };
       const k1 = make(base, ...args), k2 = make({ ...base }, ...args);
       const changed = make({ ...base, nonAiResult: { birthTime: late } }, ...args);
@@ -30,8 +31,9 @@ describe('完整出生时刻缓存隔离', () => {
     const b = { ...chart, nonAiResult: { birthTime: late } };
     const taskA = cacheKey(a, { type: 'baseline' }, 'model', 80);
     const taskB = cacheKey(b, { type: 'baseline' }, 'model', 80);
-    const chatA = chatCacheKey(a, '问事业', 'model', 80);
-    const chatB = chatCacheKey(b, '问事业', 'model', 80);
+    const messages = [{ role: 'user', content: '问事业' }];
+    const chatA = chatCacheKey(a, '问事业', 'model', 80, messages);
+    const chatB = chatCacheKey(b, '问事业', 'model', 80, messages);
     writeCache(db, taskA, '时刻甲'); writeCache(db, chatA, '聊天甲');
     assert.equal(readCache(db, taskB), null);
     assert.equal(readCache(db, chatB), null);

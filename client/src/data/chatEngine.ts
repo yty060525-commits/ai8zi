@@ -23,18 +23,20 @@ import { countElements, sanitizeChatText } from '../features/chart/elements';
    UTC 16:00–24:00 那段本地日期比北京早一天，「本月」会答成上个月、「今年」会答成去年。
    与详情页起运文案/大运表同一套收口(utils/date)，见 beijing-date-caliber.test.ts。 */
 import { chinaDateParts, chinaYear } from '../utils/date';
+import { factLabels, sectionNames, stableJson, uncoveredTopics, type ChatSource } from '../shared/chatRetrieval';
 
 export interface ChatMessage { role: 'user' | 'assistant'; content: string }
-export interface ChatPlan { recordId: string | null; personName: string | null; matchedCount: number; year?: number; month?: number; topics: string[]; question?: string; scan?: boolean; scanFrom?: number; general?: boolean }
+export interface ChatPlan { recordId: string | null; personName: string | null; matchedCount: number; year?: number; month?: number; topics: string[]; question?: string; scan?: boolean; scanFrom?: number; general?: boolean; inheritedPerson?: boolean }
 export interface ChatEvidence {
   person: { id: string; name: string; gender: string; birthYear: number };
-  plan: { year?: number; month?: number; topics: string[] };
+  plan: { year?: number; month?: number; topics: string[]; scan?: boolean; scanFrom?: number };
   natal: Record<string, unknown>;
   analyses: Array<{ heading: string; text: string }>;
   missing: string[];
   periodFacts?: Record<string, unknown>;
   /** 泛问时列给模型的「本盘已有小节」清单：只能从中选取，不得自行补写没有的小节。 */
   sectionIndex?: string[];
+  sources: ChatSource[];
 }
 export interface ChatReply {
   status: 'completed' | 'failed' | 'not_configured' | 'need_record';
@@ -42,7 +44,7 @@ export interface ChatReply {
   error?: string;
   reason?: string;
   cached?: boolean;
-  evidence?: { recordId?: string; personName?: string | null; plan?: ChatPlan; options?: Array<{ id: string; name: string }> };
+  evidence?: { recordId?: string; personName?: string | null; plan?: ChatPlan; options?: Array<{ id: string; name: string }>; sources?: ChatSource[]; missing?: string[] };
 }
 
 /* ---------- 提问理解(与服务端 chat.mjs 同口径) ---------- */
@@ -85,6 +87,13 @@ function monthFromText(text: string, now: Date): number | undefined {
   return undefined;
 }
 
+function relativeMonthYearDelta(text: string, now: Date): number {
+  const month = chinaDateParts(now).month;
+  if (/下个月|下月|来月/.test(text) && month === 12) return 1;
+  if (/上个月|上月/.test(text) && month === 1) return -1;
+  return 0;
+}
+
 /** ⚠ 顺序即正确性：先把年月全解析完，最后才决定 scan。旧写法把 scan 分支夹在月份解析之前直接
  *  return，于是「明年三月什么时候发工资」里的月份被整段跳过。两位年份缩写(24年→2024)按当代
  *  出生区间回推 —— 这正是「答我没有24年信息」的根因：旧正则只吃 20\d{2}，解不出就继承了上一轮年份。 */
@@ -104,7 +113,7 @@ export function extractWhen(question: string, now = new Date()): { year?: number
     }
   }
   month = monthFromText(q, now);
-  if (month !== undefined && year === undefined) year = nowYear; // 月份必然锚定在某一年
+  if (month !== undefined && year === undefined) year = nowYear + relativeMonthYearDelta(q, now); // 月份必然锚定在某一年
   // 年份与月份都没落地、且句子确实在开放式问时机 → 才转扫年。「明年什么时候」有年份锚点，不走这里。
   if (year === undefined && month === undefined && OPEN_TIMING_RE.test(q)) {
     const rel = Object.entries(RELATIVE_YEAR).find(([word]) => q.includes(word));
@@ -170,7 +179,7 @@ export function applyFollowUp(plan: ChatPlan, history: ChatMessage[], records: A
   const next: ChatPlan = { ...plan };
   // 人名：本轮自己说了就按本轮的来(可能换人)，没说才沿用上一轮，避免整段对话锁死在第一个命主上。
   const thisTurn = personFromText(plan.question ?? '', records);
-  if (!thisTurn && prevPerson) { next.personName = prevPerson.personName; next.recordId = prevPerson.recordId; }
+  if (!thisTurn && prevPerson) { next.personName = prevPerson.personName; next.recordId = prevPerson.recordId; next.inheritedPerson = true; }
   else if (thisTurn) { next.personName = thisTurn.personName; next.recordId = thisTurn.recordId; }
   if (!plan.topics?.length) {
     const inherited = [...new Set(TOPIC_RULES.filter((rule) => rule.re.test(source)).map((rule) => rule.topic))];
@@ -221,12 +230,13 @@ export function sliceSections(text: string, topics: string[], capPer = 700): str
     const label = m[1].trim(); const body = cutAtBoundary(m[2].trim(), capPer);
     // 提问主题里存在真实小节标签时才按标签过滤；只问「大运/格局」这类非小节主题时不过滤
     if (realLabels.length && !realLabels.some((t) => label.includes(t))) continue;
+    if (!body.trim()) continue;
     if (seen.has(label)) continue;
     seen.add(label);
     blocks.push('【' + label + '】' + body);
   }
   if (blocks.length) return blocks.join('\n');
-  return labels.length ? '' : cutAtBoundary(source, capPer);
+  return labels.length || /【[^】]+】/.test(source) ? '' : cutAtBoundary(source, capPer);
 }
 
 const PILLAR_NAMES = ['年', '月', '日', '时'];
@@ -268,6 +278,7 @@ export function buildPeriodFacts(record: BaziRecord, plan: ChatPlan): Record<str
     const monthly = (n.monthlyFortunes ?? []).find((row) => Number(row.year) === Number(y) && Number(row.month) === Number(plan.month));
     if (monthly) { out.monthly = monthly; out.monthlyHits = summarizeHits(monthly, monthly.ganZhi); }
   }
+  if (!out.annual && !out.decade && !out.monthly) return undefined;
   out.age = Number(y) - Number(record.birthYear);
   return out;
 }
@@ -290,6 +301,38 @@ const decadeOf = (record: BaziRecord, tasks: any[], year: number | undefined) =>
     || tasks.find((r: any) => r?.task?.type === 'decade' && r?.task?.decade && Number(r.task.decade.startYear) <= Number(year) && Number(year) <= Number(r.task.decade.endYear) && r.status === 'completed' && r.analysis);
 };
 
+function addAnalysis(evidence: ChatEvidence, record: BaziRecord, result: any, heading: string, text: string, meta: { year?: number; month?: number; origin?: ChatSource['origin']; includeInAnalyses?: boolean } = {}): boolean {
+  const body = String(text || '').trim();
+  if (!body) return false;
+  if (meta.includeInAnalyses !== false) evidence.analyses.push({ heading, text: body });
+  const task = result?.task ?? {};
+  const source: ChatSource = {
+    kind: 'analysis', recordId: record.id, heading,
+    taskId: task.taskId || undefined, taskType: task.type,
+    year: meta.year ?? task.year, month: meta.month ?? task.month,
+    sections: sectionNames(body), text: body, origin: meta.origin ?? 'record',
+  };
+  evidence.sources.push(source);
+  return true;
+}
+
+function addFactsSources(evidence: ChatEvidence, record: BaziRecord): void {
+  const labels: Record<string, string> = { annual: '流年事实', annualHits: '流年干支关系', decade: '大运事实', decadeHits: '大运干支关系', monthly: '流月事实', monthlyHits: '流月干支关系', age: '所问年龄' };
+  const natalSections = factLabels(evidence.natal);
+  if (natalSections.length) evidence.sources.push({ kind: 'natal', recordId: record.id, heading: '本命事实', sections: natalSections });
+  if (evidence.periodFacts && typeof evidence.periodFacts === 'object') {
+    const periodSections = factLabels(evidence.periodFacts, labels);
+    if (periodSections.length) evidence.sources.push({ kind: 'period', recordId: record.id, heading: '所问时段事实', year: evidence.plan.year ?? evidence.plan.scanFrom, month: evidence.plan.month, sections: periodSections });
+  }
+}
+
+function topicSlice(explanation: unknown, labels: string[], cap = 700): string {
+  const source = String(explanation ?? '');
+  const sliced = sliceSections(source, labels, cap);
+  // 无小节标签的旧正文按历史契约可作为整段文本；存在其他主题小节时不能回退整篇。
+  return sliced || (!/【[^】]+】/.test(source) ? cutAtBoundary(source, cap) : '');
+}
+
 /** 本机离线通道证据组装(口径 = 服务器 collectEvidence，数据源 = 本机 SQLite/镜像库)。 */
 export function buildEvidence(record: BaziRecord, plan: ChatPlan): ChatEvidence {
   const n = record.nonAiResult;
@@ -308,9 +351,12 @@ export function buildEvidence(record: BaziRecord, plan: ChatPlan): ChatEvidence 
   };
   const evidence: ChatEvidence = {
     person: { id: record.id, name: record.name, gender: record.gender, birthYear: record.birthYear },
-    plan: { year: plan.year, month: plan.month, topics: plan.topics },
-    natal, analyses: [], missing: [],
+    plan: { year: plan.year, month: plan.month, topics: plan.topics, scan: plan.scan === true, scanFrom: plan.scanFrom },
+    natal, analyses: [], missing: [], sources: [],
   };
+  const factsYear = plan.year ?? (plan.scan ? plan.scanFrom : undefined);
+  const periodFacts = factsYear === undefined ? undefined : buildPeriodFacts(record, { ...plan, year: factsYear });
+  if (periodFacts) evidence.periodFacts = periodFacts;
   const tasks = taskRecords(record);
   const wantsScan = plan.scan === true;
   const wantsPeriod = plan.year !== undefined || wantsScan;
@@ -318,6 +364,21 @@ export function buildEvidence(record: BaziRecord, plan: ChatPlan): ChatEvidence 
   // 「泛问」(我这个人怎么样/适合做什么)：没有主题词当节标签，但用户要的恰恰是最依赖全局结论的答案。
   // 把本命 + 全盘总结 + 后天调整三份都端出来，并把已有小节清单交给模型按问题挑 —— 仍属取证，不属推测。
   const isGeneral = topics.length === 0 && plan.general === true;
+  if (!wantsPeriod || topics.length === 0 || topics.some((t) => ['五行', '格局', '神煞'].includes(t))) {
+    const baseline = findCompleted(tasks, 'baseline');
+    if (baseline) {
+      if (!addAnalysis(evidence, record, baseline, '本命批断', topicSlice(baseline.analysis.explanation, topics.length ? [...topics, '身强身弱与喜忌'] : [], 900))) evidence.missing.push('本命批断已完成，但没有可用于回答的正文');
+    }
+    else evidence.missing.push('本命批断尚未生成：可先在命盘详情页点批断分析');
+    const adjustment = findCompleted(tasks, 'adjustment');
+    if (adjustment && (topics.length === 0 || topics.includes('五行'))) addAnalysis(evidence, record, adjustment, '后天调整与职业', sliceSections(adjustment.analysis.explanation, ['后天调整', '事业适配', '健康注意']));
+    const overview = findCompleted(tasks, 'overview');
+    if (overview && topics.length === 0) addAnalysis(evidence, record, overview, '全盘总结', sliceSections(overview.analysis.explanation, ['核心结论', '值得关注的时间节点', '行动建议']));
+    if (isGeneral) {
+      const available = [...new Set(evidence.analyses.flatMap((a) => sectionNames(a.text)))];
+      if (available.length) evidence.sectionIndex = available;
+    }
+  }
   if (wantsScan) {
     // 开放式时机提问：把未来若干年的流年批断逐条列成时间线，让模型在证据里挑年限
     const labels = topics.length ? topics : ['健康', '事业', '财运', '爱情', '刑冲克害批注'];
@@ -330,47 +391,54 @@ export function buildEvidence(record: BaziRecord, plan: ChatPlan): ChatEvidence 
       // 该年批断存在，但按提问主题过滤后一个字都没有 → 这一年答不了这个问题，必须点名
       if (!body) uncovered.push(y);
       lines.push(String(y) + '年(' + String(annual.analysis.title ?? '') + ')：' + body);
+      if (body) {
+        addAnalysis(evidence, record, annual, String(y) + '年流年批断', body, { year: y, includeInAnalyses: false });
+        const absent = uncoveredTopics(body, topics);
+        if (absent.length) evidence.missing.push(String(y) + '年流年批断缺少所问主题：' + absent.join('、'));
+      }
     }
     if (lines.length) {
       evidence.analyses.push({ heading: from + '年至' + (from + SCAN_YEARS - 1) + '年逐年批断，用于判断应期', text: lines.join('\n') });
       const decade = decadeOf(record, tasks, from);
-      if (decade) evidence.analyses.push({ heading: '所处大运批断', text: sliceSections(decade.analysis.explanation, labels) });
+      if (decade) {
+        const body = sliceSections(decade.analysis.explanation, labels);
+        addAnalysis(evidence, record, decade, '所处大运批断', body);
+      }
     } else {
       evidence.missing.push(from + '年至' + (from + SCAN_YEARS - 1) + '年的流年批断一条都还没生成，无法判断应期');
     }
     if (gaps.length) evidence.missing.push('下列年份尚未生成流年批断，作答时只能在这些年份之外给应期：' + gaps.join('、') + '年');
     if (uncovered.length) evidence.missing.push('下列年份虽有流年批断，但其中没有与所问主题相关的小节，不得据其判断该主题的应期：' + uncovered.join('、') + '年');
+    addFactsSources(evidence, record);
     return evidence;
   }
-  if (!wantsPeriod) {
-    const baseline = findCompleted(tasks, 'baseline');
-    if (baseline) {
-      const text = sliceSections(baseline.analysis.explanation, topics.length ? [...topics, '身强身弱与喜忌'] : []) || cutAtBoundary(String(baseline.analysis.explanation ?? ''), 900);
-      evidence.analyses.push({ heading: '本命批断', text });
-    } else evidence.missing.push('本命批断尚未生成：可先在命盘详情页点批断分析');
-    const adjustment = findCompleted(tasks, 'adjustment');
-    if (adjustment && (!topics.length || topics.includes('五行'))) evidence.analyses.push({ heading: '后天调整与职业', text: sliceSections(adjustment.analysis.explanation, ['后天调整', '事业适配', '健康注意']) });
-    const overview = findCompleted(tasks, 'overview');
-    if (overview && !topics.length) evidence.analyses.push({ heading: '全盘总结', text: sliceSections(overview.analysis.explanation, ['核心结论', '值得关注的时间节点', '行动建议']) });
-    if (isGeneral) {
-      const available = [...new Set(evidence.analyses.flatMap((a) => [...String(a.text).matchAll(/【([^】]+)】/g)].map((m) => m[1])))];
-      if (available.length) evidence.sectionIndex = available;
-    }
-  } else {
+  if (wantsPeriod) {
     const labels = topics.length ? topics : ['健康', '事业', '财运', '爱情', '刑冲克害批注'];
     const annual = findCompleted(tasks, 'annual', plan.year);
-    if (annual) evidence.analyses.push({ heading: plan.year + '年流年批断，题为' + String(annual.analysis.title ?? '') , text: sliceSections(annual.analysis.explanation, labels) });
-    else evidence.missing.push(plan.year + '年的流年分析尚未生成');
+    const annualOrigin: ChatSource['origin'] = 'record';
+    if (annual) {
+      const heading = plan.year + '年流年批断，题为' + String(annual.analysis.title ?? '');
+      const body = topicSlice(annual.analysis.explanation, labels);
+      if (!addAnalysis(evidence, record, annual, heading, body, { year: plan.year, origin: annualOrigin })) evidence.missing.push(plan.year + '年的流年批断没有与所问主题相关的小节（' + topics.join('、') + '），无法据此回答');
+      else { const absent = uncoveredTopics(body, topics); if (absent.length) evidence.missing.push(plan.year + '年流年批断缺少所问主题：' + absent.join('、')); }
+    } else evidence.missing.push(plan.year + '年的流年分析尚未生成');
     const decade = decadeOf(record, tasks, plan.year);
-    if (decade) evidence.analyses.push({ heading: '所处大运批断', text: sliceSections(decade.analysis.explanation, labels) });
+    if (decade) {
+      const body = topicSlice(decade.analysis.explanation, labels);
+      if (!addAnalysis(evidence, record, decade, '所处大运批断', body)) evidence.missing.push(plan.year + '年所处大运批断没有与所问主题相关的小节');
+      else { const absent = uncoveredTopics(body, topics); if (absent.length) evidence.missing.push(plan.year + '年所处大运批断缺少所问主题：' + absent.join('、')); }
+    }
     if (plan.month !== undefined) {
       const monthly = findCompleted(tasks, 'monthly', plan.year, plan.month);
-      if (monthly) evidence.analyses.push({ heading: plan.year + '年' + plan.month + '月流月批断', text: sliceSections(monthly.analysis.explanation, labels) });
-      else evidence.missing.push(plan.year + '年' + plan.month + '月的流月分析尚未生成');
+      if (monthly) {
+        const heading = plan.year + '年' + plan.month + '月流月批断';
+        const body = topicSlice(monthly.analysis.explanation, labels);
+        if (!addAnalysis(evidence, record, monthly, heading, body, { year: plan.year, month: plan.month })) evidence.missing.push(plan.year + '年' + plan.month + '月流月批断没有与所问主题相关的小节');
+        else { const absent = uncoveredTopics(body, topics); if (absent.length) evidence.missing.push(plan.year + '年' + plan.month + '月流月批断缺少所问主题：' + absent.join('、')); }
+      } else evidence.missing.push(plan.year + '年' + plan.month + '月的流月分析尚未生成');
     }
   }
-  const periodFacts = buildPeriodFacts(record, plan);
-  if (periodFacts) evidence.periodFacts = periodFacts;
+  addFactsSources(evidence, record);
   return evidence;
 }
 
@@ -410,8 +478,8 @@ export const CHAT_SYSTEM = '你是一位资深子平命理师，正在与用户�
 
 export function buildChatMessages(input: { question: string; history: ChatMessage[]; evidence: ChatEvidence; tone: number }): Array<{ role: string; content: string }> {
   const { question, history, evidence, tone } = input;
-  const evidenceText = '# 命盘事实(JSON)\n' + JSON.stringify(evidence.natal)
-    + (evidence.periodFacts ? '\n\n# 所问时段运势数据(JSON)\n' + JSON.stringify(evidence.periodFacts) : '')
+  const evidenceText = '# 命盘事实(JSON)\n' + stableJson(evidence.natal)
+    + (evidence.periodFacts ? '\n\n# 所问时段运势数据(JSON)\n' + stableJson(evidence.periodFacts) : '')
     + '\n\n# 已算批断摘录\n' + (evidence.analyses.map((a) => '## ' + a.heading + '\n' + a.text).join('\n\n') || '（数据库中暂无该主题的已算批断）')
     + (evidence.missing.length ? '\n\n# 数据缺口提示\n' + evidence.missing.map((m) => '- ' + m).join('\n') : '');
   const messages: Array<{ role: string; content: string }> = [{ role: 'system', content: CHAT_SYSTEM }];
@@ -424,9 +492,19 @@ export function buildChatMessages(input: { question: string; history: ChatMessag
   const sectionIndexText = evidence.sectionIndex?.length
     ? '\n\n# 本盘已算出的批断小节(只能从中选取作答，不得自行补写没有的小节)\n' + evidence.sectionIndex.map((s) => '【' + s + '】').join('、')
     : '';
+  const planText = '\n\n# 本轮检索计划\n命主：' + evidence.person.name + '，记录：' + evidence.person.id
+    + '\n年份：' + (evidence.plan.year ?? '未指定') + '\n月份：' + (evidence.plan.month ?? '未指定')
+    + '\n主题：' + (evidence.plan.topics.join('、') || '未指定')
+    + (evidence.plan.scan ? '\n扫年范围：' + evidence.plan.scanFrom + '年至' + (Number(evidence.plan.scanFrom) + SCAN_YEARS - 1) + '年' : '');
+  const sourceDirectory = evidence.sources.length
+    ? '\n\n# 本轮检索资料目录\n' + evidence.sources.map((source) => '【' + source.heading + '】' + source.sections.join('、')
+      + '；记录：' + source.recordId + (source.taskId ? '；任务：' + source.taskId : '')
+      + (source.taskType ? '；类型：' + source.taskType : '') + (source.year !== undefined ? '；年份：' + source.year : '')
+      + (source.month !== undefined ? '；月份：' + source.month : '') + (source.origin ? '；来源：' + source.origin : '')).join('\n')
+    : '\n\n# 本轮检索资料目录\n无可用资料来源';
   messages.push({
     role: 'user',
-    content: evidenceText + sectionIndexText + '\n\n# 语气要求\n' + toneInstructionText(tone) + '\n\n# 用户问题\n' + String(question ?? '').slice(0, 500),
+    content: evidenceText + sectionIndexText + planText + sourceDirectory + '\n\n# 语气要求\n' + toneInstructionText(tone) + '\n\n# 用户问题\n' + String(question ?? '').slice(0, 500),
   });
   return messages;
 }
@@ -494,7 +572,7 @@ export async function askChat(input: AskChatInput): Promise<ChatReply> {
   const question = String(input.question || '').trim();
   if (!question) return { status: 'failed', error: '请输入问题' };
   if (question.length > 500) return { status: 'failed', error: '问题过长，请控制在五百字以内' };
-  const history = Array.isArray(input.history) ? input.history : [];
+  const history = Array.isArray(input.history) ? input.history.map(({ role, content }) => ({ role, content })) : [];
   const tone = Number.isFinite(input.tone as number) ? Math.max(0, Math.min(100, Math.round(Number(input.tone)))) : 80;
 
   /* 服务器报错的原因：本机通道接着答时不必带；本机也失败时用它替掉重复的报错。 */
@@ -502,18 +580,24 @@ export async function askChat(input: AskChatInput): Promise<ChatReply> {
   if (isServerMode()) {
     let recordId = input.recordId ?? undefined;
     let periodFacts: Record<string, unknown> | undefined;
+    let periodFactsContext: { recordId: string; year: number; month?: number } | undefined;
     // 列表记录是瘦身版，先重算出大运/流年数组再取证(服务器那边同样需要这份现算数据)。
     try {
       const records = await listBaziRecords();
       // 传 records：追问时本机也要能认出「那她呢」沿用上一轮命主，才能让 periodFacts 算在对的人身上。
-      const plan = applyFollowUp(analyzeQuestion(question, records), history, records);
-      const target = (recordId ? records.find((r) => r.id === recordId) : undefined)
+      const currentPlan = analyzeQuestion(question, records);
+      const plan = applyFollowUp(currentPlan, history, records);
+      const target = (currentPlan.recordId ? records.find((r) => r.id === currentPlan.recordId) : undefined)
+        ?? (recordId ? records.find((r) => r.id === recordId) : undefined)
         ?? (plan.recordId ? records.find((r) => r.id === plan.recordId) : undefined)
         ?? (records.length === 1 ? records[0] : undefined);
       if (target) {
         recordId = target.id;
         const full = await hydrateRecord(target);
-        periodFacts = buildPeriodFacts(full, { ...plan, recordId: target.id });
+        const actualPlan = { ...plan, recordId: target.id, personName: target.name };
+        const factsYear = actualPlan.year ?? (actualPlan.scan ? actualPlan.scanFrom : undefined);
+        periodFacts = factsYear === undefined ? undefined : buildPeriodFacts(full, { ...actualPlan, year: factsYear });
+        if (periodFacts && factsYear !== undefined) periodFactsContext = { recordId: target.id, year: factsYear, ...(actualPlan.month !== undefined ? { month: actualPlan.month } : {}) };
       }
     } catch { /* 本地库读不到就让服务器完全按库内数据作答 */ }
     // #143 同类：上面那步取证是 await，慢盘上可达数百毫秒。旧写法只在 serverFetch 抛 AbortError
@@ -522,7 +606,7 @@ export async function askChat(input: AskChatInput): Promise<ChatReply> {
     try {
       let provider: string | undefined;
       try { provider = localStorage.getItem('mingli.provider') ?? undefined; } catch { provider = undefined; }
-      const { data } = await serverFetch<ChatReply>('/chat', { method: 'POST', body: { question, history, recordId, tone, periodFacts, provider }, signal: input.signal });
+      const { data } = await serverFetch<ChatReply>('/chat', { method: 'POST', body: { question, history, recordId, tone, periodFacts, periodFactsContext, provider }, signal: input.signal });
       const answer = data?.status === 'completed' ? sanitizeChatText(String(data.answer ?? '')) : data?.answer;
       // 服务器按它库里的名下记录作答，说「还没有任何命盘」时本机可能其实有离线建的盘。
       // 但「本机有盘」不等于「盘没传上去」：刚保存那一下推送还在后台进行，此刻服务器确实看不见，
@@ -576,16 +660,19 @@ async function askChatLocal(input: { question: string; history: ChatMessage[]; t
   const records = await listBaziRecords();
   if (records.length === 0) return { status: 'need_record', reason: '还没有任何命盘：请先在排盘页保存一条记录，再向我提问' };
   // records 一并传入：本轮没点人名时沿用上一个人，点了别人的名字则换人(否则整段对话锁死在第一个命主)。
-  const plan = applyFollowUp(analyzeQuestion(input.question, records), input.history, records);
-  let target = input.recordId ? records.find((r) => r.id === input.recordId) : undefined;
+  const currentPlan = analyzeQuestion(input.question, records);
+  const plan = applyFollowUp(currentPlan, input.history, records);
+  let target = currentPlan.recordId ? records.find((r) => r.id === currentPlan.recordId) : undefined;
+  if (!target && input.recordId) target = records.find((r) => r.id === input.recordId);
   if (!target && plan.recordId) target = records.find((r) => r.id === plan.recordId);
   if (!target && records.length === 1) target = records[0];
   if (!target) return { status: 'need_record', reason: '你的名下有多条命盘，请告诉我问的是谁，或点选下方命主', evidence: { plan, options: records.map((r) => ({ id: r.id, name: r.name })) } };
   // 证据要读大运/流年/流月数组，而存储里这些是空的(落库时瘦身)：只对定下来的这一条做重算。
+  const actualPlan = { ...plan, recordId: target.id, personName: target.name };
   const fullTarget = await hydrateRecord(target);
-  const evidence = buildEvidence(fullTarget, plan);
+  const evidence = buildEvidence(fullTarget, actualPlan);
   const messages = buildChatMessages({ question: input.question, history: input.history, evidence, tone: input.tone });
-  const meta = { recordId: target.id, personName: target.name, plan };
+  const meta = { recordId: target.id, personName: target.name, plan: actualPlan, sources: evidence.sources, missing: evidence.missing };
   const inTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
   if (inTauri) {
     // #143：桌面这一支以前只看 invoke 的结果，signal 传进来也没人读；而 Rust 侧 run_ai_chat

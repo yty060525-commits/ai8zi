@@ -10,6 +10,11 @@ import { hydrateRecord, listBaziRecords } from '../data/clientRepository';
 import { chatDirect } from '../data/deepseekAdapter';
 import { sanitizeAnalysisText } from '../features/chart/elements';
 import { getBrowserCredential } from '../data/aiSettings';
+import { factLabels, stableJson } from '../shared/chatRetrieval';
+// @ts-expect-error Server JavaScript has no declaration file; Vitest executes the SQLite contract directly.
+import { openDatabase, insertRecord, getRecordById } from '../../../server/db.mjs';
+// @ts-expect-error Server JavaScript has no declaration file; Vitest executes the retrieval contract directly.
+import { collectEvidence as serverCollectEvidence, buildChatMessages as serverBuildChatMessages } from '../../../server/chat.mjs';
 
 /* 三通道共用的提问解析/证据组装(与服务端 chat.mjs 同口径)的单元测试。 */
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
@@ -19,9 +24,9 @@ vi.mock('../data/serverClient', () => ({
   ServerError: class ServerError extends Error { status: number; constructor(status: number, message: string) { super(message); this.status = status; } },
 }));
 vi.mock('../data/clientRepository', () => ({ listBaziRecords: vi.fn(async () => []), hydrateRecord: vi.fn(async (r) => r) }));
-vi.mock('../data/deepseekAdapter', () => ({
+vi.mock('../data/deepseekAdapter', async (importOriginal) => ({
   chatDirect: vi.fn(),
-  toneInstructionText: (t: number) => '语气(' + t + ')',
+  toneInstructionText: (await importOriginal<typeof import('../data/deepseekAdapter')>()).toneInstructionText,
 }));
 
 afterEach(() => { vi.clearAllMocks(); vi.mocked(isServerMode).mockReturnValue(false); localStorage.clear(); });
@@ -51,6 +56,9 @@ describe('提问理解(客户端 chatEngine)', () => {
     expect(extractWhen('明年的事业', now)).toEqual({ year: 2027, month: undefined });
     expect(extractWhen('本月财运', now)).toEqual({ year: 2026, month: 9 });
     expect(extractWhen('下个月要注意什么', now)).toEqual({ year: 2026, month: 10 });
+    expect(extractWhen('下个月事业如何', new Date('2026-12-31T15:00:00Z'))).toEqual({ year: 2027, month: 1 });
+    expect(extractWhen('下个月事业如何', new Date('2026-12-31T17:00:00Z'))).toEqual({ year: 2027, month: 2 });
+    expect(extractWhen('上个月事业如何', new Date('2027-01-01T00:30:00Z'))).toEqual({ year: 2026, month: 12 });
   });
   it('人名长名优先；主题抽取 健康/事业', () => {
     const plan = analyzeQuestion('张三丰2027年身体和事业怎么样', [{ id: 'a', name: '张三' }, { id: 'b', name: '张三丰' }], now);
@@ -109,7 +117,66 @@ describe('提问理解(客户端 chatEngine)', () => {
   });
 });
 
+describe('来源元数据纯函数', () => {
+  it('不把空字符串、空数组、空对象或仅含空值的 period row 标成已有资料，且 JSON 摘要递归稳定', () => {
+    expect(factLabels({ annual: {}, monthly: [], age: 0, note: '  ' }, { annual: '流年', monthly: '流月', age: '年龄', note: '备注' })).toEqual(['年龄']);
+    expect(stableJson({ evidence: { b: 2, a: 1 }, plan: { month: 3, year: 2027 } })).toBe(stableJson({ plan: { year: 2027, month: 3 }, evidence: { a: 1, b: 2 } }));
+  });
+});
+
+describe('client/server 同夹具取证与消息契约', () => {
+  it.each([
+    { year: 2026, topics: [] },
+    { year: 2026, topics: ['五行'] },
+    { scan: true, scanFrom: 2026, topics: ['事业'] },
+  ])('相同record与计划的摘录、缺口及时段来源一致；同一证据的messages一致：$topics/$year/$scan', (input) => {
+    const record = { ...rec, aiTasks: { ...rec.aiTasks, decade: { task: { taskId: 'decade-2020', type: 'decade', year: 2020 }, status: 'completed', analysis: { explanation: '【事业】丁卯运稳中有升。' } } } } as unknown as BaziRecord;
+    const plan = { ...input, recordId: record.id, personName: record.name, topics: input.topics, matchedCount: 0 } as unknown as ChatPlan;
+    const local = buildEvidence(record, plan);
+    const db = openDatabase(':memory:');
+    insertRecord(db, { ...record, userId: 'parity', createdAt: '2025-01-01', aiStatus: 'completed' });
+    try {
+      const stored = getRecordById(db, record.id);
+      const periodFacts = buildPeriodFacts(record, { ...plan, year: plan.year ?? plan.scanFrom });
+      const remote = serverCollectEvidence(db, stored, plan, { tone: 80, providers: [], periodFacts });
+      // 原有 natalFactsOf 与本机事实构造各有有效字段；本轮对齐的是检索结果，不能删事实来凑全包相等。
+      expect(local.analyses).toEqual(remote.analyses);
+      expect(local.missing).toEqual(remote.missing);
+      expect(local.periodFacts).toEqual(remote.periodFacts);
+      expect(local.sectionIndex).toEqual(remote.sectionIndex);
+      expect(local.sources.filter((source) => source.kind !== 'natal'))
+        .toEqual(remote.sources.filter((source: { kind: string }) => source.kind !== 'natal'));
+      for (const evidence of [local, remote]) {
+        expect(evidence.sources.find((source: { kind: string }) => source.kind === 'natal')?.sections)
+          .toEqual(factLabels(evidence.natal));
+      }
+      const question = '检索一致性';
+      // 同一份实际证据喂给两端消息构造器，仍要求完整字节一致，含真实语气、规范计划和资料目录。
+      for (const evidence of [local, remote]) {
+        expect(buildChatMessages({ question, history: [], evidence, tone: 80 }))
+          .toEqual(serverBuildChatMessages({ question, history: [], evidence, tone: 80 }));
+      }
+    } finally { db.close(); }
+  });
+});
+
 describe('泛问取证铺开(答不到点子上的主因)', () => {
+  it('泛问本命只有空标题时提示已完成但正文缺失，无小节旧正文仍可取证', () => {
+    const make = (explanation: string) => ({ ...rec, aiTasks: {
+      baseline: { task: { type: 'baseline' }, status: 'completed', analysis: { explanation } },
+    } } as unknown as BaziRecord);
+    const plan: ChatPlan = { recordId: rec.id, personName: rec.name, matchedCount: 0, topics: [], general: true };
+    const empty = buildEvidence(make('【健康】   '), plan);
+    expect(empty.analyses).toEqual([]);
+    expect(empty.sources.filter((source) => source.kind === 'analysis')).toEqual([]);
+    expect(empty.sectionIndex).toBeUndefined();
+    expect(empty.missing).toContain('本命批断已完成，但没有可用于回答的正文');
+    const legacy = buildEvidence(make('早睡保持健康。'), plan);
+    expect(legacy.analyses).toEqual([{ heading: '本命批断', text: '早睡保持健康。' }]);
+    expect(legacy.sources).toContainEqual(expect.objectContaining({ kind: 'analysis', sections: [], text: '早睡保持健康。' }));
+    expect(legacy.missing).toEqual([]);
+  });
+
   it('topics 为空但判为泛问 → 本命+全盘总结+后天调整都给，并附小节清单', () => {
     const ev = buildEvidence(rec, { recordId: 'r1', personName: '张三', matchedCount: 0, topics: [], general: true, question: '我这个人整体怎么样' } as ChatPlan);
     expect(ev.analyses.map((a) => a.heading)).toEqual(['本命批断', '后天调整与职业', '全盘总结']);
@@ -210,6 +277,59 @@ describe('证据组装(查本地库)', () => {
     const ev = buildEvidence(rec, analyzeQuestion('2027年财运如何', [rec]));
     expect(ev.missing.some((m) => m.includes('2027'))).toBe(true);
   });
+  it('精确时期缺所问小节时不给空分析来源，并明确记录主题缺口', () => {
+    const noCareer = { ...rec, aiTasks: { 'task-03': { task: { taskId: 'task-03', type: 'annual', year: 2026 }, status: 'completed', analysis: { title: '丙午', explanation: '【健康】注意休息。' } } } } as unknown as BaziRecord;
+    const ev = buildEvidence(noCareer, analyzeQuestion('2026年事业如何', [noCareer]));
+    expect(ev.analyses.some((a) => a.heading.includes('流年'))).toBe(false);
+    expect(ev.missing.some((m) => m.includes('事业'))).toBe(true);
+    expect(ev.sources.filter((s) => s.kind === 'analysis')).toEqual([]);
+  });
+  it('标题或仅空白小节没有有效摘录；多主题只命中部分时保留命中来源并逐项说明缺口', () => {
+    const make = (explanation: string) => ({ ...rec, aiTasks: { annual: { task: { taskId: 'annual-2026', type: 'annual', year: 2026 }, status: 'completed', analysis: { title: '丙午', explanation } } } } as unknown as BaziRecord);
+    const empty = buildEvidence(make('【事业】   '), { year: 2026, topics: ['事业'], scan: false } as ChatPlan);
+    expect(empty.sources.filter((source) => source.kind === 'analysis')).toEqual([]);
+    expect(empty.missing.some((item) => item.includes('事业'))).toBe(true);
+    const partial = buildEvidence(make('【事业】稳中有进。'), { year: 2026, topics: ['事业', '爱情'], scan: false } as ChatPlan);
+    expect(partial.sources).toContainEqual(expect.objectContaining({ kind: 'analysis', sections: ['事业'], text: '【事业】稳中有进。' }));
+    expect(partial.missing.some((item) => item.includes('爱情'))).toBe(true);
+  });
+  it('来源只列实际送入提示词的非空批断及命中小节', () => {
+    const ev = buildEvidence(rec, analyzeQuestion('2026年事业如何', [rec]));
+    expect(ev.sources).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'analysis', recordId: 'r1', taskType: 'annual', year: 2026, sections: ['事业'], text: expect.stringContaining('有升迁') })]));
+    const messages = buildChatMessages({ question: '2026年事业如何', history: [], evidence: ev, tone: 80 });
+    expect(messages.at(-1)?.content).toContain('检索计划');
+    expect(messages.at(-1)?.content).toContain('2026');
+  });
+  it('扫年部分主题缺失只点名缺失主题，不把有效事业年份列入全空清单', () => {
+    const partial = { ...rec, aiTasks: {
+      career: { task: { type: 'annual', year: 2026 }, status: 'completed', analysis: { explanation: '【事业】事业稳中有进。' } },
+      health: { task: { type: 'annual', year: 2027 }, status: 'completed', analysis: { explanation: '【健康】注意休息。' } },
+    } } as unknown as BaziRecord;
+    const ev = buildEvidence(partial, { scan: true, scanFrom: 2026, topics: ['事业', '爱情'] } as ChatPlan);
+    expect(ev.sources).toContainEqual(expect.objectContaining({ kind: 'analysis', year: 2026, sections: ['事业'], text: '【事业】事业稳中有进。' }));
+    expect(ev.missing.filter((gap) => gap.startsWith('2026年'))).toEqual(['2026年流年批断缺少所问主题：爱情']);
+    const emptyYears = ev.missing.find((gap) => gap.includes('没有与所问主题相关的小节'));
+    expect(emptyYears).toContain('2027');
+    expect(emptyYears).not.toContain('2026');
+    expect(ev.analyses.find((item) => item.heading.includes('逐年批断'))?.text).toContain('2027年(');
+  });
+  it('无主题有具体年份时保留本命缺口和时段事实；扫年返回前也保留起算年事实', () => {
+    const noBaseline = { ...rec, aiTasks: { 'task-03': rec.aiTasks!['task-03'] } } as unknown as BaziRecord;
+    const year = buildEvidence(noBaseline, { year: 2026, topics: [], scan: false } as unknown as ChatPlan);
+    expect(year.missing.some((item) => item.includes('本命批断'))).toBe(true);
+    expect(year.analyses.some((item) => item.heading.includes('2026年流年批断'))).toBe(true);
+    expect(year.sources.some((source) => source.kind === 'period' && source.year === 2026)).toBe(true);
+    const scan = buildEvidence(noBaseline, { scan: true, scanFrom: 2026, topics: ['事业'] } as ChatPlan);
+    expect(scan.periodFacts?.annual).toMatchObject({ year: 2026 });
+    expect(scan.sources.some((source) => source.kind === 'period' && source.year === 2026)).toBe(true);
+  });
+  it('相同证据键顺序变化时，稳定消息序列化不变', () => {
+    const ev = buildEvidence(rec, analyzeQuestion('2026年事业如何', [rec]));
+    const reordered = { ...ev, natal: Object.fromEntries(Object.entries(ev.natal).reverse()) };
+    const one = buildChatMessages({ question: '2026年事业如何', history: [], evidence: ev, tone: 80 });
+    const two = buildChatMessages({ question: '2026年事业如何', history: [], evidence: reordered, tone: 80 });
+    expect(two).toEqual(one);
+  });
   it('扫年取证：主题不是批断小节时(神煞/大运)不过滤，整年批断交给模型判断', () => {
     const plan = applyFollowUp(analyzeQuestion('大概什么时期神煞转好', [rec]), []);
     expect(plan.topics).toEqual(['神煞']);
@@ -257,11 +377,35 @@ describe('证据组装(查本地库)', () => {
       const dec = ev.analyses.find((a) => a.heading.includes('大运'));
       expect(dec, y + ' 年应取到所处大运批断(覆盖该年的 2020-2029 运)').toBeTruthy();
       expect(dec!.text).toContain('丁卯运');
+      expect(ev.sources.find((source) => source.kind === 'analysis' && source.taskType === 'decade')?.year).toBe(2020);
     }
   });
 });
 
 describe('askChat 通道分流', () => {
+  it.each([false, true])('本轮姓名覆盖旧recordId，真实引擎只补全对应命主的证据：server=%s', async (serverMode) => {
+    const other = { ...rec, id: 'r2', name: '李四', aiTasks: {
+      annual: { task: { type: 'annual', year: 2026 }, status: 'completed', analysis: { explanation: '【事业】李四专属事业资料。' } },
+    } } as unknown as BaziRecord;
+    vi.mocked(isServerMode).mockReturnValue(serverMode);
+    vi.mocked(listBaziRecords).mockResolvedValue([rec, other]);
+    vi.mocked(chatDirect).mockResolvedValue({ status: 'completed', answer: '李四的回答。' } as never);
+    vi.mocked(serverFetch).mockResolvedValue({ status: 200, data: { status: 'completed', answer: '李四的回答。' } } as never);
+    const reply = await askChat({ question: '李四2026年事业如何', recordId: rec.id });
+    expect(hydrateRecord).toHaveBeenCalledTimes(1);
+    expect(hydrateRecord).toHaveBeenCalledWith(other);
+    if (serverMode) {
+      const body = (vi.mocked(serverFetch).mock.calls[0][1] as { body: Record<string, any> }).body;
+      expect(body.recordId).toBe('r2');
+      expect(body.periodFactsContext).toEqual({ recordId: 'r2', year: 2026 });
+      expect(chatDirect).not.toHaveBeenCalled();
+    } else {
+      expect(reply.evidence).toMatchObject({ recordId: 'r2', personName: '李四', plan: { recordId: 'r2', personName: '李四' } });
+      expect(vi.mocked(chatDirect).mock.calls[0][0].at(-1)?.content).toContain('李四专属事业资料');
+      expect(serverFetch).not.toHaveBeenCalled();
+    }
+  });
+
   it('服务器模式：附带本机引擎算出的 periodFacts 与 recordId 调 /chat', async () => {
     vi.mocked(isServerMode).mockReturnValue(true);
     vi.mocked(listBaziRecords).mockResolvedValue([rec]);

@@ -380,10 +380,206 @@ npm.cmd run build
 | --- | --- | --- | --- |
 | Sol high 规划与范围冻结 | 完成 | 0 | 已读实际组件、Modal及三套既有测试；仅追加本节，不声称设备复现 |
 | Luna 红测、实现与定向类型检查 | 完成并冻结 | 1 / 2 | 旧组件红测1失败/7通过；初次绿测31/31；Sol low补测后34/34、type退出0，原断言保留 |
-| Wiki、主代理独立全量与构建 | 待执行 | — | 只有真实退出0后登记完成 |
+| Wiki、主代理独立全量与构建 | 全量与独立类型通过，构建/发布继续由主代理核实 | — | `.scratch/pillar-input-root-full.log`：125文件993/993，418.05秒、退出0；主代理已确认session78673结束；不推算构建/上线状态 |
 | Sol low 最终审查 | 源码及专项审查通过，等待完整终验 | — | 已亲读diff与红/绿/补测/type/Wiki日志，三处覆盖缺口已补，无已知业务P2 |
 | 精准提交、构建、上线核验 | 待执行 | — | 先提交后构建；版本/页面现象未有用户设备证据时保持分开 |
 
 唯一旧用户 WIP `client/src/__tests__/auto-retry-schedule.test.tsx` 不得改、覆盖、暂存或提交，SHA256 必须保持 `2063B6AD382AD2996D2BF98CAE8ABE20EEEC5DAE58A3B9E0C39024BB65287290`。本节保留上一节已存在的发布后本地审计记录；不得为本任务覆盖 PLAN 的其他任务记录。
 
 定向证据：`.scratch/pillar-input-red.log` 真实1失败/7通过，预编辑草稿 `甲p` 被旧组件回写成 `甲`；初次实现三套31/31（`.scratch/pillar-input-green.log`），Sol low要求补普通分次汉字、整串compositionEnd无尾随change、Enter确认事件顺序后，`.scratch/pillar-input-review1-green.log` 为3文件34/34、退出0，自修/补测计1/2。类型 `.scratch/pillar-input-review1-types.log` 及主代理独立 `.scratch/pillar-input-root-types.log` 均为TSC_EXIT=0；Wiki回归4/4与扫描OK11/477/0分别在review1-wiki与review1-wiki-scan日志。源码只改BirthInputModal，未包装Modal onClose；低强度审查已核对实际代码、原断言和以上日志，允许精准提交后进行正式全量与构建，不能把定向通过等同全量或线上设备输入法已验。
+
+## 2026-10-17 重复序号与独立日主展示修复
+
+### 当前阶段范围与证据
+
+用户新增要求：所有输出消除类似“一、一、”的重复序号，取消基本信息中的独立日主展示；之后再优化“问问AI”的引用数据、RAG或数据检索。本阶段只实现前两项界面要求，问问AI检索由另一只读审计任务规划，暂不修改聊天检索、提示词、证据或缓存。基线源码为 `5b73b5c`（第117版），IME修复已提交，主代理确认其完整前端为125文件993/993、退出0；当前尚未据此声明第117版已上线。
+
+已核实重复编号来自两层：`toPointBlocks`按既有契约保留源正文的“一、”“1.”编号，`PointsView`直接渲染该正文，而 `styles.css` 的 `.point-list li::before` 又给每条生成中文序号。云端旧 `aiAnalysis`、各范围 `aiTasks` 和本地系统独立结果块均复用该视图。复制路径 `pointBodyText` 已用 `hasOwnIndex`避免再冠编号，现有 `person-copy`测试明确要求原已编号行保留，不能通过删原编号断言或全局剥行首中文解决。
+
+`BasicInfo/getBasicFields`原本没有独立日主项；实际独立行在 `NonAiAnalysis.fields` 的 `['日主', result.dayMaster]`，记录卡摘要另有“，日主…”尾段。本阶段删除这两处展示。内部 `dayMaster`、十神栏的“日主”、算法与批断/聊天正文中的日主术语继续保留。取消字段不等于取消排盘事实，也不修改数据结构、导入导出或基本信息复制契约。
+
+### 角色、模块归属与接口冻结
+
+| 角色 | 显式配置 | 唯一归属与输出 |
+| --- | --- | --- |
+| 规划/两轮失败诊断 | GPT-6.1 Sol high（`gpt-6.1-sol`） | 只读审计，精准追加本节；Luna两轮仍失败后接管同一范围 |
+| 实现、测试、自修与Wiki | 同一 GPT-6-Luna medium（`gpt-6-luna`，现有pillar_input_fix owner） | 仅 `client/src/features/person/PersonDetail.tsx`、`client/src/features/records/RecordsPage.tsx`、`client/src/styles.css`；下列明确测试；`docs/wiki/11-客户端-特性层.md`与`docs/wiki/51-测试矩阵.md` |
+| 最终审查 | GPT-6.1 Sol low（`gpt-6.1-sol`） | 亲读最终diff、真实红绿/type/full日志及需求覆盖，未关闭问题退回实现 |
+| 整合与发布 | 主代理 | 保护WIP，独立终验、精准提交后构建，按既有授权更新Pages并保留真实远端/HTTP证明 |
+| 问问AI后续阶段 | 单独 GPT-6-Luna medium 只读审计 | 本阶段不写聊天生产代码，不与当前owner争用文件 |
+
+测试唯一可写列表（均在 `client/src/__tests__`）：`person-copy.test.ts`、`person-detail-actions.test.tsx`、`records-page.test.tsx`、`app-flow.test.tsx`、`pillar-edit-rendered.test.tsx`、`local-system-design.test.tsx`、`chart-chat.test.tsx`、`scope-notes-ui.test.tsx`。不新增测试文件或改交付账本；若实际关联失败超出此范围先向主代理报告。IME生产文件 `BirthInputModal.tsx`及其专门测试冻结，不做相邻重构。`ChartChat.tsx`、`ScopeNoteBox.tsx`、中文闸门、引擎、仓储、服务器与Rust均只读。
+
+编号实现冻结为**单次显式DOM编号**：在PersonDetail内局部复用既有 `hasOwnIndex`与编号格式化，只做一个小的逐点格式化入口，供屏幕与 `pointBodyText`共用。每点输出原正文及可选的应用编号；原文已有编号时应用编号为空，未编号时按原复制路径的计数语义生成一次。屏幕将应用编号放进独立的 `span.point-index`，原point仍为原正文文本；复制组合相同编号与正文。移除仅属于point-list的CSS counter-reset/::before计数，保留原列表间距和必要编号字重，禁止再叠浏览器默认list marker。这样DOM的li.textContent即完整可见编号，避免仅测textContent看不见CSS伪元素而假绿，也保留既有getByText原句的定位契约。
+
+`toPointBlocks`的原分点、编号行不拆句、章节与维度筛选契约不变；现有person-copy全部原断言保留。不得重编号、剥掉普通“健康、工作”等中文短语，或把任意一至三个汉字当作可以删除的序号。当前已证实的根因是CSS与正文叠号，默认不重写历史正文；若真实回归进一步证明原文自身已存连续“一、一、”，只允许在同一个局部格式化入口对**行首相同中文数词加顿号的连续重复标记**作幂等收敛，保留一层，并补反例证明普通短语、年份、不同层级编号和句中“一、一、”不被删除。不要改共享中文清洗器、源存储或向聊天扩散该规则。
+
+ChartChat当前使用 `div.chat-body`直接显示答案，ScopeNoteBox用 `p.note-text`显示点评，两者均无应用编号或point-list伪元素；只补代表性原文保留/无额外前缀回归，不为形式统一修改它们生产代码。复制本地批断目前直接输出已经清洗的原文、没有额外编号，本阶段保持该路径。云端复制全部、勾选维度、旧aiAnalysis与本地屏幕均验证同一去重复边界。
+
+### 验收与必要旧断言更新
+
+1. 先在既有测试补旧实现失败的可见行为判据：屏幕的未编号点应有一次显式中文编号；已有“一、/二、”的点只显示其原编号；同节混合已编号与未编号、多个小节、标点分句都保留正文与原复制计数语义。用真实PersonDetail种子覆盖旧aiAnalysis、云端aiTasks及本地结果，读取每条li.textContent并与复制正文核对。另保留一个针对point-list CSS不再产生计数内容的闸门，因为jsdom不呈现伪元素，单靠DOM不能发现旧CSS回归；不得冒称浏览器视觉已测。
+2. 对“复制全部/复制勾选内容”走剪贴板行为取证，已有编号不增一层，未编号仍编号，维度过滤/范围完整性/章节/中文闸门原断言不变。现有person-copy保留原编号行测试，再补显示与复制一致、正常中文短语不被当作前缀删除的反例。本地复制原路径保留，生成后屏幕无叠号。聊天答案与点评代表性编号原文完整保留，点评不混进批断复制的原隐私契约继续成立。
+3. 删除独立日主行与记录卡摘要后，详情的基础信息和基础排盘数据均不存在 `dt`精确为“日主”的字段；记录卡仍保留公历、生肖与四柱。独立字段隐藏后，十神中的“日主”及存储dayMaster不得被删除。基本信息复制本无独立日主行，应补确认不含“日主：”并保持原字段。
+4. 三处旧断言与新需求直接冲突，必须精准替换验收：`app-flow.test.tsx`两处 `getByText('日主')`改为基础/排盘region无独立日主dt且原四柱、五行、十神等仍在；`pillar-edit-rendered.test.tsx`原DOM日主值断言改为独立行不存在，同时同一真实修柱交互后读取存储确认dayMaster仍为新日干。其现有四柱/五行/大运变化及另一落库dayMaster断言全部保留，不能只删除断言、宽泛换成not-null或删引擎计算。
+5. 同一Luna先跑定向与独立类型，失败自修每次修改并运行相关测试计一次、最多两轮，仍失败交Sol high；本阶段自修单独计数，不继承IME已完成的1次。源码和两页Wiki同步后由Sol low审查相关diff/日志，合格则阶段冻结；随后才允许问问AI阶段接手共用测试/Wiki。按主代理统一验证调度，两阶段结束后合并运行一次原样前端全量、server/Rust/type/build与Wiki，覆盖全部新增变更；不在UI后与chat后重复两次长full，也不缩小最终全量范围。只有最终门禁全通过才提交后构建发布，不因上一阶段993/993或UI相关通过推算本阶段full绿。
+
+### 命令、Wiki与状态
+
+client目录：
+
+```powershell
+.\node_modules\.bin\vitest.cmd run src/__tests__/person-copy.test.ts src/__tests__/person-detail-actions.test.tsx src/__tests__/records-page.test.tsx src/__tests__/app-flow.test.tsx src/__tests__/pillar-edit-rendered.test.tsx src/__tests__/local-system-design.test.tsx src/__tests__/chart-chat.test.tsx src/__tests__/scope-notes-ui.test.tsx --pool=forks --maxWorkers=2 --testTimeout=30000
+.\node_modules\.bin\tsc.cmd --noEmit
+.\node_modules\.bin\vitest.cmd run --pool=forks --maxWorkers=2 --testTimeout=30000
+npm.cmd run build
+```
+
+根目录运行 `node scripts/check-wiki-links.cjs`，client运行既有 `wiki-links-reachable.test.ts`；发布短测沿用上一节版本/SW/部署保留/HEAD门禁。日志使用 `.scratch/output-display-*` 或 `client/.scratch/output-display-*`，记录真实退出码与计数；本阶段不改后端/Rust，不重跑其无关历史全量。本次不新增真实API要求；问问AI后续阶段涉及真实检索/回答时另行建立真实输出证据。
+
+配套Wiki：[架构与模块入口](docs/wiki/01-架构总览.md)、[详情/记录/屏幕与复制工作流](docs/wiki/11-客户端-特性层.md)、[类型接口](docs/wiki/31-类型契约.md)、[运行与发布](docs/wiki/41-构建与发布.md)、[测试验收与已知缺项](docs/wiki/51-测试矩阵.md)。仅精准同步11/51页面的实际行为、测试与浏览器限制，其他页面无接口变化无需改写。
+
+| 阶段 | 状态 | 自修次数 | 证据/待办 |
+| --- | --- | --- | --- |
+| Sol high只读审计与计划冻结 | 完成 | 0 | 三个生产文件和八个既有测试归属已明确；根因为源编号与CSS叠加，问问AI另阶段 |
+| 同一Luna红测/实现/定向/type | 相关验收完成并冻结 | 0 / 2 | 主代理已亲读8套101/101、type退出0、Wiki4/4及原始日志与diff；不冒称最终全量 |
+| Wiki与主代理全量/构建 | 实现者Wiki验证通过；全量与chat阶段合并终验 | — | UI相关冻结后仍不得标最终full完成 |
+| Sol low最终审查 | ui_order_review阶段审查通过；最终全量后复核 | — | 主代理确认low亲读diff/日志、无P1/P2，已允许向第四项交接 |
+| 提交后构建/Pages核验 | 待执行 | — | 既有发布授权；浏览器受限时只报告真实HTTP及jsdom证据 |
+
+旧用户WIP `client/src/__tests__/auto-retry-schedule.test.tsx`仍不得改、覆盖、暂存或提交，SHA256保持 `2063B6AD382AD2996D2BF98CAE8ABE20EEEC5DAE58A3B9E0C39024BB65287290`；不得git add -A，不覆盖本计划其他任务记录。
+
+## 2026-10-17 问问AI检索与资料溯源；之后独立实现逐条复制
+
+### 范围、依赖与已核实缺陷
+
+用户要求严格按提出顺序实现：**一、四柱IME修复；二、重复序号修复；三、移除基础展示独立日主；四、问问AI检索与引用优化；五、每条回答气泡复制**。主代理已亲读前述UI实际diff及8套101/101、type退出0、Wiki4/4与WIP摘要，Sol low独立ui_order_review审查通过无P1/P2，UI现冻结可交接；IME993/993为此前完整验收。第四项仍须由主代理明确派发，不得跳过未关闭阶段，也不得同时实现检索与复制。
+
+第四项复用已有“问题解析→记录/SQLite精确检索→已算任务小节摘录→带证据回答”链，修准确性与来源可追溯；不添加向量数据库、外部知识库、嵌入服务、依赖或通用检索框架，不重算命理算法，不改变模型/通道配置。**只有UI阶段定向/type与Sol low阶段审查冻结、主代理明确交接后才允许第四项生产写入**；本规划不授权实现。第四项完成相关三端检索/来源/缓存/type/Wiki验收并经low阶段审查冻结后，再由主代理派发第五项逐气泡复制，实现复制时不改已冻结检索语义。五项最终可共一次完整前端、server、Rust、type/build及上线验收，以避免重复长full，但阶段专项与顺序门禁不能省略。
+
+Sol high已亲读 `chatEngine.ts`、`ChartChat.tsx`、`server/chat.mjs`、`server/ai.mjs`的事实段、Rust聊天请求/缓存/调用及相关测试，不把Luna提前审计报告当作复现。以下五项均有实际代码依据：
+
+1. 相对月份仅在1..12绕回，`extractWhen`再以当年补year，十二月“下个月”和一月“上个月”都跨错年。
+2. ChartChat把常驻selected.id当recordId传给引擎；本机和服务端均先按recordId选target，再看本轮文本解析，因此本轮明确问另一命主仍可能取旧人，plan与实际record分叉。
+3. chatv7只含问题、四柱、模型、性别、出生年、语气与出生时刻，没有当前事实/摘录/缺口/计划；补算、修改已算正文或跨月重问同一句都可能继续读旧答案。Rust也只对question做短hash。
+4. server collectEvidence在无主题的时段问题中还取本命/调整/总结，client buildEvidence走时段else且扫年提前return，相关补充条件不同。两端已有相同函数名或提示词不等于实际取证一致。
+5. 精确年月任务completed但缺所问小节时，sliceSections返回空仍push分析项且不登记主题缺口；UI现仅aboutOf显示命主/年月，没有实际任务、小节、摘录或缺口元数据。CHAT_SYSTEM限制模型正文标出处，不能只改一句prompt就宣称应用引用已实现。
+
+只读Node调用实际输出（退出0，工具记录保留，未写生产数据或调用模型）：北京二〇二六年十二月问“下个月事业如何”得到 `{year:2026,month:1}`；同年一月问“上个月事业如何”得到 `{year:2026,month:12}`。内存SQLite夹具中二〇二七年三月只存事业小节而问爱情，collectEvidence返回两条空text、missing空数组；相关正文改为爱情后chatCacheKey仍相同。这些是缺陷观测，后续仍须Luna补正式旧实现红测；命主优先级/跨端条件为逐段读码结论，尚不冒称已跑真实调用复现。
+
+### 角色与文件归属
+
+| 角色 | 显式配置 | 唯一归属与输出 |
+| --- | --- | --- |
+| 规划/两轮失败诊断 | GPT-6.1 Sol high（`gpt-6.1-sol`） | 只读核实、追加本节PLAN；Luna两轮仍失败后接管同一范围 |
+| 第四项client/server/shared/资料UI实现、测试、自修与Wiki | GPT-6-Luna medium（`gpt-6-luna`，现有chat_retrieval_audit owner） | `client/src/data/chatEngine.ts`、`client/src/features/chart/ChartChat.tsx`、新增有界共享契约/纯函数模块 `client/src/shared/chatRetrieval.ts`、`server/chat.mjs`；下列client/server既有测试；Wiki11/12/13/31/51；不得编辑lib.rs，不提前写复制按钮 |
+| 第四项Rust缓存模块实现、测试与自修 | GPT-6-Luna medium（`gpt-6-luna`，现有pillar_input_fix owner） | 唯一可写 `client/src-tauri/src/lib.rs`（聊天缓存函数、run_ai_chat必要调用点及同文件tests）；按冻结接口实现，真实rusqlite验证，文档要点交chat owner；不得编辑client/server/shared/JS测试或Wiki |
+| 第五项复制独立实现与测试 | GPT-6-Luna medium（`gpt-6-luna`，pillar_input_fix owner），第四项low冻结后由root另派 | 只接手 `ChartChat.tsx`、`chart-chat.test.tsx`、Wiki11与51，复制自修从0/2另计；不得再改检索/shared/server/Rust |
+| 最终审查 | GPT-6.1 Sol low（`gpt-6.1-sol`） | 阶段审查实际diff/红绿/type/SQLite/调用链；完整统一终验后复核，无未解决问题才完成 |
+| 整合与发布 | 主代理 | 确认UI文件交接，独立三端最终门禁、精准提交后构建、沿用已授权Pages发布与真实远端/HTTP核验 |
+
+既有测试可写归属：chat_retrieval_audit owner负责client的 `chat-engine.test.ts`、`chart-chat.test.tsx`、`beijing-chat-anchor.test.ts`、`cache-key-cross-end.test.ts`、`birth-time-cache-cross-end.test.ts`、`prompt-parity.test.ts`、`provider-follow-contract.test.ts`、`chrome-chinese-only.test.tsx`，server的 `test/chat.test.mjs`、`test/chat-timezone.test.mjs`、`test/chat-abort.test.mjs`、`test/birth-time-cache.test.mjs`、`test/cache-clear-http.test.mjs`、`test/prompt-parity.test.mjs`；Rust回归唯一归pillar_input_fix owner，留在lib.rs既有tests模块。跨端JS判据读取Rust源码时等Rust owner产出后整合，不修改对方文件来迁就测试。不新增测试文件或修改交付账本。shared新生产文件属本阶段明确范围，模块化仅限共用来源契约、元数据与必要稳定序列化等小纯函数，不把全部检索/编排迁移进去。
+
+禁止改前一阶段的PersonDetail/RecordsPage/styles、已冻结BirthInputModal及其专门测试、domain命盘数据、仓储/DB schema、批量分析提示词、provider配置或其他算法。本阶段ChartChat优先使用既有class/原生details、button与列表，不为资料卡增加全局样式重构；若最终确需少量专属CSS先由主代理明确交接归属。Wiki11与51必须等UI owner写完冻结后再接手，12/13/31同步检索/缓存/协议变化；源码实现不得与UI owner并写chart-chat测试。
+
+### 最小检索与目标接口
+
+保持analyzeQuestion/applyFollowUp/extractWhen公开接口兼容，修纯“上个月/下个月”在北京时间跨年时同时推进年/月；显式年月与显式年优先规则保留，覆盖普通月份、汉字月、两位年份、开放式扫年和追问继承，不扩张自然语言时间体系。now仍显式可注入，正式调用默认真实北京时间。
+
+目标优先级冻结为：**本轮文本明确匹配的命主→有效传入recordId上下文/点选→历史继承→唯一记录**；未命中仍走原need_record候选。服务端在任何目标选择之前继续验证传入recordId的现有授权范围，非法/越权ID不因本轮另有名字而获放行；保留现有admin规则，不扩权。匹配沿用现有长名优先，暂不增加同名消歧新体系。定下target后规范plan.recordId/personName为实际target，所有hydrate、periodFacts、消息、返回metadata及UI当前命主都以这一结果为准。ChartChat本轮明确新姓名时也按该人的语气获取偏好，完成后以返回实际目标更新后续上下文，避免下一问又落回旧selected。
+
+本机随服务器请求的确定性periodFacts增加有界伴随元数据 `periodFactsContext?: { recordId: string; year: number; month?: number }`；仅在实际算出该时段事实时发送。server runChat只在context与最终target及规范year/month完全一致、行自身年月也相符时交给collectEvidence；不符或旧客户端缺context时忽略这份附带事实，仍可用服务端自己有的记录/任务作答，不整次拒绝请求、不把另一个人的事实拼进来。collectEvidence自己的测试调用仍可以直接传已验证的periodFacts，不将请求校验与纯取证混在一起。
+
+两端取证条件采用现有server有界规则：本命问题，或无主题问题，或五行/格局/神煞问题先加入相关本命补充，再独立处理时段或扫年；普通精确主题时段不铺开无关本命长文。本命/调整/总结与时期的顺序、标题和小节选择统一。server原有ai_cache主键补读保留，client继续用本机现有任务与hydrate；不能为了形式相同删掉server实际缓存取证能力。相同记录/计划/任务输入时实际摘录与缺口一致，有缓存补读时则元数据如实标明来自该任务缓存。
+
+精确年/月/覆盖大运的已完成任务若摘录为空或只有标题，无有效正文则不作为有效analysis/source，并登记明确到时段和主题的缺口；有对应小节则保留原句及现有截断边界，不靠其他主题全文回退冒充覆盖。多个真实小节主题只把实际命中的小节列为来源，缺失主题不可伪称已覆盖。非小节主题如神煞/大运/格局仍保持原既定完整相关证据选择。扫年已有“该年任务存在但缺主题”的时间线占位与missing契约保留（server旧测试明确要求看到该年的占位）；占位不能变成sources中的有效来源，也不能据其给应期。无任务、失败任务与无主题小节分别准确表达缺口，不修改任务状态制造覆盖。
+
+### 来源、返回、消息与UI契约
+
+共享契约（字段名允许Luna按现有风格收敛，语义及可选性不得省略）：
+
+```ts
+interface ChatSource {
+  kind: 'natal' | 'period' | 'analysis';
+  recordId: string;
+  heading: string;
+  taskId?: string;
+  taskType?: 'baseline' | 'overview' | 'annual' | 'monthly' | 'synthesis' | 'decade' | 'adjustment';
+  year?: number;
+  month?: number;
+  sections: string[];
+  text?: string;
+  origin?: 'record' | 'task_cache';
+}
+```
+
+`ChatEvidence`增加sources数组，plan补齐已有scan/scanFrom语义；`ChatReply.evidence`保留recordId/personName/plan/options，并兼容添加可选 `sources?: ChatSource[]; missing?: string[]`。旧服务器返回无新字段时UI仍正常显示回答，不虚构资料。sources必须与本次实际传入模型的非空证据对应：analysis来源记录任务身份/实际年与月/命中的小节和真实截断摘录；扫年按每个有效年份分别列来源；task缓存没有真实taskId时省略而保留type/year/month/origin，不编造ID。本命/时段来源只列实际存在且送入prompt的字段或年月行，不把空对象、年龄一项或缺失字段冒称完整资料；这两类无需把内部JSON原样展示给用户。sources来自检索过程、不是从模型回答里猜测，不代表逐句模型引文。
+
+buildChatMessages在两端显式加入**实际规范检索计划与资料目录**，含目标身份、year/month、topics、scan范围与真实任务/小节标识；保留事实/摘录/缺口与历史最多八条、题长五百字等原合同。目录不重复塞整份正文，正文仍走原证据摘录段。只做此必要消息改变，不调整收费模型、温度或思考策略。CHAT_SYSTEM与中文规则保留结论只依据提供证据、不得推测缺失时段等约束；引用由应用资料区承担，保留正文不编造出处的要求，不能把prompt改成允许自由造引用。若为应用来源说明必须调整CHAT_SYSTEM，同改client/server并通过其实际字节parity；Rust聊天继续消费client传入的同一messages，无第二份聊天系统提示词要新造。批量任务提示词和OUTPUT_RULES_TEXT三端字节保持不变。
+
+ChartChat每条assistant消息常驻存储本次检索metadata快照，显示可折叠中文“本次检索资料”：实际命主/时段、资料范围、小节名、可读摘录和明确“数据缺口”。其内容必须绑定该气泡，即使下一问换人或资料更新，旧气泡也不跟着换源。保留当前命主/年月about文案的兼容语义，可按同一metadata规范显示；机器taskId/字段名/拉丁词不混进可见中文文案，使用已有readableName、cnYear/cnCount和中文闸门。应用只声称展示本次给模型的检索资料，不宣称验证了每句回答的因果引用或真实预测准确性。失败/未配置若携带metadata可以展示已有缺口，不伪造成功答案。
+
+### 证据缓存身份与Rust边界
+
+聊天缓存两端升级为chatv8；保持前段 `[版本, 模型, 性别, 年柱, 月柱, 日柱, 时柱, 'chat', 问题hash, 出生年, 语气档]`不移动，在现有出生时刻尾段**之前**追加本次实际messages的稳定摘要。出生时刻仍为最后一段，旧盘仍为空尾段；任务缓存版本/签名不改，按盘chart_sig/删除与清缓存必须覆盖所有证据版本。
+
+server chatCacheKey接收本次实际messages（第五参数），runChat在收集证据并构造messages后查/写对应键；Rust冻结内部接口为 `pub(crate) fn chat_cache_key(chat: &ChatRequest, model: &str, messages: &[Value]) -> String`，接收run_ai_chat已经收到的实际messages作为计算输入。run_ai_chat命令实参保持chat/messages不变，chatv8摘要段置于birthTime之前，性别/四柱等前段索引不变。摘要覆盖系统规则、规范计划/资料身份、当前实际natal/periodFacts、真实摘录、缺口与问题，既能处理补算与正文变化，也能处理同一句“本月”跨月和同四柱不同记录资料。对对象键作稳定序列化，数组与摘录顺序保留；同一内容重复调用稳定、仅对象key插入顺序变化不应失效。允许沿用server现有SHA256、Rust现有FNV-1a各自在独立数据库的稳定hash算法，不为算法统一引依赖；测试核对同构段位和行为，不宣称两端hash逐字节相同。
+
+**ChatRequest不新增客户端自报evidenceSignature**，因为Rust边界已有messages；原gender/四柱/birthYear/tone/cached/birthTime协议保留。直接对实际消费messages取摘要避免元数据hash与真正消息不一致。run_ai_chat命令参数仍为chat/messages；仅Rust内部缓存key函数/回归相应升级。首轮无历史才允许缓存、无密钥可复用同证据有效缓存、已取消请求不新写缓存等原有已实现语义保留，不顺带接管此前记录的其他取消缺项。没有证据输入不能静默降为旧静态key；旧测试预置聊天缓存需先按真实collectEvidence/buildChatMessages生成当前键，保留“缓存优先于密钥检查”的原行为断言，不能直接删掉旧缓存用例。
+
+### 第五项：检索冻结之后再实现每条回答复制
+
+仅assistant回答气泡旁增加中文可访问“复制回答”按钮，点击只复制该气泡**当前实际显示/清洗后的回答正文**，不带命主标注、资料区、缺口、其他气泡、上下文或按钮/反馈文字。使用同一StoredMessage.content作为显示和复制依据，不对复制再施加会改变已显示内容的另一套清洗。不得给user气泡加该按钮。已有助手式空库提示仍是助手消息，可按同一规则复制，不引额外消息类型框架。
+
+直接使用navigator.clipboard.writeText与局部状态：await成功才显示清晰“已复制回答”，API缺失或拒绝显示“复制失败，请手动选择回答文字复制”等中文失败反馈，不虚假成功、不改用外部依赖或复杂全局剪贴板抽象。反馈绑定被点击消息，切页常驻、清空对话、停止/迟到包、消息上限与历史只传role/content的原语义继续成立；资料metadata/复制反馈不送回模型当作聊天历史。若异步复制完成时原气泡已被清空，不将反馈写进新会话。
+
+### 红测、实际证据与验收顺序
+
+1. **先红测五项。** client/server分别覆盖十二月下个月与一月上个月的正确年/月，普通月份/显式年月/北京边界正反例保留；真实ChartChat先选甲再文本问乙，传入目标/语气/后续selected和实际engine/server取得的人必须一致。engine测试经askChat真实逻辑验证本机与server分支；server用实际内存SQLite种两名同账号记录与另一账号记录，保持越权/无效ID拒绝，检查provider接缝收到的messages和回复metadata属于同一人，附带错人periodFacts不得进入消息。
+2. **取证一致与来源。** 用相同真实夹具执行client buildEvidence与server collectEvidence（Vitest可按现有方式实际import server模块），验证无主题时段/五行时段/纯本命/八年扫年都按冻结条件取证；另走实际SQLite task_cache补读，核实来源type/year/月/sections/text确实来自对应cache行。精确月/年只含别的主题时不能生成空有效来源，missing点名；有效摘录保留原文本、长句截断边界、覆盖大运、旧无节正文合同。扫年空主题占位原断言保留，同时新sources不把占位当有效证据。
+3. **缓存失效与调用链。** server实际SQLite先以缺口证据缓存一条回答，再写入相关完成批断，经runChat真实provider接缝验证旧答案不命中；同证据重复提问可缓存命中且不调用provider，修改无关未取入证据的任务仍可复用。同文本相对月份换到下一年月时key/资料变更；规范对象key重排不误失效。Rust真实rusqlite缓存测试对实际messages内容变化与稳定序列化读写，包含按盘删除覆盖多个证据摘要。client真实run_ai_chat invoke调用链捕获实际messages有规范计划/来源目录及birthTime，Rust内部函数对该类messages计算身份；不能仅搜源码包含字符串冒充链路。原key段数断言改为13段并逐位证明新增证据段/原出生时刻尾段，其他索引/清缓存/问题hash长度断言保持。
+4. **DOM资料与复制。** 通过真实ChartChat DOM发送两次不同回答，逐个气泡检查sources/小节/摘录/缺口绑定与展开，换人/更新后旧气泡不串源，无metadata旧回复不凭空显示资料；不混入英文字段与阿拉伯数字。两条回答分别点击自己的复制按钮，clipboard stub各次必须收到exact content，包含带中文编号的回答且无再次冠序号；user无按钮，成功反馈在await成功后出现，拒绝与API缺失显示失败，清空/切页/停止/迟到回复原回归保留。
+5. **验证级别与限制。** 测试允许现有受控provider接缝返回固定中文，不调用收费模型；必须明确这是实际应用HTTP/SQLite/DOM调用链证明，不能称真实外部模型质量验证。通过createApp实际本地HTTP /api/chat与DB集成取到真实JSON sources/missing，不能只在UI手造metadata就宣称server已支持。浏览器真实交互仍受之前环境/自动审批限制，不绕过。server/Rust改动是源码和测试验证；若最终只发布Pages，不能声称远端server已部署或Windows包已发。页面与后端新协议可选字段兼容边界写入Wiki与交付说明。
+6. **角色、顺序与统一终验。** UI低审冻结后先只做第四项检索/来源/缓存，完成上方1至3及第4条的资料DOM部分、三端专项/type/Wiki并经low阶段审查冻结，主代理才能派发第五项复制。第四项拆分chat与Rust两位owner，各只写明确归属；Rust初次验证后必须以真实rusqlite读写、messages内容变化、对象key稳定及按盘删除多个证据版本回归验收，不以纯hash或源码匹配代替。第五项另完成第4条的复制DOM/剪贴板成功失败/清空切页专项及独立type，再经low审查；不得把复制顺带提前实现。初次验证不计自修，第四项chat owner、第四项Rust owner及第五项复制分别独立记录失败后的“一次修改+相关测试”，各最多2轮后Sol high接管；不混用IME/UI/其他模块已用次数。任何Luna报告均不是root独立终验，主代理须亲读实际diff及测试原输出；未通过不得越过顺序门禁。最后主代理原样前端全量、server node --test、Rust cargo test --lib、独立tsc、Wiki与构建一起终验覆盖全部新增变更，不重复无变化的长full、不缩最终范围、不预填成功。精准提交后重新构建版本并按已授权流程发布Pages，真实远端ref/parent/资源hash与版本核验后交付。
+
+### 测试命令、Wiki与执行状态
+
+client目录先运行本阶段相关套件：
+
+```powershell
+.\node_modules\.bin\vitest.cmd run src/__tests__/chat-engine.test.ts src/__tests__/chart-chat.test.tsx src/__tests__/beijing-chat-anchor.test.ts src/__tests__/cache-key-cross-end.test.ts src/__tests__/birth-time-cache-cross-end.test.ts src/__tests__/provider-follow-contract.test.ts src/__tests__/prompt-parity.test.ts src/__tests__/chrome-chinese-only.test.tsx --pool=forks --maxWorkers=2 --testTimeout=30000
+.\node_modules\.bin\tsc.cmd --noEmit
+```
+
+server目录专项 `node --test test/chat.test.mjs test/chat-timezone.test.mjs test/chat-abort.test.mjs test/birth-time-cache.test.mjs test/cache-clear-http.test.mjs test/prompt-parity.test.mjs`；Rust `client/src-tauri`目录 `cargo test --lib`。第四项相关三端验收/type/low冻结后，第五项另跑client的 `.\node_modules\.bin\vitest.cmd run src/__tests__/chart-chat.test.tsx --pool=forks --maxWorkers=2 --testTimeout=30000` 与 `.\node_modules\.bin\tsc.cmd --noEmit`，Wiki回归后low专项审查；复制阶段不因只改UI便跳过独立验证。主代理最终client原样 `vitest run --pool=forks --maxWorkers=2 --testTimeout=30000`、server `node --test`、Rust `cargo test --lib`、独立type与源码提交后 `npm.cmd run build`，根目录 `node scripts/check-wiki-links.cjs`及Wiki回归；发布版本/SW/部署保留/HEAD门禁沿用前节。实际日志 `.scratch/chat-retrieval-*`或`client/.scratch/chat-retrieval-*`，保留失败/修复/通过的原输出、退出码和计数，不把stub回复记录为真实模型请求。
+
+Wiki由同一chat owner在UI冻结后精准同步：[界面入口/资料与复制流程](docs/wiki/11-客户端-特性层.md)、[检索与SQLite/缓存链](docs/wiki/12-客户端-数据层.md)、[三端实际证据与消息一致性](docs/wiki/13-跨端共享与三端一致性.md)、[ChatEvidence/ChatReply/periodFactsContext与Rust边界](docs/wiki/31-类型契约.md)、[测试/真实证据与已知缺项](docs/wiki/51-测试矩阵.md)。架构入口仍为原排盘聊天，不因新模块加目录就宣称RAG质量验证完成。
+
+| 阶段 | 状态 | 自修次数 | 证据/待办 |
+| --- | --- | --- | --- |
+| Sol high只读核实与有界计划 | 完成 | 0 | 五项逐段核实，三项Node实际输出已见；来源与复制明确接口，不预设向量库 |
+| UI阶段冻结与文件交接 | 主代理与ui_order_review均确认完成 | — | 实际8套101/101/type0/Wiki4/4，low无P1/P2；root可交接chart-chat测试/Wiki11与51 |
+| 第四项chat Luna检索红测/client-server专项/type | 已冻结交接给Sol high | 保守按2轮边界接管，不能精确复原每轮计数 | 正式旧实现red各6失败日志保留；未落盘的中间口述绿不当验收，停止Luna继续隐性循环 |
+| 第四项Sol high诊断修复与完整专项 | root亲读相关证据、low复审通过；全部本阶段文件冻结 | — | 最新client8套115/115、server6文件90/90、独立TSC0、Wiki4/4及扫描OK11/484/0；不声称统一full或上线已完成 |
+| 第四项Rust Luna缓存模块/真实rusqlite回归 | root与Sol low实际审查通过，模块冻结 | 2 / 2，独立计数 | `.scratch/chat-retrieval-rust-red.log`旧键红测退出101；green完整cargo test --lib 22/22退出0；actual messages三参数、13段、SQLite多证据读写/清除和出生时刻旧断言均已亲读；client/server整合仍待验收 |
+| 第四项low阶段审查与Wiki收口 | 完成，root确认两项P2均关闭、无剩余P1/P2 | — | low复核部分主题扫年与空标题本命修复；root亲读115/90最新日志、实际核心行及WIP摘要，允许阶段交接 |
+| 第五项气泡复制实现/专项/type | 源码/测试/Wiki全部冻结 | 2 / 2，独立计数 | `.scratch/chat-copy-red.log`旧界面24通过/3失败；green保留首次歧义query失败及最终27/27；types退出0；查询修正计1、文档收口复验计2；wiki-final扫描OK11/484/0且4/4 |
+| 第五项low阶段审查 | root与Sol low已亲读通过，无P1/P2 | — | 精确message.content、await后成功、API失败、user无按钮、清空后迟到反馈均已核对；原来源与历史断言保留；Wiki当前状态已同步，可提交源码后统一全量 |
+| 全部阶段统一全量/type/build | root已独立验收冻结后端模块，前端/类型/构建待第五项冻结后执行 | — | `.scratch/ui-chat-root-server-full.log`实际node --test为155/155、退出0；`.scratch/ui-chat-root-rust-full.log`实际cargo test --lib为22/22、退出0；两模块SHA已保存，若再变须重验；不预填前端/上线通过 |
+| 提交后构建/Pages线上核验 | 待执行 | — | 不冒称服务器/桌面已部署，真实HTTP证据与浏览器缺口分开 |
+
+旧用户WIP `client/src/__tests__/auto-retry-schedule.test.tsx`仍不得触碰或提交，SHA256保持 `2063B6AD382AD2996D2BF98CAE8ABE20EEEC5DAE58A3B9E0C39024BB65287290`。不得Qoder、未经项目授权的Pi或调用收费模型；不git add -A、不扩大到其他线程或工程。
+
+第四项Sol high接管记录：主代理停止Luna写入时，中间工具输出未全部落盘且无法精确复原每轮计数，因此保守按两轮边界接管，不重造所谓初次失败/中间绿测日志。已存在正式旧实现红测 `client/.scratch/chat-retrieval-red-client.log` 为6失败/62通过，根 `.scratch/chat-retrieval-red-server.log` 为6失败；Rust日志与已冻模块验收按上表原记录保留。
+
+接管后真实复验 `.scratch/chat-retrieval-sol-takeover-red.log` 为3失败/48通过；失败来自新增“全messages直接相等”预期越过本轮检索契约：原有server natalFactsOf带luckStart，本机现算五行等有效事实各有字段，且本机测试把语气函数替成简写“语气(80)”、server仍是真实语气。未删除任一生产事实；将该新增预期精确收回为实际analyses、missing、sectionIndex、periodFacts、analysis/period来源严格相等，各端natal来源必须如实列出自己真实字段；把同一完整actual evidence传给两端消息构造器仍要求全messages字节相等，语气使用真实函数。对应两个TS7016在测试的server JS import处使用项目已有局部预期错误标注，不增加全局any模块声明。另保留 `.scratch/chat-retrieval-sol-takeover-types-red.log` 原输出。
+
+首轮完整接管专项 `.scratch/chat-retrieval-sol-client.log` 为1失败/109通过：原provider请求体判据的简短对象解析遇到内嵌history.map解构提前截断。实现改在askChat入口先统一历史为role/content，body继续传简洁history变量；未削弱provider键断言。根 `.scratch/chat-retrieval-sol-server.log` 为88/88、类型及Wiki扫描通过。补齐冻结计划要求的真实engine server/local姓名覆盖、命主语气/后续上下文、两气泡来源快照/旧响应/历史字段、同证据缓存复用与无关任务稳定、明确姓名也不能绕无效ID校验。HTTP断连测试不再以任意chatv8行冒充本问缓存：从HTTP建盘回包取实际记录ID，捕获provider实际messages，精确核验本问key的不存在/存在，修正了旧账号同四柱夹具在新内容键下的潜伏身份错配。
+
+最终已落盘的相关证据：`.scratch/chat-retrieval-sol-client-final.log` 为8/8文件113/113、退出0；`.scratch/chat-retrieval-sol-server-final.log` 为6文件88/88、退出0，包含真实本地HTTP `/api/chat`、SQLite取证、provider接缝与精确缓存/取消断言；`.scratch/chat-retrieval-sol-types-final.log` 对应TSC_EXIT=0。本次没有调用真实收费模型，没有跑统一full/build或提交，lib.rs保持已冻字节不变；旧用户WIP摘要仍精确等于上方基线。Wiki扫描与文档回归由接管后专用日志记录，实际通过后才由主代理/low完成第四项冻结，不提前实施第五项。
+
+Sol low随后发现两项P2，Sol high按原准确性范围收口：扫年某年只有事业、问题同时问事业与爱情时，该年只报缺爱情，保留事业来源，不再加入“全年没有任何相关小节”的通用清单；确实全空的另一年仍保留原时间线占位并进入通用缺口。另修复泛问本命只有 `【健康】` 空标题时sliceSections空标签回退原文的问题：有结构而无正文不回退，已完成任务明确提示“本命批断已完成，但没有可用于回答的正文”，不伪改为未生成；无小节旧正文继续有效。
+
+两处双端回归的真实红证据：`.scratch/chat-retrieval-sol-review-red-client-exec.log` 与 `chat-retrieval-sol-review-red-server.log` 各2失败（过滤仅用于红测，不冒称全套）；首次client红测命令通过.cmd传带竖线的过滤表达式被shell截断、退出255，原 `chat-retrieval-sol-review-red-client.log` 保留为工具失败，后改用node直接执行Vitest取得前述真实失败。修复后最新完整client八套115/115、退出0（`.scratch/chat-retrieval-sol-review-final-client.log`）；server六文件90/90、退出0（`.scratch/chat-retrieval-sol-review-green-server.log`）。新增fixture首版不完整ChatPlan转换的TS2352保留在review-types日志，补全实际计划字段后 `.scratch/chat-retrieval-sol-review-types-final.log` 为TSC_EXIT=0。上述替代113/88作为最新相关验收，旧日志保留其历史含义；两项P2仍交root与low复审关闭，不由实现者自行宣称审查已通过。
+
+第四项最终冻结：root已亲读最新115/115、90/90、实际源改动与WIP摘要，并确认Sol low复审关闭两项P2、无剩余P1/P2。文档回归初次1失败/3通过（`.scratch/chat-retrieval-sol-wiki-final.log`）准确指出旧“当前链接477条”登记未随新来源链接更新；只将该处现行读数改为实测484，保留历史477证据。更正后 `.scratch/chat-retrieval-sol-wiki-corrected.log` 为4/4、退出0；`.scratch/chat-retrieval-sol-wiki-scan-final.log` 为OK 11 484 0、退出0。本阶段所有明确文件的git diff --check退出0，旧WIP哈希保持完整基线；lib.rs SHA256为 `D12D0E82699EDE358F97ECAD8F9BFF4CFF63225331C65A61842824D2F32BE3B9`，与接管读数一致，未改动已冻Rust。所有第4项文件现交root并停止写入；第五项仍由root正式派发给pillar_input_fix Luna medium后才开始，复制自修0/2独立计，最终统一full/build/提交/上线尚待后续执行。

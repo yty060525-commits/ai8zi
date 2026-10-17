@@ -56,6 +56,9 @@ describe('RecordsPage', () => {
     expect(firstItem?.textContent).toContain('男');
     expect(firstItem?.textContent).toContain('甲子年');
     expect(firstItem?.textContent).toContain('壬午时');
+    expect(firstItem?.querySelector('.chart-summary')?.textContent).toContain('公历');
+    expect(firstItem?.querySelector('.chart-summary')?.textContent).toContain('生肖');
+    expect(firstItem?.querySelector('.chart-summary')?.textContent).not.toMatch(/日主/);
     expect(firstItem?.textContent).toContain('批断：已完成');
     expect(firstItem?.textContent).not.toMatch(/DeepSeek|模型|厂商|额度|费用/);
   });

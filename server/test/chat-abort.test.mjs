@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import './netGuard.mjs'; // 上闸：本文件一律走假 fetch，绝不该真连 AI
 import http from 'node:http';
 import { openDatabase, insertRecord, getRecordById, readCache } from '../db.mjs';
-import { runChat, chatCacheKey } from '../chat.mjs';
+import { runChat, chatCacheKey, analyzeQuestion, collectEvidence, buildChatMessages } from '../chat.mjs';
 import { saveProviderKey } from '../ai.mjs';
 import { createApp } from '../app.mjs';
 
@@ -46,6 +46,12 @@ function oneRecordDb(userId, recordId) {
   return d;
 }
 
+function messagesFor(db, record, question) {
+  const plan = { ...analyzeQuestion(question, [{ id: record.id, name: record.name }]), recordId: record.id, personName: record.name };
+  const evidence = collectEvidence(db, record, plan, { tone: 80, providers: [] });
+  return buildChatMessages({ question, history: [], evidence, tone: 80 });
+}
+
 describe('聊天请求被中止时服务器不得继续花钱(#139)', () => {
   test('前提钉子：不发 abort 时，通道确实被调用且答案进了缓存(否则下面的断言全是空转)', async () => {
     const d = oneRecordDb('a139pre', 'r139pre');
@@ -57,7 +63,7 @@ describe('聊天请求被中止时服务器不得继续花钱(#139)', () => {
       assert.equal(reply.status, 'completed', '正例没答上来，夹具本身有问题：' + JSON.stringify(reply));
       assert.equal(signals.length, 1, '一轮问答应只发一次上游调用');
       const rec = getRecordById(d, 'r139pre');
-      const hit = readCache(d, chatCacheKey(rec, '我的喜用五行是什么？', 'deepseek-flash', 80));
+      const hit = readCache(d, chatCacheKey(rec, '我的喜用五行是什么？', 'deepseek-flash', 80, messagesFor(d, rec, '我的喜用五行是什么？')));
       assert.ok(hit, '首轮答案应写入缓存(这条前提不成立，下面那条判据就是空转)');
     } finally { restore(); d.close(); }
   });
@@ -84,7 +90,8 @@ describe('聊天请求被中止时服务器不得继续花钱(#139)', () => {
       assert.equal(controller.signal.aborted, true, '前提：这一问确实已被中止');
       const rec = getRecordById(d, 'r139');
       const models = ['deepseek-flash', 'kimi-k2.6', 'qwen3.8-flash'];
-      const written = models.filter((m) => !!readCache(d, chatCacheKey(rec, '我的喜用五行是什么？', m, 80)));
+      const messages = messagesFor(d, rec, '我的喜用五行是什么？');
+      const written = models.filter((m) => !!readCache(d, chatCacheKey(rec, '我的喜用五行是什么？', m, 80, messages)));
       assert.deepEqual(written, [], '没人读的答案进了缓存 ⇒ 下次重问直接命中这份陈旧结果：' + written.join(','));
       assert.ok(String(reply.error || '').length > 0, '中止也要给人一句可读的失败原因');
     } finally { globalThis.fetch = real; d.close(); }
@@ -101,6 +108,7 @@ describe('聊天请求被中止时服务器不得继续花钱(#139)', () => {
     saveProviderKey(d, 'kimi', 'sk-km');
     saveProviderKey(d, 'qwen', 'sk-qw');
     const seenSignals = [];
+    let sentMessages;
     /* 注入假通道调用：真实 callProvider 内部自己 new AbortController，从外面只能间接观察到
        「它转发给 fetch 的那个 signal 被 abort」。要直接钉住「路由有没有把请求的中止接到
        通道调用上」(第六参 callerSignal 到底传没传)，就得让 runChat 调到一个能记录它的替身。 */
@@ -108,6 +116,7 @@ describe('聊天请求被中止时服务器不得继续花钱(#139)', () => {
     assert.equal(typeof setProviderCaller, 'function', 'createApp 没有导出 setProviderCaller ⇒ 这条判据无从下手');
     setProviderCaller(async (_provider, _key, _messages, _effort, _mode, callerSignal) => {
       seenSignals.push(callerSignal ?? null);
+      sentMessages = _messages;
       // 挂住不返回，等断连把 abort 传进来之后再交出一个「迟到的答案」。
       return new Promise((resolve) => {
         const answer = () => resolve({ text: '身弱喜土金，迟到答案。' });
@@ -135,6 +144,7 @@ describe('聊天请求被中止时服务器不得继续花钱(#139)', () => {
           nonAiResult: { greatFortunes: [], annualFortunes: [], monthlyFortunes: [] }, aiStatus: 'completed' }),
       });
       assert.equal(saved.status, 200, '夹具没能建出记录');
+      const actualRecordId = (await saved.json()).record.id;
 
       // 发起聊天并在收到响应头之前销毁连接 —— 这就是界面上「停止」那一刻发生的事。
       const aborted = await new Promise((resolve, reject) => {
@@ -152,9 +162,10 @@ describe('聊天请求被中止时服务器不得继续花钱(#139)', () => {
       assert.equal(seenSignals.length, 1, '断连后仍继续调用通道，共发出 ' + seenSignals.length + ' 次');
       assert.ok(seenSignals[0], '通道调用没收到 callerSignal ⇒ app 路由没把请求中止接到 runChat 上');
       assert.equal(seenSignals[0].aborted, true, '通道调用带着 signal，但断连没有让它中止');
-      const rec = getRecordById(d, 'r139c');
+      const rec = getRecordById(d, actualRecordId);
+      assert.ok(rec && sentMessages, '必须检查当前HTTP账号实际命盘与实际发送给模型的消息');
       const written = ['deepseek-flash', 'kimi-k2.6', 'qwen3.8-flash']
-        .filter((m) => !!readCache(d, chatCacheKey(rec, '我的喜用五行是什么？', m, 80)));
+        .filter((m) => !!readCache(d, chatCacheKey(rec, '我的喜用五行是什么？', m, 80, sentMessages)));
       assert.deepEqual(written, [], '断连后的迟到答案写进了缓存：' + written.join(','));
     } finally {
       await new Promise((resolve) => server.close(resolve));
@@ -173,10 +184,12 @@ describe('聊天请求被中止时服务器不得继续花钱(#139)', () => {
     const d = oneRecordDb('a139f', 'r139f');
     saveProviderKey(d, 'deepseek', 'sk-ds');
     const seenSignals = [];
+    let sentMessages;
     const { handle, setProviderCaller } = createApp({ db: d, allowRegister: true });
     // 正文故意做大，保证客户端有机会在写完之后的流上掐断。
     setProviderCaller(async (_p, _k, _m, _e, _mode, callerSignal) => {
       seenSignals.push(callerSignal ?? null);
+      sentMessages = _m;
       return { text: '身弱喜土金。' + '详'.repeat(400 * 1024) };
     });
     const server = http.createServer((req, res) => handle(req, res));
@@ -188,12 +201,14 @@ describe('聊天请求被中止时服务器不得继续花钱(#139)', () => {
         body: JSON.stringify({ username: '半读者', password: 'secret123' }),
       });
       const token = String((await reg.json()).token);
-      await fetch('http://127.0.0.1:' + port + '/api/records', {
+      const saved = await fetch('http://127.0.0.1:' + port + '/api/records', {
         method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
         body: JSON.stringify({ name: '张三', gender: 'male', birthYear: 1990, birthMonth: 1,
           createdAt: '2025-01-01T00:00:00.000Z', yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午',
           nonAiResult: { greatFortunes: [], annualFortunes: [], monthlyFortunes: [] }, aiStatus: 'completed' }),
       });
+      assert.equal(saved.status, 200, '夹具没能建出记录');
+      const actualRecordId = (await saved.json()).record.id;
 
       const how = await new Promise((resolve) => {
         const req = http.request({ host: '127.0.0.1', port, path: '/api/chat', method: 'POST',
@@ -213,9 +228,10 @@ describe('聊天请求被中止时服务器不得继续花钱(#139)', () => {
 
       assert.equal(seenSignals.length, 1, '这一问应当只调一次通道');
       assert.equal(seenSignals[0]?.aborted, false, '收尾期的 close 被当成了放弃 ⇒ 会把已送达的回答误报成已取消');
-      const rec = getRecordById(d, 'r139f');
-      const hit = readCache(d, chatCacheKey(rec, '我的喜用五行是什么？', 'deepseek-flash', 80));
-      assert.ok(hit, '已送达的答案应留在缓存里(下一句同题重问直接复用)');
+      const rec = getRecordById(d, actualRecordId);
+      assert.ok(rec && sentMessages, '必须检查当前HTTP账号实际命盘与实际发送给模型的消息');
+      const key = chatCacheKey(rec, '我的喜用五行是什么？', 'deepseek-flash', 80, sentMessages);
+      assert.ok(readCache(d, key), '已送达的本问答案应留在对应精确缓存键(下一句同题重问直接复用)');
     } finally {
       await new Promise((resolve) => server.close(resolve));
       d.close();

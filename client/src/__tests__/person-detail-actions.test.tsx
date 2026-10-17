@@ -30,6 +30,39 @@ beforeEach(() => {
 afterEach(() => { cleanup(); resetMockSession(); });
 
 describe('PersonDetail AI 复制筛选/清除交互', () => {
+  it('旧aiAnalysis与aiTasks屏幕正文各只显示一层编号，编号原文和复制正文一致', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    const record = structuredClone(baseRecord);
+    record.aiAnalysis = { pattern: '', strength: '', usefulElements: [], avoidElements: [], explanation: '【健康】\n一、旧批断的原编号。' };
+    record.aiTasks = {
+      ...record.aiTasks,
+      'task-01': task('task-01', 'baseline', '【健康】\n一、任务已有编号。\n普通健康短语。'),
+    };
+    const person = { id: 'copy-person', name: '复制测试', nameInitial: 'C', gender: 'male' as const, birthSummary: '甲子年' };
+    initializeMockSession([person], [{ person, record, aiAnalysis: { status: 'completed', result: 'x' } }]);
+    render(<PersonDetail personId="copy-person" onBack={vi.fn()} />);
+    await screen.findByRole('heading', { name: '人物详情' });
+
+    const points = [...document.querySelectorAll('.points-view .point-list li')];
+    const oldPoint = points.find((item) => item.textContent?.includes('旧批断的原编号'));
+    expect(oldPoint?.textContent).toBe('一、旧批断的原编号。');
+    expect(oldPoint?.querySelector('.point-index')).toBeNull();
+    const numbered = points.find((item) => item.textContent?.includes('任务已有编号'));
+    expect(numbered?.textContent).toBe('一、任务已有编号。');
+    expect(numbered?.querySelector('.point-index')).toBeNull();
+    const plain = points.find((item) => item.textContent?.includes('普通健康短语'));
+    expect(plain?.querySelector('.point-index')?.textContent).toBe('一、');
+    expect(plain?.textContent).toBe('一、普通健康短语。');
+
+    fireEvent.click(screen.getByRole('button', { name: '复制全部' }));
+    const copied = writeText.mock.lastCall?.[0] as string;
+    expect(copied.split('一、任务已有编号。').length - 1).toBe(1);
+    expect(copied).toContain('一、普通健康短语。');
+    fireEvent.click(screen.getByRole('button', { name: '复制基础信息' }));
+    expect(writeText.mock.lastCall?.[0]).not.toContain('日主：');
+  });
+
   it('copies selected scope results filtered by checked dimensions', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText } });

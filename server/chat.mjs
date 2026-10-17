@@ -19,6 +19,7 @@ import { listRecordSummaries, getRecordById, readCache, writeCache } from './db.
 import { natalFactsOf, providerOrder, providerKey, clampTone, toneInstruction, cacheKey, birthTimeSignature, callProvider, PROVIDERS, PROVIDER_LABEL, AI_SERVER_UNCONFIGURED, AI_NO_CREDENTIAL_REPLY } from './ai.mjs';
 /* 正文中文闸门：与浏览器端共用的唯一一份实现(features/chart/elements.ts 再导出同一模块)。 */
 import { FIELD_NAME_ZH, isChineseOnly, nonChineseKinds, enforceChinese, sanitizeChatText } from '../client/src/shared/chineseGate.ts';
+import { factLabels, sectionNames, stableJson, uncoveredTopics } from '../client/src/shared/chatRetrieval.ts';
 
 /* 「本月/今年」这类相对时间锚点按北京口径读，不用宿主时区的本地字段。
    服务端从未设置 process.env.TZ，于是读数取决于部署机：机器不在东八区时，
@@ -98,7 +99,11 @@ export function extractWhen(question, now = new Date()) {
     }
   }
   month = monthFromText(q, now);
-  if (month !== undefined && year === undefined) year = nowYear; // 月份必然锚定在某一年
+  if (month !== undefined && year === undefined) {
+    const currentMonth = chinaParts(now).month;
+    const yearDelta = /下个月|下月|来月/.test(q) && currentMonth === 12 ? 1 : /上个月|上月/.test(q) && currentMonth === 1 ? -1 : 0;
+    year = nowYear + yearDelta;
+  } // 月份必然锚定在某一年
   // 年份与月份都没落地、且句子确实在开放式问时机 → 才转扫年。「明年什么时候」有年份锚点，不走这里。
   if (year === undefined && month === undefined && OPEN_TIMING_RE.test(q)) {
     const rel = Object.entries(RELATIVE_YEAR).find(([word]) => q.includes(word));
@@ -193,12 +198,13 @@ export function sliceSections(text, topics, capPer = 700) {
     const label = m[1].trim(); const body = cutAtBoundary(m[2].trim(), capPer);
     // 提问主题里存在真实小节标签时才按标签过滤；只问「大运/格局」这类非小节主题时不过滤
     if (realLabels.length && !realLabels.some((t) => label.includes(t))) continue;
+    if (!body.trim()) continue;
     if (seen.has(label)) continue;
     seen.add(label);
     blocks.push('【' + label + '】' + body);
   }
   if (blocks.length) return blocks.join('\n');
-  return labels.length ? '' : cutAtBoundary(source, capPer);
+  return labels.length || /【[^】]+】/.test(source) ? '' : cutAtBoundary(source, capPer);
 }
 
 const findTask = (tasks, type) => tasks.find((r) => r?.task?.type === type && r.status === 'completed' && r.analysis);
@@ -221,11 +227,42 @@ const decadeOf = (record, tasks, year) => {
 
 /** 按任务参数从 ai_cache 精确补读(主键查找)：记录里 aiTasks 未同步全时，缓存仍是权威来源。 */
 function cacheLookup(db, record, task, tone, providers) {
-  for (const provider of providers) {
+  for (const provider of (providers.length ? providers : PROVIDERS)) {
     const hit = readCache(db, cacheKey(record, task, provider.model, tone));
     if (hit) { try { return JSON.parse(hit); } catch { /* 坏缓存忽略 */ } }
   }
   return null;
+}
+
+function addAnalysis(evidence, record, result, heading, text, meta = {}) {
+  const body = String(text || '').trim();
+  if (!body) return false;
+  if (meta.includeInAnalyses !== false) evidence.analyses.push({ heading, text: body });
+  const task = result?.task || {};
+  const source = { kind: 'analysis', recordId: record.id, heading, sections: sectionNames(body), text: body, origin: meta.origin || 'record' };
+  if (task.taskId) source.taskId = task.taskId;
+  if (task.type) source.taskType = task.type;
+  const year = meta.year ?? task.year; const month = meta.month ?? task.month;
+  if (year !== undefined) source.year = year;
+  if (month !== undefined) source.month = month;
+  evidence.sources.push(source);
+  return true;
+}
+
+function addFactSources(evidence, record) {
+  const natalSections = factLabels(evidence.natal);
+  if (natalSections.length) evidence.sources.push({ kind: 'natal', recordId: record.id, heading: '本命事实', sections: natalSections });
+  if (evidence.periodFacts && typeof evidence.periodFacts === 'object') {
+    const labels = { annual: '流年事实', annualHits: '流年干支关系', decade: '大运事实', decadeHits: '大运干支关系', monthly: '流月事实', monthlyHits: '流月干支关系', age: '所问年龄' };
+    const sections = factLabels(evidence.periodFacts, labels);
+    if (sections.length) evidence.sources.push({ kind: 'period', recordId: record.id, heading: '所问时段事实', year: evidence.plan.year ?? evidence.plan.scanFrom, month: evidence.plan.month, sections });
+  }
+}
+
+function topicSlice(explanation, labels, cap = 700) {
+  const source = String(explanation || '');
+  const sliced = sliceSections(source, labels, cap);
+  return sliced || (!/【[^】]+】/.test(source) ? cutAtBoundary(source, cap) : '');
 }
 
 /** 汇总本次提问需要的全部数据库证据。 */
@@ -238,6 +275,7 @@ export function collectEvidence(db, record, plan, { tone = 80, periodFacts, prov
     natal: natalFactsOf(record),
     analyses: [],
     missing: [],
+    sources: [],
   };
   const wantsScan = plan.scan === true;
   const wantsPeriod = plan.year !== undefined || wantsScan;
@@ -247,14 +285,16 @@ export function collectEvidence(db, record, plan, { tone = 80, periodFacts, prov
   const isGeneral = wantTopics.length === 0 && plan.general === true;
   if (wantsNatal || wantTopics.length === 0 || wantTopics.some((t) => ['五行', '格局', '神煞'].includes(t))) {
     const baseline = findTask(tasks, 'baseline');
-    if (baseline) evidence.analyses.push({ heading: '本命批断', text: (baseline.analysis.explanation || '') && sliceSections(baseline.analysis.explanation, wantTopics.length ? [...wantTopics, '身强身弱与喜忌'] : []) || cutAtBoundary(baseline.analysis.explanation, 900) });
+    if (baseline) {
+      if (!addAnalysis(evidence, record, baseline, '本命批断', topicSlice(baseline.analysis.explanation, wantTopics.length ? [...wantTopics, '身强身弱与喜忌'] : [], 900))) evidence.missing.push('本命批断已完成，但没有可用于回答的正文');
+    }
     const adjustment = findTask(tasks, 'adjustment');
-    if (adjustment && (wantTopics.length === 0 || wantTopics.includes('五行'))) evidence.analyses.push({ heading: '后天调整与职业', text: sliceSections(adjustment.analysis.explanation, ['后天调整', '事业适配', '健康注意']) });
+    if (adjustment && (wantTopics.length === 0 || wantTopics.includes('五行'))) addAnalysis(evidence, record, adjustment, '后天调整与职业', sliceSections(adjustment.analysis.explanation, ['后天调整', '事业适配', '健康注意']));
     const overview = findTask(tasks, 'overview');
-    if (overview && wantTopics.length === 0) evidence.analyses.push({ heading: '全盘总结', text: sliceSections(overview.analysis.explanation, ['核心结论', '值得关注的时间节点', '行动建议']) });
+    if (overview && wantTopics.length === 0) addAnalysis(evidence, record, overview, '全盘总结', sliceSections(overview.analysis.explanation, ['核心结论', '值得关注的时间节点', '行动建议']));
     if (!baseline) evidence.missing.push('本命批断尚未生成：可先在命盘详情页点批断分析');
     if (isGeneral) {
-      const available = [...new Set(evidence.analyses.flatMap((a) => [...String(a.text).matchAll(/【([^】]+)】/g)].map((m) => m[1])))];
+      const available = [...new Set(evidence.analyses.flatMap((a) => sectionNames(a.text)))];
       if (available.length) evidence.sectionIndex = available;
     }
   }
@@ -268,46 +308,71 @@ export function collectEvidence(db, record, plan, { tone = 80, periodFacts, prov
     const uncovered = [];
     for (let y = from; y < from + SCAN_YEARS; y += 1) {
       let annual = taskOfYear(tasks, 'annual', y);
-      if (!annual) { const a = cacheLookup(db, record, { type: 'annual', year: y, month: undefined }, tone, providers); if (a) annual = { status: 'completed', analysis: a, task: { type: 'annual', year: y } }; }
+      let annualOrigin = 'record';
+      if (!annual) { const a = cacheLookup(db, record, { type: 'annual', year: y, month: undefined }, tone, providers); if (a) { annual = { status: 'completed', analysis: a, task: { type: 'annual', year: y } }; annualOrigin = 'task_cache'; } }
       if (!annual) { gaps.push(y); continue; }
       const body = sliceSections(annual.analysis.explanation, labels, 260);
       // 该年批断存在，但按提问主题过滤后一个字都没有 → 这一年答不了这个问题，必须点名
       if (!body) uncovered.push(y);
       lines.push(String(y) + '年(' + String(annual.analysis.title || '') + ')：' + body);
+      if (body) {
+        addAnalysis(evidence, record, annual, String(y) + '年流年批断', body, { year: y, origin: annualOrigin, includeInAnalyses: false });
+        const absent = uncoveredTopics(body, wantTopics);
+        if (absent.length) evidence.missing.push(String(y) + '年流年批断缺少所问主题：' + absent.join('、'));
+      }
     }
     if (lines.length) {
       evidence.analyses.push({ heading: from + '年至' + (from + SCAN_YEARS - 1) + '年逐年批断，用于判断应期', text: lines.join('\n') });
       // 起算年所在大运：判断这十年运势走向，缺了它只看流年会失真
       const decade = decadeOf(record, tasks, from);
       const decadeYear = coveringDecadeStart(record, from) ?? Number(from);
-      const decadeHit = decade || (() => { const d = cacheLookup(db, record, { type: 'decade', year: decadeYear }, tone, providers); return d ? { status: 'completed', analysis: d, task: { type: 'decade', year: decadeYear } } : null; })();
-      if (decadeHit) evidence.analyses.push({ heading: '所处大运批断', text: sliceSections(decadeHit.analysis.explanation, labels) });
+      let decadeHit = decade; let decadeOrigin = 'record';
+      if (!decadeHit) { const d = cacheLookup(db, record, { type: 'decade', year: decadeYear }, tone, providers); if (d) { decadeHit = { status: 'completed', analysis: d, task: { type: 'decade', year: decadeYear } }; decadeOrigin = 'task_cache'; } }
+      if (decadeHit) addAnalysis(evidence, record, decadeHit, '所处大运批断', sliceSections(decadeHit.analysis.explanation, labels), { origin: decadeOrigin });
     } else {
       evidence.missing.push(from + '年至' + (from + SCAN_YEARS - 1) + '年的流年批断一条都还没生成，无法判断应期');
     }
     if (gaps.length) evidence.missing.push('下列年份尚未生成流年批断，作答时只能在这些年份之外给应期：' + gaps.join('、') + '年');
     if (uncovered.length) evidence.missing.push('下列年份虽有流年批断，但其中没有与所问主题相关的小节，不得据其判断该主题的应期：' + uncovered.join('、') + '年');    if (periodFacts && typeof periodFacts === 'object') evidence.periodFacts = periodFacts;
+    addFactSources(evidence, record);
     return evidence;
   }
   if (wantsPeriod) {
     const labels = wantTopics.length ? wantTopics : ['健康', '事业', '财运', '爱情', '刑冲克害批注'];
-    let annual = taskOfYear(tasks, 'annual', plan.year);
-    if (!annual) { const a = cacheLookup(db, record, { type: 'annual', year: plan.year, month: undefined }, tone, providers); if (a) annual = { status: 'completed', analysis: a, task: { type: 'annual', year: plan.year } }; }
-    if (annual) evidence.analyses.push({ heading: plan.year + '年流年批断，题为' + String(annual.analysis.title || ''), text: sliceSections(annual.analysis.explanation, labels) });
+      let annual = taskOfYear(tasks, 'annual', plan.year); let annualOrigin = 'record';
+      if (!annual) { const a = cacheLookup(db, record, { type: 'annual', year: plan.year, month: undefined }, tone, providers); if (a) { annual = { status: 'completed', analysis: a, task: { type: 'annual', year: plan.year } }; annualOrigin = 'task_cache'; } }
+      if (annual) {
+        const heading = plan.year + '年流年批断，题为' + String(annual.analysis.title || '');
+        const body = topicSlice(annual.analysis.explanation, labels);
+        if (!addAnalysis(evidence, record, annual, heading, body, { year: plan.year, origin: annualOrigin })) evidence.missing.push(plan.year + '年的流年批断没有与所问主题相关的小节（' + wantTopics.join('、') + '），无法据此回答');
+        else { const absent = uncoveredTopics(body, wantTopics); if (absent.length) evidence.missing.push(plan.year + '年流年批断缺少所问主题：' + absent.join('、')); }
+      }
     else evidence.missing.push(plan.year + '年的流年分析尚未生成');
     const decadeYear = coveringDecadeStart(record, plan.year) ?? Number(plan.year);
     let decade = decadeOf(record, tasks, plan.year);
-    if (!decade) { const d = cacheLookup(db, record, { type: 'decade', year: decadeYear }, tone, providers); if (d) decade = { status: 'completed', analysis: d, task: { type: 'decade', year: decadeYear } }; }
-    if (decade) evidence.analyses.push({ heading: '所处大运批断', text: sliceSections(decade.analysis.explanation, labels) });
+      let decadeOrigin = 'record';
+      if (!decade) { const d = cacheLookup(db, record, { type: 'decade', year: decadeYear }, tone, providers); if (d) { decade = { status: 'completed', analysis: d, task: { type: 'decade', year: decadeYear } }; decadeOrigin = 'task_cache'; } }
+      if (decade) {
+        const body = topicSlice(decade.analysis.explanation, labels);
+        if (!addAnalysis(evidence, record, decade, '所处大运批断', body, { origin: decadeOrigin })) evidence.missing.push(plan.year + '年所处大运批断没有与所问主题相关的小节');
+        else { const absent = uncoveredTopics(body, wantTopics); if (absent.length) evidence.missing.push(plan.year + '年所处大运批断缺少所问主题：' + absent.join('、')); }
+      }
     if (plan.month !== undefined) {
       let monthly = taskOfYear(tasks, 'monthly', plan.year, plan.month);
-      if (!monthly) { const mm = cacheLookup(db, record, { type: 'monthly', year: plan.year, month: plan.month }, tone, providers); if (mm) monthly = { status: 'completed', analysis: mm, task: { type: 'monthly', year: plan.year, month: plan.month } }; }
-      if (monthly) evidence.analyses.push({ heading: plan.year + '年' + plan.month + '月流月批断', text: sliceSections(monthly.analysis.explanation, labels) });
+      let monthlyOrigin = 'record';
+      if (!monthly) { const mm = cacheLookup(db, record, { type: 'monthly', year: plan.year, month: plan.month }, tone, providers); if (mm) { monthly = { status: 'completed', analysis: mm, task: { type: 'monthly', year: plan.year, month: plan.month } }; monthlyOrigin = 'task_cache'; } }
+      if (monthly) {
+        const heading = plan.year + '年' + plan.month + '月流月批断';
+        const body = topicSlice(monthly.analysis.explanation, labels);
+        if (!addAnalysis(evidence, record, monthly, heading, body, { year: plan.year, month: plan.month, origin: monthlyOrigin })) evidence.missing.push(plan.year + '年' + plan.month + '月流月批断没有与所问主题相关的小节');
+        else { const absent = uncoveredTopics(body, wantTopics); if (absent.length) evidence.missing.push(plan.year + '年' + plan.month + '月流月批断缺少所问主题：' + absent.join('、')); }
+      }
       else evidence.missing.push(plan.year + '年' + plan.month + '月的流月分析尚未生成');
     }
     // 时段干支事实：记录里是瘦身存储，客户端随请求带来引擎现算的当期行(仍是确定性计算结果，非模型发挥)
     if (periodFacts && typeof periodFacts === 'object') evidence.periodFacts = periodFacts;
   }
+  addFactSources(evidence, record);
   return evidence;
 }
 
@@ -352,8 +417,8 @@ export { FIELD_NAME_ZH, isChineseOnly, nonChineseKinds, enforceChinese, sanitize
 
 /** 证据摘要压成一段稳定前缀(同盘同题逐字节一致，吃上游前缀缓存)，可变尾巴只有问题本身。 */
 export function buildChatMessages({ question, history = [], evidence, tone = 80 }) {
-  const evidenceText = '# 命盘事实(JSON)\n' + JSON.stringify(evidence.natal)
-    + (evidence.periodFacts ? '\n\n# 所问时段运势数据(JSON)\n' + JSON.stringify(evidence.periodFacts) : '')
+  const evidenceText = '# 命盘事实(JSON)\n' + stableJson(evidence.natal)
+    + (evidence.periodFacts ? '\n\n# 所问时段运势数据(JSON)\n' + stableJson(evidence.periodFacts) : '')
     + '\n\n# 已算批断摘录\n' + (evidence.analyses.map((a) => '## ' + a.heading + '\n' + a.text).join('\n\n') || '（数据库中暂无该主题的已算批断）')
     + (evidence.missing?.length ? '\n\n# 数据缺口提示\n' + evidence.missing.map((m) => '- ' + m).join('\n') : '');
   const messages = [{ role: 'system', content: CHAT_SYSTEM }];
@@ -366,9 +431,19 @@ export function buildChatMessages({ question, history = [], evidence, tone = 80 
   const sectionIndexText = evidence.sectionIndex?.length
     ? '\n\n# 本盘已算出的批断小节(只能从中选取作答，不得自行补写没有的小节)\n' + evidence.sectionIndex.map((s) => '【' + s + '】').join('、')
     : '';
+  const planText = '\n\n# 本轮检索计划\n命主：' + evidence.person.name + '，记录：' + evidence.person.id
+    + '\n年份：' + (evidence.plan.year ?? '未指定') + '\n月份：' + (evidence.plan.month ?? '未指定')
+    + '\n主题：' + (evidence.plan.topics.join('、') || '未指定')
+    + (evidence.plan.scan ? '\n扫年范围：' + evidence.plan.scanFrom + '年至' + (Number(evidence.plan.scanFrom) + SCAN_YEARS - 1) + '年' : '');
+  const sourceDirectory = evidence.sources?.length
+    ? '\n\n# 本轮检索资料目录\n' + evidence.sources.map((source) => '【' + source.heading + '】' + source.sections.join('、')
+      + '；记录：' + source.recordId + (source.taskId ? '；任务：' + source.taskId : '')
+      + (source.taskType ? '；类型：' + source.taskType : '') + (source.year !== undefined ? '；年份：' + source.year : '')
+      + (source.month !== undefined ? '；月份：' + source.month : '') + (source.origin ? '；来源：' + source.origin : '')).join('\n')
+    : '\n\n# 本轮检索资料目录\n无可用资料来源';
   messages.push({
     role: 'user',
-    content: evidenceText + sectionIndexText
+    content: evidenceText + sectionIndexText + planText + sourceDirectory
       + '\n\n# 语气要求\n' + toneInstruction(tone)
       + '\n\n# 用户问题\n' + String(question || '').slice(0, 500),
   });
@@ -378,9 +453,11 @@ export function buildChatMessages({ question, history = [], evidence, tone = 80 
 /* ---------- 聊天答案缓存与追问 ---------- */
 /** 键位与任务缓存同构(第 2..6 段=性别+四柱) → chart_sig 索引自动覆盖聊天缓存。
  *  仅缓存首轮(无历史)答案：追问的答案依赖上文，键里放不下整段上文，做了就会张冠李戴。 */
-export function chatCacheKey(record, question, model, tone) {
+export function chatCacheKey(record, question, model, tone, messages) {
+  if (messages === undefined) throw new TypeError('chatCacheKey requires the exact messages used for this answer');
   const toneBucket = Math.round(clampTone(tone) / 5) * 5;
   const qhash = createHash('sha256').update(String(question).trim()).digest('hex').slice(0, 24);
+  const evidenceHash = createHash('sha256').update(stableJson(messages)).digest('hex').slice(0, 24);
   // chatv3：大运取证改「覆盖年」匹配后，问中段年份(非起运年)的旧缓存里缺「所处大运批断」，只凭流年会把十年走向答偏 → 整体失效重取。
   //        (v2 那次是为「年份解错→证据是另一年的批断」，同属"检索口径变了旧答案必须作废"。)
   // chatv4：本命事实 natal 新增「调候参考」(natal.tiaohouFacts)，本命/喜忌类问答的作答口径随之变化，
@@ -390,7 +467,7 @@ export function chatCacheKey(record, question, model, tone) {
   // chatv6：正式版口径下证据标题与缺口提示不再出现括号、斜杠与「AI」字样(改读成中文)，
   //        提示词里指向入口的说法也从「点「AI 分析」」改成「点批断分析」。旧答案引用的正是那批措辞，作废重答。
   // chatv7：起运结论按完整出生时刻区分，旧盘以空尾段维持原缓存语义。
-  return ['chatv7', model, record.gender, record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar, 'chat', qhash, record.birthYear, toneBucket, birthTimeSignature(record.nonAiResult?.birthTime)].join('|');
+  return ['chatv8', model, record.gender, record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar, 'chat', qhash, record.birthYear, toneBucket, evidenceHash, birthTimeSignature(record.nonAiResult?.birthTime)].join('|');
 }
 
 /** 本轮问题自带的人名要能覆盖上一轮命主。返回 {personName, recordId}；解不出则 null。 */
@@ -437,6 +514,23 @@ export function applyFollowUp(plan, history, summaries = [], now = new Date()) {
   return next;
 }
 
+function validatePeriodFacts(facts, context, record, plan) {
+  const requestedYear = plan.year ?? (plan.scan ? plan.scanFrom : undefined);
+  if (!facts || typeof facts !== 'object' || !context || typeof context !== 'object'
+      || context.recordId !== record.id || requestedYear === undefined || Number(context.year) !== Number(requestedYear)
+      || (context.month === undefined ? plan.month !== undefined : Number(context.month) !== Number(plan.month))) return undefined;
+  const out = {};
+  if (facts.annual && Number(facts.annual.year) === Number(requestedYear)) { out.annual = facts.annual; if (Array.isArray(facts.annualHits)) out.annualHits = facts.annualHits; }
+  else if (facts.annual) return undefined;
+  if (facts.monthly && plan.month !== undefined && Number(facts.monthly.year) === Number(requestedYear) && Number(facts.monthly.month) === Number(plan.month)) { out.monthly = facts.monthly; if (Array.isArray(facts.monthlyHits)) out.monthlyHits = facts.monthlyHits; }
+  else if (facts.monthly) return undefined;
+  if (facts.decade && Number(facts.decade.startYear) <= Number(requestedYear) && Number(requestedYear) <= Number(facts.decade.endYear)) { out.decade = facts.decade; if (Array.isArray(facts.decadeHits)) out.decadeHits = facts.decadeHits; }
+  else if (facts.decade) return undefined;
+  if (!out.annual && !out.monthly && !out.decade) return undefined;
+  out.age = Number(requestedYear) - Number(record.birthYear);
+  return out;
+}
+
 /* ---------- 入口 ---------- */
 export async function runChat(db, user, body = {}, opts = {}) {
   const question = String(body.question || '').trim();
@@ -450,29 +544,35 @@ export async function runChat(db, user, body = {}, opts = {}) {
   // 目标命盘一律从「本人名下」的轻列表里解析(recordId 也必须命中)，杜绝越权读取他人记录。
   const history = Array.isArray(body.history) ? body.history : [];
   // summaries 传进 applyFollowUp：追问时才能认出「那她呢」该沿用上一个人、「换成李四呢」该换人。
-  const plan = applyFollowUp(analyzeQuestion(question, summaries), history, summaries, new Date());
-  let target = null;
+  const currentPlan = analyzeQuestion(question, summaries);
+  const plan = applyFollowUp(currentPlan, history, summaries, new Date());
+  let suppliedTarget = null;
   if (body.recordId) {
-    target = summaries.find((s) => s.id === String(body.recordId)) || null;
-    if (!target && user.role === 'admin') {
+    suppliedTarget = summaries.find((s) => s.id === String(body.recordId)) || null;
+    if (!suppliedTarget && user.role === 'admin') {
       const foreign = getRecordById(db, String(body.recordId));
-      if (foreign) target = { id: foreign.id, name: foreign.name };
+      if (foreign) suppliedTarget = { id: foreign.id, name: foreign.name };
     }
-    if (!target) return { status: 'failed', error: '记录不存在或无权访问' };
+    if (!suppliedTarget) return { status: 'failed', error: '记录不存在或无权访问' };
   }
-  if (!target) target = plan.recordId ? summaries.find((s) => s.id === plan.recordId) : (summaries.length === 1 ? summaries[0] : null);
+  const namedTarget = currentPlan.recordId ? summaries.find((s) => s.id === currentPlan.recordId) : null;
+  let target = namedTarget || suppliedTarget || (plan.recordId ? summaries.find((s) => s.id === plan.recordId) : null);
+  if (!target && summaries.length === 1) target = summaries[0];
   if (!target) return { status: 'need_record', reason: '你的名下有多条命盘，请告诉我问的是谁，或点选下方命主', options: summaries.map((s) => ({ id: s.id, name: s.name, updatedAt: s.updated_at ?? s.updatedAt })) };
+
+  const actualPlan = { ...plan, recordId: target.id, personName: target.name };
 
   const record = getRecordById(db, target.id);
   if (!record) return { status: 'failed', error: '记录读取失败' };
-  const evidence = collectEvidence(db, record, plan, { tone, periodFacts: body.periodFacts, providers });
+  const periodFacts = validatePeriodFacts(body.periodFacts, body.periodFactsContext, record, actualPlan);
+  const evidence = collectEvidence(db, record, actualPlan, { tone, periodFacts, providers });
   const messages = buildChatMessages({ question, history, evidence, tone });
   const cacheable = history.length === 0; // 追问依赖上下文，不缓存
-  const evidenceMeta = { recordId: record.id, personName: record.name, plan };  // 先查缓存：即便服务器当前没有配置任何密钥(或密钥被移除)，已入库的答案仍应可复用。
+  const evidenceMeta = { recordId: record.id, personName: record.name, plan: actualPlan, sources: evidence.sources, missing: evidence.missing };  // 先查缓存：即便服务器当前没有配置任何密钥(或密钥被移除)，已入库的答案仍应可复用。
   // 缓存也过一遍去英文：早先落库的答案可能残留英文字段名，读时顺手洗净。
   if (cacheable) {
     for (const model of (providers.length ? providers.map((p) => p.model) : PROVIDERS.map((p) => p.model))) {
-      const hit = readCache(db, chatCacheKey(record, question, model, tone));
+      const hit = readCache(db, chatCacheKey(record, question, model, tone, messages));
       if (hit) { const clean = sanitizeChatText(hit); if (clean) return { status: 'completed', answer: clean, cached: true, evidence: evidenceMeta }; }
     }
   }
@@ -484,7 +584,7 @@ export async function runChat(db, user, body = {}, opts = {}) {
   const abandoned = () => !!opts.signal?.aborted;
   for (const provider of providers) {
     if (abandoned()) return { status: 'failed', error: '这一问已经被取消，没有继续调用通道。', evidence: evidenceMeta };
-    const ck = cacheable ? chatCacheKey(record, question, provider.model, tone) : null;
+    const ck = cacheable ? chatCacheKey(record, question, provider.model, tone, messages) : null;
     // opts.callProvider 只给测试留的接缝：#139 要直接钉住「路由有没有把请求中止接到通道调用上」，
     // 而真实 callProvider 内部自己 new AbortController，从外面只能间接看到转发给 fetch 的 signal。
     const result = await (opts.callProvider || callProvider)(provider, providerKey(db, provider.id), messages, 'high', 'text', opts.signal);
