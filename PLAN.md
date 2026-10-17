@@ -147,15 +147,19 @@ npm run build
 | 规划与历史审计 | 完成，主代理已整合 | 0 | 采用较新快照，两个 Luna 按独立文件归属并行；保留上一轮记录 |
 | Luna 点评/账本/类型恢复 | 完成并冻结 | 0 / 2 | scope 两套件 23/23，`.scratch/restore-notes-suites-final.log`；stop 仅类型一行变化；账本提交前 74 通过/15 个 HEAD 待提交失败，无绕过 |
 | Luna 本地引擎与统一接线 | 两轮后未通过，已按规则移交 | 2 / 2 | 初始 45 失败/28 通过；自修1后 27 失败/46 通过；自修2后 15 失败/59 通过，见 client/.scratch/restore-local-integrated-2.log；Luna 已停止编辑 |
-| Sol high 诊断修复接管 | 实现完成，等待冻结审查 | — | 明确配置 GPT-6.1 Sol high；App.tsx 接管模式挂载/hashchange，main 恢复原字节；修补全、中文显示/复制、来源与版本复用、旧 local 读清理及独立云端别名保留。8 套 122/122；审查新增版本懒加载期间停止竞态后，controller 提前建立并按本轮身份收尾，相关 3 套 34/34；类型检查退出 0 |
-| Wiki 与交付账本迁移、本地精准提交 | 待执行 | — | 必须审查 cached diff，无 push/部署 |
-| 全量、类型/构建、服务器与 Wiki 终验 | 待执行 | — | 仅实际退出码 0 与完整汇总算通过 |
+| Sol high 诊断修复接管 | 返修完成并冻结，重新全量待验 | — | 明确配置 GPT-6.1 Sol high；App.tsx 接管模式挂载/hashchange，main 恢复原字节；修补全、中文显示/复制、来源与版本复用、旧 local 读清理及独立云端别名保留。8 套 122/122；审查新增版本懒加载期间停止竞态后，controller 提前建立并按本轮身份收尾。首轮全量要求保留的原 reset 已恢复于首 await 前；最新取消相关 34/34、auto 结构 4/4、tsc 退出 0，low 已复审通过 |
+| Wiki 与交付账本迁移、本地精准提交 | 首次提交完成，补充返修提交待执行 | — | 源码提交 7948962，显式暂存 28 文件，HEAD 交付账本 89/89；仅原 auto WIP 未提交；点评 Wiki 流程补充中，无 push/部署 |
+| 全量、类型/构建、服务器与 Wiki 终验 | 首轮全量未通过，返修后重跑 | — | 首轮 953 通过/1 失败、123 文件、417.64 秒；类型/构建、服务器 141、Rust 21 及 Wiki 扫描均通过；唯一 auto 源码结构判据需恢复原 reset，不能删断言或改用户 WIP |
 | GPT-6.1 Sol low 最终审查 | 源码审查中，终验日志待补 | — | 亲读 diff 发现旧 local 误清独立 cloud 别名、懒加载停止两项 P2，均退回 Sol high 修复并补行为回归；最终需 HEAD 与全量/type/build 证据 |
 | 主代理独立验收 | 待执行 | — | 未完成本表全部必要阶段前不得宣称全绿 |
 
 本轮服务器回归已由主代理独立执行：`node --test` 141/141 通过，退出码 0，约 1.61 秒（`.scratch/restore-server.log`）。原有 auto WIP 的 SHA256 仍为 `2063B6AD382AD2996D2BF98CAE8ABE20EEEC5DAE58A3B9E0C39024BB65287290`；stop 测试对照备份仅新增 `as HTMLButtonElement`，无断言或其余内容改动。
 
 接管证据：`client/.scratch/restore-local-sol-eight-final.log` 为 8 文件 122/122（66.88 秒）；末次 UI 停止竞态变更相关短测 `client/.scratch/restore-local-sol-stop-final.log` 为 3 文件 34/34（9.19 秒），`client/.scratch/restore-local-sol-tsc-final.log` 对应退出 0。主代理独立复跑点评 23/23（`.scratch/restore-notes-root.log`），Wiki 扫描 `OK 11 456 0`。这些短测不代替下方尚待完成的全量与 HEAD 账本验收。按 Wiki 的三套测试口径，主代理另执行 Rust `cargo test --lib`；不修改 Rust 源码。
+
+首次 HEAD 终验：`.scratch/restore-delivered-head.log` 为 89/89，`.scratch/restore-types.log` 对应 `tsc --noEmit` 退出 0，`.scratch/restore-build.log` 对应 `tsc -b && vite build` 退出 0；`.scratch/restore-rust.log` 为 21/21、退出 0。首轮全量 `.scratch/restore-full.log` 实际退出 1（953 通过/1 失败，123 文件，417.64 秒），唯一失败为原 auto 用户 WIP 的“三处停止意愿重置”结构判据：取消竞态修复时删除了带注释的冗余 reset。复核可在 controller 同步建立处、首个 await 之前恢复原句而不重开停止窗口；Sol high 已接回最小返修，用户 WIP 不改。完整全量需在此返修提交和构建之后重新运行，不能以其余 953 项通过替代。
+
+该返修仅恢复 PersonDetail 一行；`client/.scratch/restore-local-sol-reset-lifecycle.log` 为 34/34（8.77 秒），`client/.scratch/restore-local-sol-reset-structure.log` 通过指定的 4 条结构测试（其余 6 条因 `-t` 未选择，仅为定向证据），`client/.scratch/restore-local-sol-reset-tsc.log` 对应退出 0。low 亲读实际 diff 与日志，确认同步 reset 不复活等待中的旧轮；必须继续不筛选的全量测试。
 
 ## 配套 Wiki
 

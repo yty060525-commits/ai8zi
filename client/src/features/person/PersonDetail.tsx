@@ -629,6 +629,7 @@ const sanitizeCopyLine = (line: string): string => {
     horizonRef.current = new Date();
     const controller = new AbortController();
     controllerRef.current = controller;
+    signalAbortedRef.current = false;   // 新一轮开跑：上一回的「立即停止」不再约束这一轮的自动重试
     const isCurrentRequest = () => controllerRef.current === controller && !controller.signal.aborted;
     let enteredBusy = false;
     try {
