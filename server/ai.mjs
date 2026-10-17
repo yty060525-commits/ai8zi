@@ -298,6 +298,15 @@ export function buildTaskPayload(record, task, tone = DEFAULT_TONE) {
   return { messages: [{ role: 'system', content: system }, { role: 'user', content: userContent }], effort };
 }
 
+export function birthTimeSignature(value) {
+  const t = value && typeof value === 'object' ? value : null;
+  if (!t || !Number.isFinite(t.year) || !Number.isInteger(t.year) || t.year < 1 || t.year > 9999 || !Number.isFinite(t.month) || !Number.isInteger(t.month) || t.month < 1 || t.month > 12 || !Number.isFinite(t.day) || !Number.isInteger(t.day) || !Number.isFinite(t.hour) || !Number.isInteger(t.hour) || t.hour < 0 || t.hour > 23 || !Number.isFinite(t.minute) || !Number.isInteger(t.minute) || t.minute < 0 || t.minute > 59) return '';
+  const leap = t.year % 4 === 0 && (t.year % 100 !== 0 || t.year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (t.day < 1 || t.day > days[t.month - 1]) return '';
+  return `${String(t.year).padStart(4, '0')}-${String(t.month).padStart(2, '0')}-${String(t.day).padStart(2, '0')}T${String(t.hour).padStart(2, '0')}:${String(t.minute).padStart(2, '0')}`;
+}
+
 export function cacheKey(record, task, model, tone = DEFAULT_TONE) {
   const toneBucket = Math.round(clampTone(tone) / 5) * 5; // 每 5 度一个缓存档，避免同一命盘缓存爆炸
   // v9：本命事实新增引擎算定的 patternFacts/strengthScore，且提示词改为「沿用不重判」；
@@ -312,7 +321,8 @@ export function cacheKey(record, task, model, tone = DEFAULT_TONE) {
   //      英文字段名、阿拉伯数字与「依据某小节」的出处说明，已不符合新的展示口径，整体作废重写。
   // v15：时段任务指令里的标题示例去掉「·」并明写「标题不用任何符号」—— 那道闸门白名单没有中点，
   //      旧提示词等于教模型产出会被删字的标题；提示词字节变了，缓存键必须跟着升。
-  return ['v15', model, record.gender, record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar, task.type, task.year ?? 0, task.month ?? 0, record.birthYear, toneBucket].join('|');
+  // v16：精确起运使用完整出生时刻；同四柱不同分钟不能复用旧答案。旧盘以空尾段保留兼容口径。
+  return ['v16', model, record.gender, record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar, task.type, task.year ?? 0, task.month ?? 0, record.birthYear, toneBucket, birthTimeSignature(record.nonAiResult?.birthTime)].join('|');
 }
 
 /* ---------- 失败原因分类：把上游错误翻译成用户能看懂的原因 ---------- */

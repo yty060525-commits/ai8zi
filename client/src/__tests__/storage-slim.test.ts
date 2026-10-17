@@ -5,7 +5,7 @@ import { calculateNonAi } from '../features/chart/nonAiCalculator';
 import type { BaziRecord } from '../types/domain';
 
 const fullRecord = (): BaziRecord => {
-  const nonAiResult = calculateNonAi({ birthYear: 1984, birthMonth: 2, yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午' }, 'male', '2025-03-08T12:34:56.000Z');
+  const nonAiResult = calculateNonAi({ birthYear: 1984, birthMonth: 2, birthDay: 6, birthTime: { year: 1984, month: 2, day: 6, hour: 12, minute: 30 }, yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午' }, 'male', '2025-03-08T12:34:56.000Z');
   return { id: 'r1', name: '测试', gender: 'male', birthYear: 1984, birthMonth: 2, createdAt: '2025-03-08T12:34:56.000Z', yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午', nonAiResult, aiStatus: 'not_started' };
 };
 
@@ -29,6 +29,7 @@ describe('storage slimming (prune/hydrate)', () => {
     // 列表/详情需要的本命要点仍完整保留
     expect(pruned.nonAiResult!.pillars.day).toBe('庚午');
     expect(pruned.nonAiResult!.solarDate).toBe('1984-02-06');
+    expect(pruned.nonAiResult!.birthTime).toEqual({ year: 1984, month: 2, day: 6, hour: 12, minute: 30 });
     expect(pruned.nonAiResult!.zodiac).toBe('鼠');
     expect(pruned.nonAiResult!.shenSha.items!.length).toBeGreaterThan(0);
   });
@@ -45,6 +46,7 @@ describe('storage slimming (prune/hydrate)', () => {
     expect(restored.nonAiResult!.greatFortunes[0].ganZhi).toBe('丁卯');
     expect(restored.nonAiResult!.forecastRange).toHaveLength(10);
     expect(restored.nonAiResult!.elements).toEqual(original.nonAiResult!.elements);
+    expect(restored.nonAiResult!.birthTime).toEqual(original.nonAiResult!.birthTime);
   });
 
   it('round-trips through the repository: list stays slim, detail is full', async () => {

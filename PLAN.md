@@ -171,3 +171,92 @@ npm run build
 - [类型与接口契约](docs/wiki/31-类型契约.md)
 - [运行与构建](docs/wiki/41-构建与发布.md)
 - [测试验收与已知缺项](docs/wiki/51-测试矩阵.md)
+
+## 续轮：排盘时刻、十神与关系事实校正及扫描去重（2026-10-17）
+
+### 范围、证据与基线
+
+用户要求继续检查八字排盘和本地批断核心算法，优化准确性与性能，并保持全量测试、类型检查与构建通过。本轮基线 HEAD 为 `21e1703`；上一轮实际前端 954/954、123 文件，服务器 141/141、Rust 21/21，类型与构建退出 0。本轮必须重新取证，不以此历史计数替代验收。唯一原有未提交文件 `client/src/__tests__/auto-retry-schedule.test.tsx` 不得覆盖、暂存或提交，SHA256 应一直为 `2063B6AD382AD2996D2BF98CAE8ABE20EEEC5DAE58A3B9E0C39024BB65287290`。
+
+已审读架构、数据层、确定性排盘、本地规则引擎及编排器，收敛为以下可验证问题：
+
+1. `computePillarsFromDate` 虽接收出生时分，却以正午取年/月柱；`ChartPage` 保存时又只保留修正后的出生日期，`computeLuckStart` 因而继续取正午。例：二〇二六年二月四日北京时间三点在立春前，正午取法却排为立春后年/月柱。香港天文台二〇二六历书给出当日立春约四点零二分；精确秒界以依赖库交节数据作边界回归，不用分钟级历书去断言秒值。若只改四柱、不改起运，立春日年干阴阳还可能让大运排列方向与 `getYun` 取的顺逆起运基点相反。
+2. `localAnalysis.groupElements` 将一组正偏十神误当作两个相邻五行。内部 `ELEMENTS`、`stemElementIndex` 与 `stemGodOf` 的代数已证明正偏只差阴阳，同组只有一个五行：庚日财星只有木，现返回木、火；乙日财星只有土，现返回土、金。财运措辞与配偶星判定都实际消费此函数；男乙日遇辛金本为七杀，却可能误写妻星引动。
+3. `factBetween` 的三合同余判断没有排除相同地支，子与子也写入 `sanHe`；同模块 `pairHits` 却已要求至少两个不同支，事实与明细自相矛盾，本地配偶宫解释亦会消费错误三合事实。
+4. 出生月搜索完整失败后，扩展搜索再次扫描原月份。现有完全无匹配夹具（一九〇〇年一月配甲子、丙寅、庚午、壬午）会重复检查原月三十一天：合计一百零二个候选；保留顺序并跳过已失败原月可降为七十一个唯一候选。仅做这项有界去重，不缓存带三合/三刑集合上下文的关系计算。
+5. 时间精度进入起运后，任务及聊天缓存必须区分同四柱而不同出生时分的记录。已核实服务端 `cacheKey` / `chatCacheKey` 与 Rust `cache_key` / `chat_cache_key` 只拼性别、四柱、任务或问题、出生年和语气档，**没有对完整 payload 作哈希**；仅更改正文输入不能让缓存自然分叉。
+
+扫描整合复查补充：原 `new Date(year, month, 0).getDate()` 会受宿主跳日影响。主代理在真实 `TZ=Pacific/Kiritimati` 子进程读得 `new Date(1994,12,0)` 为一九九五年一月一日，日号 1，UTC 月末日号则为 31，导致一九九四年十二月的手录反查窗口被截短。chart owner 在既有扫描归属内复用 `daysInMonth` 的 UTC 口径，并添加该月下旬反查及真实异时区回归；不新增时间策略或抽象。
+
+参考依据：[香港天文台二〇二六历书](https://www.hko.gov.hk/en/gts/astron2026/files/HKO_almanac_2026.pdf)、[6tail 干支 API](https://6tail.cn/calendar/lunar.ganzhi.html)。本轮“准确性”指时间边界、符号代数、数据传递与文本事实一致；不宣称传统命理预测有实证准确性。不调整扶抑权重、格局取法、真太阳时仅经度差的既定口径或子时开关。
+
+### 角色、文件归属与接口冻结
+
+| 角色 | 显式配置 | 唯一文件归属及输出 |
+| --- | --- | --- |
+| 规划 | GPT-6.1 Sol high（`gpt-6.1-sol`） | 只读审计，仅追加本节 PLAN；冻结范围和验收 |
+| chart 实现、测试与自修 | GPT-6-Luna medium（`gpt-6-luna`） | `features/chart/nonAiCalculator.ts`、`ChartPage.tsx`、`types/domain.ts`、`features/person/PersonDetail.tsx`、`data/clientRepository.ts`、`data/localSystem.ts`；相关出生/修柱/仓储/导入导出/本地补算回归及新核心回归；统一维护全部本轮 Wiki |
+| local 实现、测试与自修 | GPT-6-Luna medium（`gpt-6-luna`） | 仅 `data/localAnalysis.ts`、现有 `local-analysis.test.ts` 与新增本地代数/爱情回归；不改 localSystem、编排器、时间契约或 Wiki；把文档要点交 chart owner |
+| cache 实现、测试与自修 | GPT-6-Luna medium（`gpt-6-luna`） | 仅 `server/ai.mjs`、`server/chat.mjs`、相应 server/test 缓存及协议判据、`client/src-tauri/src/lib.rs`、`client/src/data/chatEngine.ts` 的 Tauri 聊天缓存元数据、客户端跨端 cache/parity 必要判据；不改 domain、UI、仓储、引擎或 Wiki；把文档要点交 chart owner |
+| 两轮仍失败后的诊断修复 | GPT-6.1 Sol high（`gpt-6.1-sol`） | 同一 Luna 自修两轮仍不通过时接管对应范围 |
+| 最终审查 | GPT-6.1 Sol low（`gpt-6.1-sol`） | 亲读实际 diff、真实测试日志及需求覆盖，不采信实现者报告作为完成证据 |
+| 整合与验收 | 主代理 | 冻结 WIP、统一暂存/提交（若需）、独立跑最终门禁、更新状态 |
+
+以上客户端生产路径均相对 `client/src`。新增测试文件名由对应 owner 提前通报主代理，不得并改另一 owner 的文件。所有 owner 不自行提交，不使用 Qoder 或未经本项目授权的 Pi/外部模型。
+
+主代理补充 chart 归属：`client/src/__tests__/delivered-files-in-tree.test.ts` 只在 CRITERIA 登记新核心判据 `chart-time-accuracy.test.ts`、`birth-time-cache-cross-end.test.ts`；保留原 GAPS、HEAD、自身字节一致等全部闸门。该套由主代理统一精准提交后再验，不把提交前预期的 HEAD 缺失当作功能失败或改闸门转绿。
+
+冻结时间接口为 **一个**可选 `NonAiChart.birthTime?: { year: number; month: number; day: number; hour: number; minute: number }`。它表示农历转换完成后、经度修正前的完整朴素北京时间。`calculateNonAi` 输入兼容添加同型可选字段；`computePillarsFromDate` 的 options 兼容添加 `calendarTime?:` 同型字段。类型可复用一个明确的小接口，不能增加多个相互重叠的时间字段。
+
+- 自动排盘先保存原始公历北京时间，再按现有经度口径修正另一份 `input`；`calendarTime` 只负责交节年/月柱，修正后 `input` 继续负责日柱、既有子时换日和时柱。未传 `calendarTime` 的函数调用按自身实际时分判交节；日柱不能交给库的默认二十三点换日行为重新定义。
+- `birthDay` 和现有记录出生年月仍保持修正后日期的原语义；`birthTime` 可以因经度修正跨日而与它不同。`calculateNonAi` 用独立的原北京时间 Solar 对象调用 `getYun`，并以该原日期为起运跨度相加的锚点；显示公历/农历/称骨继续遵守原来的修正后日期契约。不得将修正后的钟点再次当作节气绝对时刻。
+- 缺少 `birthTime` 的旧记录与手录记录保留正午近似，不伪造出生时分，也不擅自重排其已存四柱。新字段必须随 prune/hydrate、本地补算、重新排盘及 JSON/SQLite/Tauri/服务端往返保留。字段由真实时刻构造；外部备份带入的非法时刻不能被静默当作精确值。
+- 手动“修正四柱”任一柱确实变化时，清除旧 `birthTime`，防止旧钟点为新四柱提供虚假精确起运依据；完全无变化可保留。重新排盘与自动 hydrate 不属于手工修柱，应原样传递该字段。不得改变当前手录四柱的其他校验与清除分析结果行为。
+- cache owner 在既有各端任务与聊天缓存版本上分别升级，末尾追加规范出生时刻签名，旧盘为空签名；同一合法时刻在 JS/Rust 字节一致，分钟变化会分叉。保持 `[版本, 模型, 性别, 年柱, 月柱, 日柱, 时柱, …]` 段位，现有 `chart_sig` 按盘删除/索引、任务检索及语气档语义继续成立。Tauri `ChatRequest` 只新增缓存用可选 `birthTime` 元数据，由 `chatEngine` 传递；原始 `birthTime` 不加入 prompt/shared natal，不扩展其他聊天行为，只让已存在的起运事实随真实输入正确变化。
+
+### 实施顺序与验收
+
+1. **先建立红测。** 各 owner 在实现前以新增行为判据证明对应旧行为失败，保留真实失败日志。时间边界至少包含立春前/后、另一交节月边界、二十三点换日开/关、经度修正跨交节/跨日；三合与本地十神回归均有反例和正常正例。不能仅比较两处同一算法、仅查源码形状或删旧断言制造通过。
+2. **修时间完整链与关系事实。** 自动保存的 `birthTime` 为原公历北京时间；新盘四柱年月按原时刻交节，日/时按修正后输入；真实起运与对应 Solar 时刻的库计算核对，且年干方向、首步运和起运跨度相互一致。追加出生元数据真实 UI 保存、仓储 prune→hydrate、本地补全、详情重算、手工改柱清理、JSON 与 SQLite 导入导出实际 roundtrip；服务端 DB 与 Rust JSON 透传也有实际判据，不能只看 spread/JSON.stringify 推断。
+3. **修本地代数与文本一致性。** 五种日主元素×五种十神组都严格映射一个五行，十干阴阳的正偏分组与其一致。男乙日遇辛金不能仅凭天干误写妻星；女命对称反例、真实配偶星正例、地支本气与配偶宫独立引动仍保留。含/缺合法 `tenGod` 的同一事实不应产生相反配偶星结论；财运句不能把相邻五行称作财星。提高 `LOCAL_ANALYSIS_ENGINE_VERSION`，旧本地正文失效重算、同版复用与来源切换仍通过。
+4. **排除同支假三合并去重扫描。** 本命与时段的相同地支不再产生三合；两不同支半合及三支成局继续存在，与明细一致。扫描保留原月优先、左扩优先于右扩的现有次序；月内命中、左扩命中（如一九九〇年六月输入原五月十五日四柱）、右扩命中（一九八四年一月输入原二月六日四柱）、完全失败都保持输出/错误契约。无匹配一月夹具必须通过可信候选调用计数证明一百零二降至七十一、每候选最多一次；记录同机固定夹具的实际耗时供参考，不用易抖动的毫秒阈值冒充性能保证。
+5. **验证缓存与全链。** 对同四柱/性别/出生年/任务或同问题/语气而分钟不同的合法出生时刻，真实 server/Rust 任务及聊天 key 必须不同；同一时刻稳定，旧盘空签名两端一致，签名不能移动性别四柱段。预置另一时刻缓存不能被新时刻命中，按盘清缓存仍覆盖两个签名；Tauri 聊天元数据真实调用链可达，不能只测私有 helper。既有 provider、prompt parity、中文闸门、重试/取消、来源冻结和交付账本全部保留。
+6. **Wiki 与终验。** chart owner 汇总更新架构/工作流、模块入口、类型接口、运行/测试与已知限制；主代理亲读最终 diff 与日志，执行不筛选的前端全量、独立类型、构建、服务器、Rust 和 Wiki。最终 Sol low 发现问题必须返回实现/测试环节，未关闭问题不得标完成。
+
+不增加微服务、全局缓存或新的命理权重。服务器/桌面生产改动仅限必要任务/聊天缓存签名、版本与缓存元数据；完整 `nonAiResult` 本来就作为 JSON 透传，无需增加数据库列或把时间元数据塞进模型提示词。旧盘时分不可还原这一限制要写进 Wiki 与最终结果。
+
+### 测试命令与证据
+
+各 owner 先运行自己新增的回归（具体新增文件名写入执行日志），再运行相邻既有套件。client 目录可用命令：
+
+```powershell
+.\node_modules\.bin\vitest.cmd run src/__tests__/birth-to-pillars.test.ts src/__tests__/non-ai-calculator.test.ts src/__tests__/pillar-edit-rendered.test.tsx src/__tests__/pillar-edit-recompute.test.ts src/__tests__/export-hydrate.test.ts src/__tests__/import-roundtrip.test.ts --pool=forks --maxWorkers=2 --testTimeout=30000
+.\node_modules\.bin\vitest.cmd run src/__tests__/local-analysis.test.ts src/__tests__/local-system.test.ts src/__tests__/local-orchestration.test.ts src/__tests__/local-system-design.test.tsx --pool=forks --maxWorkers=2 --testTimeout=30000
+.\node_modules\.bin\vitest.cmd run src/__tests__/task-cache-key-cross-end.test.ts src/__tests__/cache-key-cross-end.test.ts src/__tests__/provider-follow-contract.test.ts --pool=forks --maxWorkers=2 --testTimeout=30000
+.\node_modules\.bin\tsc.cmd --noEmit
+npm.cmd run build
+.\node_modules\.bin\vitest.cmd run --pool=forks --maxWorkers=2 --testTimeout=30000
+```
+
+server 目录 `node --test`；`client/src-tauri` 目录 `cargo test --lib`；工程根 `node scripts/check-wiki-links.cjs`。Wiki 链接总数取扫描器实际读数，并跑文档回归。所有输出记录实际退出码及原始日志位置，不能由历史计数推算本轮总数。不得对用户 WIP、既有断言使用 skip、缩小测试集合或覆盖测试内容来消除失败。
+
+### 执行状态与自修次数
+
+| 阶段 | 状态 | 自修次数 | 验收证据/待办 |
+| --- | --- | --- | --- |
+| Sol high 核心审计与接口规划 | 完成，主代理已冻结范围 | 0 | 四项核心缺陷及真实任务缓存键风险已逐段核对；本节保留兼容取舍 |
+| Luna chart 时间链/关系/扫描实现 | 冻结，相关测试通过 | 2 / 2 | 11 套 116/116、真实异时区 10/10、tsc -b 退出 0；实际候选观测由 EightChar.fromLunar 完成，旧 102/新 71；日志位于 client/.scratch/core-chart-* |
+| Sol high 日期输入校验接管 | 完成并冻结 | — | 显式 GPT-6.1 Sol high 接管 UTC 校验与真实 UI 回归，独立跳日时区由 1 失败/9 通过转为 10/10；常规时区 37/37、中文 UI 19/19、类型退出 0；root 已亲读日志 |
+| Luna local 代数与正文实现 | 完成并冻结 | 2 / 2 | 最终 local-analysis 23/23，.scratch/local-analysis-v8-round2.log；相邻本地三套 49/49；第二轮补齐男女正反例、真实星与字段回退一致性 |
+| Luna cache 签名与跨端实现 | 完成并冻结 | 2 / 2 | server 专项 4/4、client 三套 14/14、Rust 22/22；Sol low 发现整值 JSON 浮点接受差异后已修并复审关闭；原红测文件是工具失败输出摘要，绿测完整日志在 .scratch/core-cache-* |
+| Wiki 与跨模块整合 | 完成并冻结 | — | 架构/时间/本地/缓存/测试 Wiki 已同步，扫描 OK 11 477 0，文档 4/4；账本只登记两个新核心判据，最终待 HEAD 提交后验收 |
+| 全量、类型、构建、服务器、Rust | 后端与类型通过，前端全量/构建待验 | — | 主代理独立服务器 145/145、Rust 22/22、tsc --noEmit 退出 0；前端全量与提交后构建尚未执行，不用旧轮结果替代 |
+| GPT-6.1 Sol low 最终审查 | 预提交源码与 Wiki 审查通过 | — | 实际 diff、相关日志、需求覆盖与原 WIP 已核对；当前无未关闭 P1/P2，最终还需 HEAD/全量/type/build 日志 |
+
+自修按失败后的“一次修改并运行相关测试”计数，每个 Luna owner 最多两轮；初次实现验证不算自修。仍失败由 GPT-6.1 Sol high 接管。主代理只在全部必要门禁实际通过、审查问题关闭后更新完成状态。
+
+本轮主代理已独立执行服务器全量 145/145（`.scratch/core-server-full.log`）及 Rust 22/22（`.scratch/core-rust-full.log`），退出码均 0。扫描性能的真实红测为 `client/.scratch/core-chart-red.log`（指定性能项，旧工厂调用 102，非全量），绿测 `client/.scratch/core-chart-final-suite.log` 验证无匹配夹具只有 71 次且日期不重复，减少约 30.4% 的候选检查；暖态耗时仅作同机观测，不能推成整个应用加速比例。来源不完整的早期红测仅按工具摘要记录，不冒称完整原始日志。
+
+主代理独立类型检查 `.scratch/core-types.log` 对应 `tsc --noEmit` 退出 0。Sol high 日期输入校验的真实红/绿日志在 `.scratch/core-chart-ui-tz-red.log` 和 `core-chart-ui-tz-green.log`，常规时区与中文界面日志为 `core-chart-ui-regular.log`（37/37）和 `core-chart-ui-chinese.log`（19/19）。Sol low 已复核这些日志、完整时间持久链及两项新判据登记，允许精准本地提交后进行正式全量；此处仍不代表前端全量已完成。
+
+配套 Wiki：[入口与架构](docs/wiki/01-架构总览.md)、[排盘与界面链](docs/wiki/11-客户端-特性层.md)、[本地规则/仓储/缓存](docs/wiki/12-客户端-数据层.md)、[跨端契约](docs/wiki/13-跨端共享与三端一致性.md)、[类型接口](docs/wiki/31-类型契约.md)、[运行方式](docs/wiki/41-构建与发布.md)、[测试与缺项](docs/wiki/51-测试矩阵.md)。

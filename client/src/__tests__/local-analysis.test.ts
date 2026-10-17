@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { calculateNonAi } from '../features/chart/nonAiCalculator';
-import { buildLocalAnalysis, buildLocalTaskAnalysis, LOCAL_ANALYSIS_ENGINE_VERSION } from '../data/localAnalysis';
+import { buildLocalAnalysis, buildLocalTaskAnalysis, groupElements, LOCAL_ANALYSIS_ENGINE_VERSION } from '../data/localAnalysis';
 import { canBuildLocalAnalysis } from '../data/localSystem';
 import { REQUIRED_SECTIONS } from '../data/baziOrchestrator';
 import type { BaziAnalysisTask, BaziRecord } from '../types/domain';
@@ -142,5 +142,109 @@ describe('本地分时段批断(流年/流月/大运/后天调整/全盘总结)'
   });
   it('缺该时段排盘数据时该任务返回空(不编造)', () => {
     expect(buildLocalTaskAnalysis(rec, { taskId: 'z', type: 'annual', year: 3000 }, now)).toBeNull();
+  });
+});
+
+describe('本地十神五行与配偶星事实', () => {
+  const now = new Date('2026-06-01T00:00:00Z');
+  const elements = ['木', '火', '土', '金', '水'];
+  const groups = ['比劫', '食伤', '财', '官杀', '印'];
+  const godGroup: Record<string, string> = {
+    比肩: '比劫', 劫财: '比劫', 食神: '食伤', 伤官: '食伤',
+    偏财: '财', 正财: '财', 七杀: '官杀', 正官: '官杀', 偏印: '印', 正印: '印',
+  };
+  const annualFor = (gender: 'male' | 'female', dayPillar: string, gz: string, tenGodOverride?: string) => {
+    const record = dayPillar[0] === '乙'
+      ? asRecord({ birthYear: 1990, birthMonth: 5, yearPillar: '庚午', monthPillar: '辛巳', dayPillar: '乙酉', hourPillar: '癸未' }, gender)
+      : asRecord({ birthYear: 1984, birthMonth: 2, yearPillar: '甲子', monthPillar: '丙寅', dayPillar, hourPillar: '壬午' }, gender);
+    const fact = record.nonAiResult!.annualFortunes.find((a) => a.ganZhi === gz)!;
+    const annual = tenGodOverride === undefined ? fact : { ...fact, tenGod: tenGodOverride };
+    const analysis = buildLocalTaskAnalysis(record, { taskId: 'fact', type: 'annual', year: annual.year, annual }, now)!;
+    const section = (head: string) => analysis.explanation.split(`【${head}】`)[1]?.split('\n【')[0] ?? '';
+    return { fact, love: section('爱情') };
+  };
+  const monthlyFor = (gender: 'male' | 'female', dayPillar: string, branch: string) => {
+    const record = dayPillar === '乙酉'
+      ? asRecord({ birthYear: 1990, birthMonth: 5, yearPillar: '庚午', monthPillar: '辛巳', dayPillar, hourPillar: '癸未' }, gender)
+      : asRecord({ birthYear: 1980, birthMonth: 1, birthDay: 3, yearPillar: '己未', monthPillar: '丙子', dayPillar, hourPillar: '壬午' }, gender);
+    const monthly = record.nonAiResult!.monthlyFortunes.find((m) => m.ganZhi === branch || m.ganZhi[1] === branch)!;
+    const analysis = buildLocalTaskAnalysis(record, { taskId: 'fact', type: 'monthly', year: monthly.year, month: monthly.month, monthly }, now)!;
+    const love = analysis.explanation.split('【爱情】')[1]?.split('\n【')[0] ?? '';
+    return { love };
+  };
+
+  it('五种日主元素与五组十神都只映射到该组的唯一五行', () => {
+    for (let dayIdx = 0; dayIdx < 5; dayIdx += 1) {
+      for (let groupIdx = 0; groupIdx < groups.length; groupIdx += 1) {
+        expect(groupElements(dayIdx, groups[groupIdx])).toEqual([elements[(dayIdx + groupIdx) % 5]]);
+      }
+    }
+  });
+
+  it('正偏十神按十干阴阳归组后，同组五行唯一', () => {
+    const stems = '甲乙丙丁戊己庚辛壬癸';
+    const stemEl = (stem: string) => Math.floor(stems.indexOf(stem) / 2);
+    for (const dayStem of stems) {
+      const dayIdx = stemEl(dayStem);
+      for (const otherStem of stems) {
+        const delta = (stemEl(otherStem) - dayIdx + 5) % 5;
+        const sameYinYang = stems.indexOf(dayStem) % 2 === stems.indexOf(otherStem) % 2;
+        const god = delta === 0 ? (sameYinYang ? '比肩' : '劫财')
+          : delta === 1 ? (sameYinYang ? '食神' : '伤官')
+            : delta === 2 ? (sameYinYang ? '偏财' : '正财')
+              : delta === 3 ? (sameYinYang ? '七杀' : '正官')
+                : (sameYinYang ? '偏印' : '正印');
+        expect(groupElements(dayIdx, groups[delta])).toEqual([elements[stemEl(otherStem)]]);
+        expect(godGroup[god]).toBe(groups[delta]);
+      }
+    }
+  });
+
+  it('庚日主财星只取木，财运句不把火误写成财星', () => {
+    expect(groupElements(3, '财')).toEqual(['木']);
+    const record = asRecord({ birthYear: 1984, birthMonth: 2, yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午' }, 'male');
+    const monthly = record.nonAiResult!.monthlyFortunes.find((m) => m.ganZhi === '戊寅')!;
+    const analysis = buildLocalTaskAnalysis(record, { taskId: 'wealth', type: 'monthly', year: monthly.year, month: monthly.month, monthly }, now)!;
+    const wealth = analysis.explanation.split('【财运】')[1]?.split('\n【')[0] ?? '';
+    expect(wealth).toContain('木气');
+    expect(wealth).not.toContain('火气');
+  });
+
+  it('男命乙日：辛金七杀不是妻星，戊己土才是妻星', () => {
+    const 辛亥 = annualFor('male', '乙酉', '辛亥');
+    expect(辛亥.fact.tenGod).toBe('七杀');
+    expect(辛亥.love).not.toContain('流年天干辛为七杀');
+    expect(辛亥.love).toContain('感情宫位未受特别引动');
+    expect(annualFor('male', '乙酉', '戊申').love).toMatch(/妻星(?:临忌)?被引动/);
+    expect(annualFor('male', '乙酉', '己酉').love).toMatch(/妻星(?:临忌)?被引动/);
+  });
+
+  it('女命乙日：辛金为夫星', () => {
+    const 辛亥 = annualFor('female', '乙酉', '辛亥');
+    expect(辛亥.love).toMatch(/夫星(?:临忌)?被引动/);
+    expect(辛亥.love).toContain('流年天干辛为七杀');
+    expect(辛亥.love).not.toContain('流年地支亥所藏本气壬亦官杀之星');
+  });
+
+  it('女命乙日：壬癸水印星不作夫星，且没有配偶宫引动', () => {
+    for (const gz of ['壬午', '癸未']) {
+      const { love } = monthlyFor('female', '乙酉', gz);
+      expect(love).toContain('感情宫位未受特别引动');
+      expect(love).not.toMatch(/夫星(?:临忌)?被引动/);
+      expect(love).not.toContain(`流月天干${gz[0]}为`);
+    }
+  });
+
+  it('合法十神字段有无时推导一致；地支本气与配偶宫冲动各自可达', () => {
+    const withGod = annualFor('male', '乙酉', '辛亥');
+    const withoutGod = annualFor('male', '乙酉', '辛亥', '');
+    expect(withoutGod.love).toBe(withGod.love);
+    const withWealthGod = annualFor('male', '乙酉', '戊申');
+    const withoutWealthGod = annualFor('male', '乙酉', '戊申', '');
+    expect(withoutWealthGod.love).toBe(withWealthGod.love);
+    expect(annualFor('male', '乙酉', '庚戌').love).toMatch(/流年地支戌所藏本气戊亦财之星/); // 戌本气戊，为乙日正财
+    const palace = monthlyFor('male', '乙亥', '巳');
+    expect(palace.love).toContain('本命日支亥（配偶宫）冲动');
+    expect(palace.love).toContain('星本身未现');
   });
 });

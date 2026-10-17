@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { BaziRecord, Gender } from '../../types/domain';
+import type { BaziRecord, BirthTime, Gender } from '../../types/domain';
 import { BirthInputModal } from './BirthInputModal';
 import { ChartChat, scrollToChat } from './ChartChat';
 import { loadTrueSolarProvinces } from './trueSolarCities';
@@ -24,13 +24,13 @@ export function ChartPage({ onRecordCreated }: ChartPageProps) {
   useEffect(() => { let on = true; void loadTrueSolarProvinces().then((p) => { if (on) setProvinces(p); }); return () => { on = false; }; }, []);
   /** 拿到四柱后统一走这条：定位出生日期、算非 AI 事实、存库、跳转。手动/自动两条录入路径共用。
    *  birthDay=真实出生日(自动排盘传入，用于早子时换日后仍把公历/农历/起运锚在当天)；手录路径不传(undefined)。 */
-  async function savePillars(pillars: Pillars, year: number, month: number, birthDay?: number) {
+  async function savePillars(pillars: Pillars, year: number, month: number, birthDay?: number, birthTime?: BirthTime) {
     const createdAt = new Date().toISOString();
     let nonAiResult;
     try {
       // 历法引擎按需加载(动态分包)，不占首屏
       const { calculateNonAi } = await import('./nonAiCalculator');
-      nonAiResult = calculateNonAi({ birthYear: year, birthMonth: month, birthDay, ...pillars }, gender, createdAt);
+      nonAiResult = calculateNonAi({ birthYear: year, birthMonth: month, birthDay, birthTime, ...pillars }, gender, createdAt);
     }
     catch (cause) { setError(cause instanceof Error ? cause.message : '四柱无法计算'); return; }
     const record: Omit<BaziRecord, 'id' | 'aiStatus'> = { name: name.trim(), gender, birthYear: year, birthMonth: month, createdAt, ...pillars, nonAiResult };
@@ -76,10 +76,12 @@ export function ChartPage({ onRecordCreated }: ChartPageProps) {
         dt = { ...solar, hour, minute };
       } catch { setError('该农历日期不存在，请核对月份、闰月与初几'); return; }
     } else {
-      const probe = new Date(year, month - 1, day);
-      if (probe.getFullYear() !== year || probe.getMonth() !== month - 1 || probe.getDate() !== day) { setError('该日期不存在，请核对'); return; }
+      const probe = new Date(0);
+      probe.setUTCFullYear(year, month - 1, day);
+      if (probe.getUTCFullYear() !== year || probe.getUTCMonth() !== month - 1 || probe.getUTCDate() !== day) { setError('该日期不存在，请核对'); return; }
       dt = { year, month, day, hour, minute };
     }
+    const birthTime: BirthTime = { ...dt };
     // 2) 真太阳时：在公历钟点上按经度差修正(东加西减，每度 4 分)，可能改时辰、跨子夜改公历日
     if (tsProvince !== 'off') {
       const r = resolveSolarLongitude();
@@ -94,11 +96,11 @@ export function ChartPage({ onRecordCreated }: ChartPageProps) {
     let pillars: Pillars;
     try {
       const { computePillarsFromDate } = await import('./nonAiCalculator');
-      pillars = computePillarsFromDate(dt, { ziShiftDay: ziShift });
+      pillars = computePillarsFromDate(dt, { ziShiftDay: ziShift, calendarTime: birthTime });
     }
     catch (cause) { setError(cause instanceof Error ? cause.message : '四柱无法计算'); return; }
     // 传真实出生日(修正后的 dt.day)：换日时日柱已是次日，但生日仍记当日，重算据此锚回。
-    await savePillars(pillars, dt.year, dt.month, dt.day);
+    await savePillars(pillars, dt.year, dt.month, dt.day, birthTime);
   }
   const numField = (label: string, value: string, set: (v: string) => void, extra: Record<string, string | number> = {}) =>
     <label>{label}<input type="number" step={1} value={value} onChange={(e) => { setError(''); set(e.target.value); }} {...extra} /></label>;
@@ -131,7 +133,7 @@ export function ChartPage({ onRecordCreated }: ChartPageProps) {
         </select>
       </label>}{tsProvince === 'custom' && numField('出生地经度，东经为正', tsLng, setTsLng, { min: -180, max: 180, step: 0.1, placeholder: '如八十七点六' })}</div>}
       {mode === 'auto' && <label className="checkbox-inline"><input type="checkbox" checked={ziShift} onChange={(e) => { setError(''); setZiShift(e.target.checked); }} />早子时换日，二十三点后日柱进一</label>}
-      {mode === 'auto' && <p className="field-hint">{calendar === 'lunar' ? '农历按夏历输入，闰月出生请勾选闰月一项；' : ''}命盘年柱以立春为界，时辰按十二时辰。{ziShift ? '已启用早子时换日：出生时辰在二十三点后则日柱进一日、时柱改按次日日干起时，但公历生日仍记当出生那天，不随之改动。' : '二十三点后归当日子时，晚子时不换日。'}真太阳时按所选地经度做东加西减修正，即北京时加上经度与东经一百二十度之差乘以四分钟，与主流排盘一致，不计均时差。</p>}
+      {mode === 'auto' && <p className="field-hint">{calendar === 'lunar' ? '农历按夏历输入，闰月出生请勾选闰月一项；' : ''}命盘年柱以立春为界，年柱和月柱按出生时刻判定交节，时辰按十二时辰。{ziShift ? '已启用早子时换日：出生时辰在二十三点后则日柱进一日、时柱改按次日日干起时，但公历生日仍记当出生那天，不随之改动。' : '二十三点后归当日子时，晚子时不换日。'}真太阳时按所选地经度做东加西减修正，即北京时加上经度与东经一百二十度之差乘以四分钟，与主流排盘一致，不计均时差。</p>}
     </section>
     {error && <p className="form-error" role="alert">{error}</p>}
     {mode === 'auto'

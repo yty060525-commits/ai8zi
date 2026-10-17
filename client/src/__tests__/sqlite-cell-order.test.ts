@@ -17,7 +17,7 @@ const rec: BaziRecord = {
   id: 'cell-order', name: '列序甲', gender: 'female', birthYear: 1986, birthMonth: 7,
   createdAt: '2025-04-09T08:15:30.000Z',
   yearPillar: '丙寅', monthPillar: '癸巳', dayPillar: '壬戌', hourPillar: '辛丑',
-  nonAiResult: { greatFortunes: [{ ganZhi: '甲午', startYear: 2016, endYear: 2025 }], annualFortunes: [], monthlyFortunes: [] },
+  nonAiResult: { birthTime: { year: 1986, month: 7, day: 23, hour: 10, minute: 24 }, greatFortunes: [{ ganZhi: '甲午', startYear: 2016, endYear: 2025 }], annualFortunes: [], monthlyFortunes: [] },
   aiStatus: 'completed',
   aiAnalysis: { pattern: '正印格', strength: '身强', usefulElements: ['木'], avoidElements: ['金'], explanation: 'AI 正文，用来验证 JSON 列没被当成纯文本列。' },
   aiOverview: { summary: '概述一段' },
@@ -79,6 +79,7 @@ describe('二进制导出的列序(缺陷 #97：写侧两份顺序可以各自�
     expect(Number.isInteger(back.birthMonth)).toBe(true);
     // 派生数组与 JSON 列走的是同一条序列化路，错位时它们最先变成 undefined
     expect((back.nonAiResult as { greatFortunes?: unknown[] })?.greatFortunes).toEqual(rec.nonAiResult!.greatFortunes);
+    expect(back.nonAiResult?.birthTime).toEqual(rec.nonAiResult?.birthTime);
     expect((back.aiAnalysis as { explanation?: string })?.explanation).toContain('AI 正文');
     expect(Object.keys(back.aiTasks ?? {})).toEqual(['task-01']);
   });

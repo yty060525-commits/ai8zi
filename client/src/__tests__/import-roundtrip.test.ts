@@ -15,7 +15,7 @@ function fullRecord(): BaziRecord {
     createdAt: new Date(Date.UTC(2025, 2, 8, 12, 34, 56)).toISOString(),
     yearPillar: '庚午', monthPillar: '辛巳', dayPillar: '乙酉', hourPillar: '癸未',
     aiStatus: 'completed', toneUsed: 55, aiAnalysis: analysis as never,
-    nonAiResult: { greatFortunes: [], annualFortunes: [], monthlyFortunes: [] } as never,
+    nonAiResult: { birthTime: { year: 1990, month: 5, day: 20, hour: 14, minute: 0 }, greatFortunes: [], annualFortunes: [], monthlyFortunes: [] } as never,
     aiTasks: { 'task-01': { task: { taskId: 'task-01', type: 'baseline' }, status: 'completed', analysis } } as never,
   } as unknown as BaziRecord;
 }
@@ -99,6 +99,7 @@ describe('导入/导出往返闭环(T1)', () => {
     const bytes = new TextEncoder().encode(JSON.stringify({ exportedAt: new Date().toISOString(), records: [exported] }));
     const parsed = await parseBackupFile(bytes, 'mingli-data.json');
     expect(parsed.records).toHaveLength(1);
+    expect(parsed.records[0].nonAiResult?.birthTime).toEqual({ year: 1990, month: 5, day: 20, hour: 14, minute: 0 });
     /* 判据空白：这一整段往返闭环此前一直勾的是「同盘去重」，而 dedupe 按界面承诺不许改动现有记录。
        旧实现里那句 isUpdate 排在 mode 判断之前，于是这两条把「覆盖」当成了预期结果(回执写「覆盖一条」) ——
        等于用被污染的读数给自己盖章；缺陷 #94 修好之后，dedupe 下同 id 只能整条跳过，

@@ -13,7 +13,7 @@
  * 子串扫描(O(n·len))，记录量大时可预构建姓名索引 —— 见 analyzeQuestion 注释。
  * ========================================================================== */
 import { invoke } from '@tauri-apps/api/core';
-import type { BaziRecord } from '../types/domain';
+import type { BaziRecord, BirthTime } from '../types/domain';
 import { hydrateRecord, listBaziRecords, unsyncedRecordIds } from './clientRepository';
 import { isServerMode, serverFetch, ServerError } from './serverClient';
 import { chatDirect, toneInstructionText } from './deepseekAdapter';
@@ -600,6 +600,7 @@ async function askChatLocal(input: { question: string; history: ChatMessage[]; t
         chat: {
           gender: target.gender, birthYear: target.birthYear,
           yearPillar: target.yearPillar, monthPillar: target.monthPillar, dayPillar: target.dayPillar, hourPillar: target.hourPillar,
+          birthTime: target.nonAiResult?.birthTime as BirthTime | undefined,
           question: input.question, tone: input.tone, cached: input.history.length === 0,
         },
         messages,

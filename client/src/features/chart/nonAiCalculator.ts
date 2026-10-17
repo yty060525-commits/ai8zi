@@ -5,7 +5,7 @@ export { chinaYear }; // 兼容既有调用点
 import { computeShenSha } from './shenSha';
 import { STEMS, BRANCHES, ELEMENTS, HIDDEN_STEMS, stemElementIndex, ELEMENT_RULE_VERSION, countElements } from './elements';
 import { zodiacOfBranch } from '../../utils/interpersonal';
-import type { BaziRecord, Gender, NonAiChart, RelationshipFacts, RelationshipDetail, FortunePeriod, ShenShaItem } from '../../types/domain';
+import type { BaziRecord, BirthTime, Gender, NonAiChart, RelationshipFacts, RelationshipDetail, FortunePeriod, ShenShaItem } from '../../types/domain';
 export { ELEMENT_RULE_VERSION, countElements }; // 口径唯一真源在 ./elements，这里转出以兼容既有引用
 
 /* =============================================================================
@@ -116,6 +116,14 @@ function computeLuckStart(at: ReturnType<typeof Solar.fromYmdHms>, gender: Gende
       date: String(solar.toYmd()),
     };
   } catch { return null; }
+}
+
+function validBirthTime(value: BirthTime): boolean {
+  return Number.isInteger(value.year) && value.year >= 1 && value.year <= 9999
+    && Number.isInteger(value.month) && value.month >= 1 && value.month <= 12
+    && Number.isInteger(value.day) && value.day >= 1 && value.day <= daysInMonth(value.year, value.month)
+    && Number.isInteger(value.hour) && value.hour >= 0 && value.hour <= 23
+    && Number.isInteger(value.minute) && value.minute >= 0 && value.minute <= 59;
 }
 
 /** 公历日期落在哪一「干支年」：立春(含当天)起算新一年，之前属上一年。 */
@@ -535,7 +543,7 @@ function factBetween(a: string, b: string, forecastFirst: boolean): Relationship
   const push = (k: keyof RelationshipFacts, s: string) => { (facts[k] as string[]).push(s); };
   const ab = indexOfBranch(a[1]);
   const bb = indexOfBranch(b[1]);
-  if (ab % 4 === bb % 4) push('sanHe', describe(x, y));
+  if (ab !== bb && ab % 4 === bb % 4) push('sanHe', describe(x, y));
   for (const hit of branchHits(ab, bb)) {
     if (hit.type === 'liuHe') push('liuHe', describe(x, y));
     if (hit.type === 'chong') push('chong', describe(x, y));
@@ -628,7 +636,8 @@ export function calculateChenggu(lunarYearGanZhi: string, lunarMonth: number, lu
 }
 
 /** 由公历出生日期时刻正向排出四柱（首页「按生日自动排盘」）。
- *  年/月/日三柱取该日正午(12:30)的干支，与 calculateNonAi 定位出生日期所用口径一致；
+ *  年/月柱按出生时刻判精确交节；日柱仍取该日正午(12:30)，避免历法库默认的子时换日覆盖本地开关；
+ *  calendarTime 用于真太阳时修正前的北京时间判年/月，未提供时采用 input 自身的公历时分；
  *  时柱复用五鼠遁而非历法库 getTime()，保证产出必过本引擎校验。
  *  opts.ziShiftDay=true 时启用「早子时换日」：hour≥23 的出生按次日起日柱、时柱用次日日干起遁
  *  （年/月柱不动，命主真实生日仍由调用方另存 nonAiResult.birthDay，重算时据此锚回当日）。
@@ -636,11 +645,14 @@ export function calculateChenggu(lunarYearGanZhi: string, lunarMonth: number, lu
  *  入参应为「定好的朴素日期时刻」；若开真太阳时，先过 applyTrueSolar 修正再传进来。 */
 export function computePillarsFromDate(
   input: { year: number; month: number; day: number; hour: number; minute?: number },
-  opts: { ziShiftDay?: boolean } = {},
+  opts: { ziShiftDay?: boolean; calendarTime?: BirthTime } = {},
 ): Pick<BaziRecord, 'yearPillar' | 'monthPillar' | 'dayPillar' | 'hourPillar'> {
   const atNoon = Solar.fromYmdHms(input.year, input.month, input.day, 12, 30, 0).getLunar().getEightChar();
-  const yearPillar = atNoon.getYear();
-  const monthPillar = atNoon.getMonth();
+  const calendarTime = opts.calendarTime ?? { ...input, minute: input.minute ?? 0 };
+  if (!validBirthTime(calendarTime)) throw new Error('出生时刻无效');
+  const calendarEight = Solar.fromYmdHms(calendarTime.year, calendarTime.month, calendarTime.day, calendarTime.hour, calendarTime.minute, 0).getLunar().getEightChar();
+  const yearPillar = calendarEight.getYear();
+  const monthPillar = calendarEight.getMonth();
   // 早子时换日：23 点后(子时)日柱按次日进一。年/月柱仍取当日(由立春/交节定，不随 23 点移动)，
   // 只把日柱挪到次日的正午干支，时柱随之用「进一后的日干」起五鼠遁。默认关：纯函数、旧调用零变化。
   let dayPillar = atNoon.getDay();
@@ -688,10 +700,11 @@ export function lunarToSolar(year: number, month: number, day: number): { year: 
 }
 
 export function calculateNonAi(
-  input: Pick<BaziRecord, 'birthYear' | 'birthMonth' | 'yearPillar' | 'monthPillar' | 'dayPillar' | 'hourPillar'> & { birthDay?: number },
+  input: Pick<BaziRecord, 'birthYear' | 'birthMonth' | 'yearPillar' | 'monthPillar' | 'dayPillar' | 'hourPillar'> & { birthDay?: number; birthTime?: BirthTime },
   gender: Gender,
   now = new Date().toISOString(),
 ): NonAiChart {
+  if (input.birthTime && !validBirthTime(input.birthTime)) throw new Error('出生时刻无效');
   const pillars = [input.yearPillar, input.monthPillar, input.dayPillar, input.hourPillar];
   const valid = new RegExp('^[' + STEMS + '][' + BRANCHES + ']$');
   if (pillars.some((p) => !valid.test(p))) throw new Error('四柱必须填写有效的天干地支');
@@ -707,8 +720,9 @@ export function calculateNonAi(
   const noonOf = (solar: ReturnType<typeof Solar.fromYmdHms>) => solar.getLunar().getEightChar();
   const sameThreePillars = (eight: ReturnType<typeof noonOf>) =>
     eight.getYear() === input.yearPillar && eight.getMonth() === input.monthPillar && eight.getDay() === input.dayPillar;
-  const scanRange = (fromJD: number, toJD: number) => {
+  const scanRange = (fromJD: number, toJD: number, skipStartJD?: number, skipEndJD?: number) => {
     for (let jd = fromJD; jd <= toJD; jd += 1) {
+      if (skipStartJD !== undefined && jd >= skipStartJD && jd <= skipEndJD!) continue;
       const solar = Solar.fromJulianDay(jd);
       const atNoon = Solar.fromYmdHms(solar.getYear(), solar.getMonth(), solar.getDay(), 12, 30, 0);
       if (sameThreePillars(noonOf(atNoon))) return atNoon;
@@ -724,11 +738,11 @@ export function calculateNonAi(
   }
   if (!candidate) {
     const firstOf = Solar.fromYmdHms(input.birthYear, input.birthMonth, 1, 12, 30, 0);
-    const lastDay = new Date(input.birthYear, input.birthMonth, 0).getDate();
+    const lastDay = daysInMonth(input.birthYear, input.birthMonth);
     candidate = scanRange(firstOf.getJulianDay(), firstOf.getJulianDay() + lastDay - 1);
     if (!candidate) {
       // 立春/交节会让「干支年月」与「公历月」错位：向两侧各扩 20 天再找一次。
-      candidate = scanRange(firstOf.getJulianDay() - 20, firstOf.getJulianDay() + lastDay + 19);
+      candidate = scanRange(firstOf.getJulianDay() - 20, firstOf.getJulianDay() + lastDay + 19, firstOf.getJulianDay(), firstOf.getJulianDay() + lastDay - 1);
     }
     if (!candidate) throw new Error('该月找不到与这三部命盘对应的日期，请核对四柱或出生日期');
   }
@@ -749,10 +763,11 @@ export function calculateNonAi(
   const day = input.dayPillar[0];
   const forward = fortuneDirection(input.yearPillar[0], gender);
   const chenggu = calculateChenggu(lunar.getYearInGanZhiExact(), lunar.getMonth(), lunar.getDay(), input.hourPillar[1]);
-  /* 起运：以定位到的出生日(正午近似)推算。产品没有「出生时刻」这一栏，所以这里的
-     日期准、时辰不准 —— 距节令不足一天时折成月数会偏，但比起旧实现「压根不做起运」
-     已是质的改进；缺字段或库异常时返回 null 走兜底。 */
-  const luckStart = computeLuckStart(candidate, gender);
+  /* 旧盘/手录盘缺时刻时保留正午近似；自动盘带原始北京时间，起运按真实时刻算。 */
+  const luckSolar = input.birthTime
+    ? Solar.fromYmdHms(input.birthTime.year, input.birthTime.month, input.birthTime.day, input.birthTime.hour, input.birthTime.minute, 0)
+    : candidate;
+  const luckStart = computeLuckStart(luckSolar, gender);
 
   // 五行计数：口径见 countElements(单一真源，供老库回填与聊天/证据复用)。
   const { elements: counts, elementRatio } = countElements(pillars);
@@ -806,7 +821,7 @@ export function calculateNonAi(
   /* 精确交运日 luckOnset：由出生时刻 + 起运跨度(年/月/日)按库的同一口径自算，与库的
      getStartSolar 互校 510 例逐日相同。分段边界取它的**公历年**：流年数组按立春锚定整年排，
      若让大运段切在年中就会出现「一年同时属两步运」，大运任务与覆盖年检索各挑一柱而自相矛盾。 */
-  const luckOnset = luckStart ? formatYmd(addLuckSpan(candidate.getYear(), candidate.getMonth(), candidate.getDay(), luckStart.years, luckStart.months, luckStart.days)) : undefined;
+  const luckOnset = luckStart ? formatYmd(addLuckSpan(luckSolar.getYear(), luckSolar.getMonth(), luckSolar.getDay(), luckStart.years, luckStart.months, luckStart.days)) : undefined;
   const luckYear = luckOnset ? Number(/^(\d{4})/.exec(luckOnset)?.[1]) : undefined;
   // 兜底：万一取不到起运(库异常)，退回旧的十年边界锚点，至少不丢时段任务。
   const firstStartYear = Number.isFinite(luckYear) ? luckYear! : Math.floor(currentYear / 10) * 10;
@@ -836,6 +851,7 @@ export function calculateNonAi(
     // 回显真实出生日：换日(早子时)时 pillars.day 已是次日干支，但命主仍生在 input.birthDay 那天，
     // 存下它才能让「重新计算非 AI」/换设备重算把公历日、农历与起运稳定锚回当天，不被进一的日柱带偏。
     ...(typeof input.birthDay === 'number' ? { birthDay: input.birthDay } : {}),
+    ...(input.birthTime ? { birthTime: input.birthTime } : {}),
     // 本命生肖取「年柱地支」的属相，与八字年柱同为立春口径——不能用库的 getYearShengXiao()
     // (它按正月初一/春节切年)，否则立春后、春节前出生会出现「年柱辰(龙) / 生肖兔」自相矛盾(实测 2024-02-06)。
     zodiac: zodiacOfBranch(pillars[0][1]),

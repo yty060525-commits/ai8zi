@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { applyTrueSolar, calculateNonAi, computePillarsFromDate, equationOfTimeMinutes, lunarToSolar } from '../features/chart/nonAiCalculator';
 
 /* 首页「按生日自动排四柱」的正向换算：公历日期时刻 → 年月日时四柱。
-   口径要点：年/月/日三柱取该日正午(与 calculateNonAi 定位日期一致，避子夜换日歧义)；
+   口径要点：年/月柱按输入时刻判定交节，日柱取该日正午(避子夜换日歧义)；
    时柱按当日日干五鼠遁，不用历法库 getTime()。computePillarsFromDate 纯函数默认「晚子时不换日」
    （23 点归当日），排盘页的「早子时换日」开关打开时传 ziShiftDay:true → 23 点后日柱进一。 */
 describe('computePillarsFromDate 生日→四柱(与命盘引擎同口径)', () => {

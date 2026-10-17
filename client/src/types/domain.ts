@@ -1,5 +1,14 @@
 export type Gender = 'male' | 'female';
 
+/** 原始出生时刻：农历换阳历后、真太阳时经度修正前的民用北京时间。 */
+export interface BirthTime {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+}
+
 export interface RelationshipFacts {
   sanHe: string[];
   liuHe: string[];
@@ -44,6 +53,8 @@ export interface NonAiChart {
    *  但命主实际仍生在当日，故重算/换设备时用这个真实日把公历/农历与起运锚回当天，不被进一后的日柱带偏。
    *  手录四柱路径无此栏(undefined)：由四柱反查定位日期，口径同旧。 */
   birthDay?: number;
+  /** 精确原始出生时刻；旧盘和手录四柱没有该项时沿用正午起运近似。 */
+  birthTime?: BirthTime;
   zodiac: string;
   elements: Record<string, number>;
   elementRatio: Record<string, number>;

@@ -270,7 +270,7 @@ describe('ensureLocalChartComplete · 把瘦身记录补成时段齐全的盘', 
     id: 'p1', name: '补算测', gender: 'male', birthYear: 1990, birthMonth: 5,
     createdAt: '2025-01-01T00:00:00.000Z',
     yearPillar: '庚午', monthPillar: '壬午', dayPillar: '丙寅', hourPillar: '癸巳',
-    nonAiResult: { pillars: { year: '庚午', month: '壬午', day: '丙寅', hour: '癸巳' }, birthDay: 15, greatFortunes: [], annualFortunes: [], monthlyFortunes: [] },
+    nonAiResult: { pillars: { year: '庚午', month: '壬午', day: '丙寅', hour: '癸巳' }, birthDay: 15, birthTime: { year: 1990, month: 5, day: 15, hour: 10, minute: 15 }, greatFortunes: [], annualFortunes: [], monthlyFortunes: [] },
     ...over,
   });
 
@@ -283,10 +283,11 @@ describe('ensureLocalChartComplete · 把瘦身记录补成时段齐全的盘', 
   it('开通后：大运/流年/流月都补回来了，且落库形态仍不含它们（不动 record 之外的东西）', async () => {
     unlockLocalSystem(LOCAL_SYSTEM_KEY);
     const out = await ensureLocalChartComplete(slim());
-    const n = out.nonAiResult as { greatFortunes: unknown[]; annualFortunes: unknown[]; monthlyFortunes: unknown[] };
+    const n = out.nonAiResult as { greatFortunes: unknown[]; annualFortunes: unknown[]; monthlyFortunes: unknown[]; birthTime?: unknown };
     expect(n.greatFortunes.length, '大运没补算 ⇒ 全盘总结出不来节点').toBeGreaterThan(0);
     expect(n.annualFortunes.length, '流年没补算').toBeGreaterThan(0);
     expect(n.monthlyFortunes.length, '流月没补算').toBeGreaterThan(0);
+    expect(n.birthTime).toEqual({ year: 1990, month: 5, day: 15, hour: 10, minute: 15 });
     // 输入那份不许被就地改掉：它是调用方手里的记录，就地写会污染回传路径
     expect((slim().nonAiResult as { greatFortunes: unknown[] }).greatFortunes).toHaveLength(0);
     const input = slim();

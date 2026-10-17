@@ -59,9 +59,30 @@ describe('ChartPage simplified form', () => {
     expect(onRecordCreated).toHaveBeenCalledWith(expect.objectContaining({
       name: '自动命主', birthYear: 2000, birthMonth: 2,
       yearPillar: '庚辰', monthPillar: '戊寅', dayPillar: '癸巳', hourPillar: '丙辰',
-      nonAiResult: expect.objectContaining({ dayMaster: '癸' }),
+      nonAiResult: expect.objectContaining({ dayMaster: '癸', birthTime: { year: 2000, month: 2, day: 5, hour: 8, minute: 0 } }),
     }));
     vi.useRealTimers();
+  });
+
+  it('北京时间合法生日不受宿主时区跳日影响，保存完整生辰', async () => {
+    const onRecordCreated = vi.fn();
+    render(<ChartPage onRecordCreated={onRecordCreated} />);
+    // Pacific/Kiritimati 的本地历法跳过 1994-12-31；北京时间这一天真实存在。
+    for (const [label, value] of [
+      ['姓名', '跨日命主'], ['出生年', '1994'], ['出生月', '12'], ['出生日', '31'],
+      ['时，零到二十三', '12'], ['分，零到五十九', '30'],
+    ]) fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    fireEvent.click(screen.getByRole('button', { name: '排盘并保存' }));
+    await act(async () => { for (let i = 0; i < 60; i += 1) await Promise.resolve(); });
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(onRecordCreated).toHaveBeenCalledTimes(1);
+    expect(onRecordCreated).toHaveBeenCalledWith(expect.objectContaining({
+      birthYear: 1994, birthMonth: 12,
+      nonAiResult: expect.objectContaining({
+        solarDate: '1994-12-31', birthDay: 31,
+        birthTime: { year: 1994, month: 12, day: 31, hour: 12, minute: 30 },
+      }),
+    }));
   });
 
   it('按生日模式：该日期不存在时提示、且不落库', async () => {
@@ -174,6 +195,7 @@ describe('ChartPage simplified form', () => {
     expect(screen.queryByText(/°E/)).toBeNull();
     expect(onRecordCreated).toHaveBeenCalledWith(expect.objectContaining({
       hourPillar: expect.stringMatching(/辰$/),
+      nonAiResult: expect.objectContaining({ birthTime: { year: 2025, month: 6, day: 21, hour: 10, minute: 0 } }),
     }));
     vi.useRealTimers();
   });

@@ -81,14 +81,14 @@ describe('缓存键跨端同源(#131)', () => {
        `chatv5 | {}×6 | chat | {:016x} | {} | {}` ⇒ **8 个 `{}` + 1 个 `{:016x}` + 2 个字面量**，
        合计 11 格，与服务端 11 段同构。所以钉的是「逐格形状」而不是「插值个数」。 */
     const litSegs = (rustBlock.match(/^format!\("([^"]*)"/) ?? ['', ''])[1].split('|');
-    expect(litSegs.length, `桌面聊天键字面量段数变成 ${litSegs.length}`).toBe(11);
+    expect(litSegs.length, `桌面聊天键字面量段数变成 ${litSegs.length}`).toBe(12);
     expect(litSegs.slice(1, 7).join('|'), `桌面第 2..7 段不再是六个 {}`).toBe('{}|{}|{}|{}|{}|{}');
     expect(litSegs[7], `桌面第 8 段不再是固定字面 chat`).toBe('chat');
     expect(litSegs[8], `桌面第 9 段不再是 {:016x} 哈希`).toBe('{:016x}');
     const plain = rustBlock.match(/\{\}/g)?.length ?? -1;
     const hashed = rustBlock.match(/\{:016x\}/g)?.length ?? -1;
-    expect(sSegs, `服务端聊天键段数变成 ${sSegs}`).toBe(11);
-    expect(plain, `桌面聊天键 {} 插值数变成 ${plain}`).toBe(8);
+    expect(sSegs, `服务端聊天键段数变成 ${sSegs}`).toBe(12);
+    expect(plain, `桌面聊天键 {} 插值数变成 ${plain}`).toBe(9);
     expect(hashed, `桌面聊天键的 {:016x} 个数变成 ${hashed}`).toBe(1);
     expect(plain + hashed + 2, `桌面段数合计 ${plain + hashed + 2} 与服务端 ${sSegs} 不同构`).toBe(sSegs);
   });
@@ -104,7 +104,7 @@ describe('缓存键跨端同源(#131)', () => {
     expect(versionOf(r, /\|(\{:0\d+x\})\|/, 'lib.rs qhash 宽度'), '桌面问题哈希宽度').toBe('{:016x}');
     /* 切片必须真吃到收尾实参，否则上面的段数会静默少读(实测读过 8)。正向钉子：整块尾部含最后一个实参。 */
     expect(rustChatFormat(src(rust)), '桌面聊天键切片没取到最后一个实参 ⇒ 段数读数不可信')
-      .toContain('tone_bucket(chat.tone))');
+      .toContain('birth_time_signature(chat.birth_time.as_ref()))');
   });
 
   it('正向钉子：sha256 现算能打响(避免上面的正则读到一个空串冒充通过)', () => {

@@ -27,7 +27,8 @@ const PILLARS = computePillarsFromDate({ year: 1984, month: 2, day: 6, hour: 10 
  *  我第一版就是这么写的 —— TARGET 取的是「戊寅日巳时」那一组，而测试里只把日柱塞进去，
  *  于是引擎报「时柱与出生日不合」，保存从未发生，waitFor 超时。那红的是我的夹具，不是产品。 */
 const TARGET = computePillarsFromDate({ year: 1984, month: 2, day: 14, hour: 10 });
-const CHART = calculateNonAi({ birthYear: 1984, birthMonth: 2, ...PILLARS }, 'male');
+const BIRTH_TIME = { year: 1984, month: 2, day: 6, hour: 10, minute: 15 };
+const CHART = calculateNonAi({ birthYear: 1984, birthMonth: 2, birthDay: 6, birthTime: BIRTH_TIME, ...PILLARS }, 'male');
 // 当场自证夹具前提：两组四柱彼此不同，且各自都能排出盘(上面两行已隐含，这里点名日柱)。
 if (TARGET.dayPillar === PILLARS.dayPillar) throw new Error('夹具失效：修正前后的日柱相同，判据将落在空集上');
 
@@ -127,6 +128,7 @@ describe('#151 修正四柱：真实交互路径', () => {
     const stored = (await listBaziRecords()).find((r) => r.id === ID);
     expect(stored?.nonAiResult?.pillars.day).toBe(TARGET.dayPillar);
     expect(stored?.nonAiResult?.dayMaster).toBe(TARGET.dayPillar[0]);
+    expect(stored?.nonAiResult?.birthTime).toBeUndefined();
     cleanup();
   });
 
@@ -172,7 +174,8 @@ describe('#151 修正四柱：真实交互路径', () => {
   it('换日盘修正后仍锚在真实生日：公历日期不许被进一的日柱带偏到次日', async () => {
     // 另建一条 23 点后出生、开了早子时换日的盘：日柱已是次日干支，birthDay 记着真实日。
     const shifted = computePillarsFromDate({ year: 1984, month: 2, day: 6, hour: 23 }, { ziShiftDay: true });
-    const shiftedChart = calculateNonAi({ birthYear: 1984, birthMonth: 2, birthDay: 6, ...shifted }, 'male');
+    const birthTime = { year: 1984, month: 2, day: 6, hour: 23, minute: 0 };
+    const shiftedChart = calculateNonAi({ birthYear: 1984, birthMonth: 2, birthDay: 6, birthTime, ...shifted }, 'male');
     resetMockSession();
     const rec = {
       id: ID, name: '待修', gender: 'male', birthYear: 1984, birthMonth: 2,
@@ -192,6 +195,7 @@ describe('#151 修正四柱：真实交互路径', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存修正' }));
     await waitFor(async () => expect((await getBaziRecord(ID))?.nonAiResult?.solarDate).toBe('1984-02-06'));
     expect(await cell('公历日期')).toContain('一九八四年二月六日');
+    expect((await getBaziRecord(ID))?.nonAiResult?.birthTime).toEqual(birthTime);
     cleanup();
   });
 });

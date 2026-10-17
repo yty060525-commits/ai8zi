@@ -16,7 +16,7 @@
  * ========================================================================== */
 import { createHash } from 'node:crypto';
 import { listRecordSummaries, getRecordById, readCache, writeCache } from './db.mjs';
-import { natalFactsOf, providerOrder, providerKey, clampTone, toneInstruction, cacheKey, callProvider, PROVIDERS, PROVIDER_LABEL, AI_SERVER_UNCONFIGURED, AI_NO_CREDENTIAL_REPLY } from './ai.mjs';
+import { natalFactsOf, providerOrder, providerKey, clampTone, toneInstruction, cacheKey, birthTimeSignature, callProvider, PROVIDERS, PROVIDER_LABEL, AI_SERVER_UNCONFIGURED, AI_NO_CREDENTIAL_REPLY } from './ai.mjs';
 /* 正文中文闸门：与浏览器端共用的唯一一份实现(features/chart/elements.ts 再导出同一模块)。 */
 import { FIELD_NAME_ZH, isChineseOnly, nonChineseKinds, enforceChinese, sanitizeChatText } from '../client/src/shared/chineseGate.ts';
 
@@ -389,7 +389,8 @@ export function chatCacheKey(record, question, model, tone) {
   //        旧缓存答案普遍带英文字段名、阿拉伯数字或「依据某小节」的出处说明，按新口径一律作废重写。
   // chatv6：正式版口径下证据标题与缺口提示不再出现括号、斜杠与「AI」字样(改读成中文)，
   //        提示词里指向入口的说法也从「点「AI 分析」」改成「点批断分析」。旧答案引用的正是那批措辞，作废重答。
-  return ['chatv6', model, record.gender, record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar, 'chat', qhash, record.birthYear, toneBucket].join('|');
+  // chatv7：起运结论按完整出生时刻区分，旧盘以空尾段维持原缓存语义。
+  return ['chatv7', model, record.gender, record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar, 'chat', qhash, record.birthYear, toneBucket, birthTimeSignature(record.nonAiResult?.birthTime)].join('|');
 }
 
 /** 本轮问题自带的人名要能覆盖上一轮命主。返回 {personName, recordId}；解不出则 null。 */

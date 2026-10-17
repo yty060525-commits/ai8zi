@@ -289,11 +289,11 @@ export async function ensureLocalChartComplete<T extends { id?: string; nonAiRes
   let calculateNonAi: typeof import('../features/chart/nonAiCalculator').calculateNonAi;
   try {
     ({ calculateNonAi } = await import('../features/chart/nonAiCalculator'));
-    const r = record as unknown as { birthYear?: number | string; birthMonth?: number | string; nonAiResult?: { birthDay?: number }; yearPillar?: string; monthPillar?: string; dayPillar?: string; hourPillar?: string; gender?: string; createdAt?: string };
+    const r = record as unknown as { birthYear?: number | string; birthMonth?: number | string; nonAiResult?: { birthDay?: number; birthTime?: import('../types/domain').BirthTime }; yearPillar?: string; monthPillar?: string; dayPillar?: string; hourPillar?: string; gender?: string; createdAt?: string };
     const createdYear = r.createdAt ? chinaYear(r.createdAt) : Number.NaN;
     const anchor = Number.isFinite(createdYear) && createdYear > chinaYear(now) ? r.createdAt! : now.toISOString();
     const nonAiResult = calculateNonAi({
-      birthYear: Number(r.birthYear), birthMonth: Number(r.birthMonth), birthDay: r.nonAiResult?.birthDay,
+      birthYear: Number(r.birthYear), birthMonth: Number(r.birthMonth), birthDay: r.nonAiResult?.birthDay, birthTime: r.nonAiResult?.birthTime,
       yearPillar: r.yearPillar ?? '', monthPillar: r.monthPillar ?? '', dayPillar: r.dayPillar ?? '', hourPillar: r.hourPillar ?? '',
     }, r.gender === 'female' ? 'female' : 'male', anchor);
     if (hasPeriodFacts(nonAiResult)) markLocalChartHydrated(record.id);

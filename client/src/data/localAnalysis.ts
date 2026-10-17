@@ -24,7 +24,7 @@ import type { BaziAIAnalysis, BaziAnalysisTask, BaziRecord, FortunePeriod, NonAi
 
 /* v3：爱情引动判据由「只看本期天干十神」扩成三条途径（天干／地支本气／配偶宫逢冲合），
    「未受特别引动」的覆盖面从约 80% 降到约 39%。只改断语措辞与判据，不改喜忌五行结论。 */
-export const LOCAL_ANALYSIS_ENGINE_VERSION = 'local-rules-v7';
+export const LOCAL_ANALYSIS_ENGINE_VERSION = 'local-rules-v8';
 
 /** 引擎可复算、无需外部输入的最小事实来源；缺排盘数据时上层据此禁用按钮。 */
 /* 判据已搬到 data/localSystem.ts（见那里的 canBuildLocalAnalysis）：调用方在页面加载阶段
@@ -49,9 +49,6 @@ const TEN_GOD_GROUP: Record<string, string> = {
   比肩: '比劫', 劫财: '比劫', 食神: '食伤', 伤官: '食伤', 偏财: '财', 正财: '财',
   七杀: '官杀', 正官: '官杀', 偏印: '印', 正印: '印',
 };
-/** 分组 → 该组占的两个五行。⚠ 一个组含**一对**十神（正财/偏财、正官/七杀），
- *  这一对只差阴阳、五行相差一位，故组恒占**两个相邻**五行：财 = +2/+3、官杀 = +3/+4。 */
-const GROUP_FIRST_OFFSET: Record<string, number> = { 比劫: 0, 食伤: 1, 财: 2, 官杀: 3, 印: 4 };
 /** 某柱天干相对日主的十神(纯代数，与引擎 tenGodOf 同一口径)：用于给**地支本气**定十神。 */
 const mod5 = (n: number) => ((n % 5) + 5) % 5;
 function stemGodOf(dayStem: string, otherStem: string): string {
@@ -63,10 +60,10 @@ function stemGodOf(dayStem: string, otherStem: string): string {
         : d === 3 ? (same ? '七杀' : '正官')
           : (same ? '偏印' : '正印');
 }
-/** 一组十神（财/官杀…）对应的两个五行：由日主下标 + 该组首偏移推出。 */
+/** 一组十神（财/官杀…）对应的唯一五行：由日主下标 + 该组偏移推出。 */
 export const groupElements = (dayIdx: number, group: string): string[] => {
-  const first = GROUP_FIRST_OFFSET[group];
-  return first === undefined ? [] : [rel(dayIdx, first), rel(dayIdx, first + 1)];
+  const offset = GROUP_OFFSET[group];
+  return offset === undefined ? [] : [rel(dayIdx, offset)];
 };
 
 /** 数字 → 中文读法(含负号与一位小数)，用于把旺衰评分写成「二十八点八」这类白话。 */
@@ -412,9 +409,7 @@ export function buildLocalAnalysis(record: BaziRecord, now: Date = new Date()): 
       points.push(`日主${dayStem}${dayElement}生于${monthBranch ?? '月令'}月，${score.inSeason ? '得令而当旺' : '不得令'}，${score.monthHasSupport ? '月支藏干见印比通根之助' : '月支藏干中未见印比通根之助'}。`);
       points.push(`助身方（比劫与印）合计${cnNum(score.support)}，克泄耗方（食伤、财与官杀）合计${cnNum(score.drain)}。`);
       const ail = ailment(score, label);
-      /* 「某组是否被划为忌」必须比对 deriveUsefulAvoid 写进 avoid 的那个字：它按整组只取
-         rel(dayIdx, GROUP_OFFSET[g]) 的**首字**入表，而一组占两个相邻五行、第二字未必在表里。
-         拿 groupElements 的两个字求交来判会得出相反结论。 */
+      /* 「某组是否被划为忌」必须比对 deriveUsefulAvoid 写进 avoid 的同一个五行。 */
       const isAvoidGroup = (g: string) => avoid.includes(rel(dayIdx, GROUP_OFFSET[g]));
       const restNamed = ail.restGroups.length > 0;   // ailment 已滤掉「日主」这类无名目的组
       /* cnNum 只到两位数(≥100 会原样吐出阿拉伯数字)，故先把占比折成「几点几成」再转中文。
@@ -883,17 +878,17 @@ function buildPeriodAnalysis(core: Core, period: FortunePeriod | NonAiChart['gre
     const spouseLabel = spouseGroup === '财' ? '妻星' : '夫星';
     const dayBranch = core.n.pillars?.day?.[1] ?? '';
     // ① 本期**天干**是配偶星。优先用引擎给的十神字段；该字段在大运存量行与瘦身补槽里可能缺失，
-    //   此时退回按日主代数推出的配偶组五行。两种读法**并不恒等**：十神字段只看本期天干，
-    //   而兜底还认财组的另一个五行（实测：男命乙木见辛金，字段读作七杀、兜底认作财）。
-    //   故字段在时以字段为准，缺字段才用兜底——别把这里改成「两者取或」。
-    const spouseEls = groupElements(core.dayIdx, spouseGroup);
+    //   此时退回按日主代数推出的天干十神。字段和代数都对应单一天干的十神，
+    //   因而不会把阴阳不同、五行不同的另一组星误算成配偶星。
     const stemEl = isStem(pStem) ? ELEMENTS[stemElementIndex(pStem)] : '';
-    const movedByStem = TEN_GOD_GROUP[tenGod] === spouseGroup || (!!stemEl && spouseEls.includes(stemEl));
+    const spouseStemGod = TEN_GOD_GROUP[tenGod] ? tenGod : stemGodOf(core.dayStem, pStem);
+    const movedByStem = TEN_GOD_GROUP[spouseStemGod] === spouseGroup;
     // ② 本期**地支本气**是配偶星（旧写法只看天干，而地支之力在通行口径里不比天干轻）。
     //   ⚠ 这里必须独立判、不许写成「同 ①」：两条途径各自覆盖的年份并不重合，合并即漏判。
     const bMainStem = (HIDDEN_STEMS[pBranch] ?? [])[0] ?? '';
     const branchEl = isStem(bMainStem) ? ELEMENTS[stemElementIndex(bMainStem)] : '';
-    const movedByBranch = !!branchEl && spouseEls.includes(branchEl);
+    const branchGod = isStem(bMainStem) ? stemGodOf(core.dayStem, bMainStem) : '';
+    const movedByBranch = TEN_GOD_GROUP[branchGod] === spouseGroup;
     // ③ 本期地支与本命日支（配偶宫）逢冲、或成三合/六合之局——宫位被引动，与「星被引动」是两回事。
     //   ⚠ 必须逐对看「这一对里两个柱各自的地支」，不能拿整串 includes(日支)：引擎的关系串形如
     //     「甲子与乙丑」，本命别柱（如月柱辛卯）自己就含日支那个字，会把别柱与本期之间的命中
@@ -918,7 +913,7 @@ function buildPeriodAnalysis(core: Core, period: FortunePeriod | NonAiChart['gre
       return '';
     };
     const touchWord = touchKind() === '合' ? '相合' : '冲动';
-    const why = [movedByStem ? `${scopeWord}天干${pStem}为${tenGod || stemGodOf(core.dayStem, pStem)}` : '',
+    const why = [movedByStem ? `${scopeWord}天干${pStem}为${spouseStemGod}` : '',
       movedByBranch ? `${scopeWord}地支${pBranch}所藏本气${bMainStem}亦${spouseGroup}之星` : '',
       palaceTouched ? `更与本命日支${dayBranch}（配偶宫）${touchWord}` : ''].filter(Boolean).join('、');
     // ── 取向判据（v3 第二轮，被实测读数纠正后写下）──────────────────────────────────

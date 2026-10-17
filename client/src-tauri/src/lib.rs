@@ -331,6 +331,19 @@ fn now_text() -> String {
         .map(|d| d.as_millis().to_string()).unwrap_or_else(|_| "0".into())
 }
 
+fn birth_time_signature(value: Option<&Value>) -> String {
+    let Some(t) = value.and_then(Value::as_object) else { return String::new(); };
+    let number = |key: &str| t.get(key).and_then(|v| {
+        v.as_i64().or_else(|| v.as_f64().filter(|n| n.is_finite() && n.fract() == 0.0 && (0.0..=9999.0).contains(n)).map(|n| n as i64))
+    });
+    let (Some(year), Some(month), Some(day), Some(hour), Some(minute)) = (number("year"), number("month"), number("day"), number("hour"), number("minute")) else { return String::new(); };
+    if !(1..=9999).contains(&year) || !(1..=12).contains(&month) || !(0..=23).contains(&hour) || !(0..=59).contains(&minute) { return String::new(); }
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    if day < 1 || day > days[(month - 1) as usize] { return String::new(); }
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}", year, month, day, hour, minute)
+}
+
 /// 确定性缓存键：同一 八字+性别+任务类型+年份+月份+出生年(年龄) + 模型 => 同一输出。
 /// 同一命盘(不同人同名同盘)命中同一缓存，重复分析与断点续跑不再花钱。
 pub(crate) fn cache_key(record: &BaziRecord, task: &AiTaskInput, model: &str) -> String {
@@ -345,9 +358,11 @@ pub(crate) fn cache_key(record: &BaziRecord, task: &AiTaskInput, model: &str) ->
     //      桌面此前写成 solarDate→zodiac→dayMaster 与 hiddenStems→tenGods，serde_json 按插入顺序序列化，
     //      于是同一命盘在桌面拼出的「本命事实」整段字节与另两端不同 —— 提示词口径没变但前缀分叉，
     //      已落库的答案是按另一种键序那版提示词产出的，一并作废重算。
-    format!("v11|{model}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", record.gender,
+    // v12: 精确起运按出生时刻区分；旧盘以空尾段保留原缓存口径。
+    let birth_time = record.non_ai_result.as_deref().and_then(|raw| serde_json::from_str::<Value>(raw).ok()).and_then(|v| v.get("birthTime").cloned());
+    format!("v12|{model}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}", record.gender,
         record.year_pillar, record.month_pillar, record.day_pillar, record.hour_pillar,
-        task.task_type, task.year.unwrap_or(0), task.month.unwrap_or(0), record.birth_year, tone_bucket(task.tone))
+        task.task_type, task.year.unwrap_or(0), task.month.unwrap_or(0), record.birth_year, tone_bucket(task.tone), birth_time_signature(birth_time.as_ref()))
 }
 
 pub(crate) fn read_cache(connection: &rusqlite::Connection, key: &str) -> Result<Option<String>, String> {
@@ -804,7 +819,7 @@ pub async fn run_ai_task(state: State<'_, Database>, record: BaziRecord, task: A
 pub struct ChatRequest {
     pub gender: String, pub birth_year: i32,
     pub year_pillar: String, pub month_pillar: String, pub day_pillar: String, pub hour_pillar: String,
-    pub question: String, pub tone: Option<i32>, pub cached: Option<bool>,
+    pub question: String, pub tone: Option<i32>, pub cached: Option<bool>, #[serde(default)] pub birth_time: Option<Value>,
 }
 
 /// 64 位 FNV-1a：给问题文本做稳定短哈希用作缓存键片段(无第三方依赖)。
@@ -818,16 +833,16 @@ pub(crate) fn fnv1a(text: &str) -> u64 {
 }
 
 /// 聊天缓存键：第 2..6 段与任务键同位(性别+四柱)，chart_sig 索引自动覆盖。
-/// chatv6 与服务端同名键对齐(桌面端曾停在 chatv1，提示词早已分叉)：系统提示词现为
+/// chatv7 与服务端同名键对齐(桌面端曾停在 chatv1，提示词早已分叉)：系统提示词现为
 /// 「正文限死纯中文 + 禁止引用出处」，旧答案带英文字段名/数字/出处说明，一律作废重写。
 /// chatv6 这一跳：证据标题与缺口提示不再出现括号、斜杠与「AI」字样(改读成中文)，
 /// 指向入口的说法也从「点「AI 分析」」改成「点批断分析」。聊天证据由客户端 chatEngine
 /// 构建、三通道共用同一份字节，所以服务端升键的那批措辞同样作用于桌面旧答案 —— 一并作废重答。
 pub(crate) fn chat_cache_key(chat: &ChatRequest, model: &str) -> String {
     let qhash = fnv1a(chat.question.trim());
-    format!("chatv6|{}|{}|{}|{}|{}|{}|chat|{:016x}|{}|{}", model, chat.gender,
+    format!("chatv7|{}|{}|{}|{}|{}|{}|chat|{:016x}|{}|{}|{}", model, chat.gender,
         chat.year_pillar, chat.month_pillar, chat.day_pillar, chat.hour_pillar,
-        qhash, chat.birth_year, tone_bucket(chat.tone))
+        qhash, chat.birth_year, tone_bucket(chat.tone), birth_time_signature(chat.birth_time.as_ref()))
 }
 
 #[tauri::command]
@@ -1190,7 +1205,7 @@ mod tests {
 
     #[test]
     fn ai_cache_key_is_deterministic_and_scope_sensitive() {
-        let record = BaziRecord { id: Some("r1".into()), name: "名".into(), gender: "male".into(), birth_year: 1984, birth_month: 2, created_at: "2025-01-01".into(), year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "庚午".into(), hour_pillar: "壬午".into(), non_ai_result: None, ai_status: "pending".into(), ai_analysis: None, ai_overview: None, ai_error: None, ai_tasks: None, tone_used: None };
+        let record = BaziRecord { id: Some("r1".into()), name: "名".into(), gender: "male".into(), birth_year: 1984, birth_month: 2, created_at: "2025-01-01".into(), year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "庚午".into(), hour_pillar: "壬午".into(), non_ai_result: Some(serde_json::json!({"birthTime":{"year":1984,"month":2,"day":3,"hour":9,"minute":10}}).to_string()), ai_status: "pending".into(), ai_analysis: None, ai_overview: None, ai_error: None, ai_tasks: None, tone_used: None };
         let mk = |y: Option<i32>, m: Option<i32>| commands::AiTaskInput { task_id: "t".into(), task_type: "monthly".into(), year: y, month: m, annual: None, monthly: None, decade: None, baseline: None, guide: None, findings: None, tone: None };
         let k1 = commands::cache_key(&record, &mk(Some(2027), Some(5)), "deepseek-reasoner");
         let k2 = commands::cache_key(&record, &mk(Some(2027), Some(5)), "deepseek-reasoner");
@@ -1199,6 +1214,23 @@ mod tests {
         assert_eq!(k1, k2);
         assert_ne!(k1, k3); // 月份不同 → 不同缓存
         assert_ne!(k1, k4); // 模型不同 → 不同缓存
+        assert!(k1.ends_with("|1984-02-03T09:10"));
+        let mut other_minute = record.clone();
+        other_minute.non_ai_result = Some(serde_json::json!({"birthTime":{"year":1984,"month":2,"day":3,"hour":9,"minute":11}}).to_string());
+        let k5 = commands::cache_key(&other_minute, &mk(Some(2027), Some(5)), "deepseek-reasoner");
+        assert_ne!(k1, k5, "分钟变化必须区分任务缓存");
+        let connection = Connection::open_in_memory().unwrap(); initialize(&connection).unwrap();
+        commands::write_cache(&connection, &k1, "时刻甲").unwrap();
+        assert_eq!(commands::read_cache(&connection, &k5).unwrap(), None, "预置甲时刻缓存不可被乙时刻命中");
+        let float_time = BaziRecord { non_ai_result: Some(r#"{"birthTime":{"year":2000.0,"month":2.0,"day":29.0,"hour":0.0,"minute":0.0}}"#.into()), ..record.clone() };
+        let float_key = commands::cache_key(&float_time, &mk(Some(2027), Some(5)), "deepseek-reasoner");
+        assert!(float_key.ends_with("|2000-02-29T00:00"), "整值浮点与JS规范一致：{float_key}");
+        let invalid_time = BaziRecord { non_ai_result: Some(r#"{"birthTime":{"year":1900.0,"month":2.0,"day":29.0,"hour":0.0,"minute":0.0}}"#.into()), ..record.clone() };
+        let invalid_key = commands::cache_key(&invalid_time, &mk(Some(2027), Some(5)), "deepseek-reasoner");
+        assert!(invalid_key.ends_with('|'), "非闰世纪的二月二十九日无签名");
+        let mut legacy = record.clone(); legacy.non_ai_result = None;
+        let legacy_key = commands::cache_key(&legacy, &mk(Some(2027), Some(5)), "deepseek-reasoner");
+        assert!(legacy_key.ends_with('|'), "旧盘签名为空：{legacy_key}");
     }
 
     #[test]
@@ -1207,6 +1239,22 @@ mod tests {
         commands::write_cache(&connection, "key-a", r#"{"x":1}"#).unwrap();
         assert_eq!(commands::read_cache(&connection, "key-a").unwrap().as_deref(), Some(r#"{"x":1}"#));
         assert!(commands::read_cache(&connection, "missing").unwrap().is_none());
+    }
+
+    #[test]
+    fn birth_time_metadata_survives_record_json_and_sqlite_round_trip() {
+        let connection = Connection::open_in_memory().unwrap(); initialize(&connection).unwrap();
+        let birth_time = serde_json::json!({"year":1984,"month":2,"day":3,"hour":9,"minute":10});
+        let non_ai_result = serde_json::json!({"birthTime":birth_time,"greatFortunes":[]}).to_string();
+        let record = BaziRecord { id: Some("birth-time".into()), name: "名".into(), gender: "male".into(), birth_year: 1984, birth_month: 2, created_at: "2026-01-01".into(), year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "庚午".into(), hour_pillar: "壬午".into(), non_ai_result: Some(non_ai_result.clone()), ai_status: "pending".into(), ai_analysis: None, ai_overview: None, ai_error: None, ai_tasks: None, tone_used: None };
+        let encoded = serde_json::to_string(&record).unwrap();
+        let decoded: BaziRecord = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(serde_json::from_str::<Value>(decoded.non_ai_result.as_deref().unwrap()).unwrap()["birthTime"], birth_time);
+        connection.execute("INSERT INTO bazi_records (id,name,gender,birth_year,birth_month,created_at,year_pillar,month_pillar,day_pillar,hour_pillar,non_ai_result,ai_status) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)", params!["birth-time", record.name, record.gender, record.birth_year, record.birth_month, record.created_at, record.year_pillar, record.month_pillar, record.day_pillar, record.hour_pillar, record.non_ai_result, record.ai_status]).unwrap();
+        let stored: String = connection.query_row("SELECT non_ai_result FROM bazi_records WHERE id='birth-time'", [], |row| row.get(0)).unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&stored).unwrap()["birthTime"], birth_time);
+        let chat_without_metadata: commands::ChatRequest = serde_json::from_value(serde_json::json!({"gender":"male","birthYear":1984,"yearPillar":"甲子","monthPillar":"丙寅","dayPillar":"庚午","hourPillar":"壬午","question":"旧盘问题"})).unwrap();
+        assert!(chat_without_metadata.birth_time.is_none(), "旧 Tauri 请求可省略缓存元数据");
     }
 
     #[test]
@@ -1239,17 +1287,25 @@ mod tests {
     #[test]
     fn chat_cache_key_is_stable_and_purged_with_the_chart() {
         let connection = Connection::open_in_memory().unwrap(); initialize(&connection).unwrap();
-        let chat = commands::ChatRequest { gender: "male".into(), birth_year: 1984, year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "戊辰".into(), hour_pillar: "庚申".into(), question: "2027年事业如何？".into(), tone: Some(80), cached: Some(true) };
+        let chat = commands::ChatRequest { gender: "male".into(), birth_year: 1984, year_pillar: "甲子".into(), month_pillar: "丙寅".into(), day_pillar: "戊辰".into(), hour_pillar: "庚申".into(), question: "2027年事业如何？".into(), tone: Some(80), cached: Some(true), birth_time: Some(serde_json::json!({"year":1984,"month":2,"day":3,"hour":9,"minute":10})) };
         let k1 = commands::chat_cache_key(&chat, "deepseek-flash");
         let k2 = commands::chat_cache_key(&chat, "deepseek-flash");
         assert_eq!(k1, k2, "同一问题+同盘+同模型+同语气 => 同一缓存键");
         let other = commands::ChatRequest { question: "换个问法".into(), ..chat.clone() };
         assert_ne!(k1, commands::chat_cache_key(&other, "deepseek-flash"));
+        let other_minute = commands::ChatRequest { birth_time: Some(serde_json::json!({"year":1984,"month":2,"day":3,"hour":9,"minute":11})), ..chat.clone() };
+        let k_minute = commands::chat_cache_key(&other_minute, "deepseek-flash");
+        assert_ne!(k1, k_minute, "分钟变化必须区分聊天缓存");
+        let float_chat = commands::ChatRequest { birth_time: Some(serde_json::from_str(r#"{"year":1984.0,"month":2.0,"day":3.0,"hour":0.0,"minute":0.0}"#).unwrap()), ..chat.clone() };
+        assert!(commands::chat_cache_key(&float_chat, "deepseek-flash").ends_with("|1984-02-03T00:00"));
         commands::write_cache(&connection, &k1, "答案正文").unwrap();
+        commands::write_cache(&connection, &k_minute, "另一时刻答案").unwrap();
+        assert_eq!(commands::read_cache(&connection, &k_minute).unwrap().as_deref(), Some("另一时刻答案"));
+        assert_eq!(commands::read_cache(&connection, &commands::chat_cache_key(&commands::ChatRequest { birth_time: Some(serde_json::json!({"year":1984,"month":2,"day":3,"hour":9,"minute":12})), ..chat.clone() }, "deepseek-flash")).unwrap(), None, "聊天缓存读取按出生分钟隔离");
         commands::write_cache(&connection, "v7|deepseek-flash|male|甲子|丙寅|戊辰|庚申|annual|2027|0|1984|80", "{}").unwrap();
         commands::write_cache(&connection, "v7|deepseek-flash|female|乙丑|丁卯|己巳|辛未|annual|2027|0|1985|80", "{}").unwrap();
         let removed = commands::purge_chart_cache(&connection, "male", "甲子", "丙寅", "戊辰", "庚申").unwrap();
-        assert_eq!(removed, 2, "聊天缓存须随该盘任务缓存一并清除");
+        assert_eq!(removed, 3, "同盘的两个时刻聊天缓存须随任务缓存一并清除");
         let left: i64 = connection.query_row("SELECT COUNT(*) FROM ai_cache", [], |row| row.get(0)).unwrap();
         assert_eq!(left, 1);
     }
