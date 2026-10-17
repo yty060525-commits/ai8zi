@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { BottomNav, type AppSection } from './components/BottomNav';
 import { ChartPage } from './features/chart/ChartPage';
 import { RecordsPage } from './features/records/RecordsPage';
@@ -7,8 +7,22 @@ import { saveBaziRecord } from './data/clientRepository';
 import { SettingsPage } from './features/settings/SettingsPage';
 import { BUILD_ID, versionLabel } from './utils/buildInfo';
 import type { BaziRecord } from './types/domain';
+import { preferLocalFromHash } from './data/localSystem';
 
 export function App() {
+  const appliedMode = useRef(false);
+  useEffect(() => {
+    const apply = (event?: HashChangeEvent) => {
+      // 已消费的导航事件可能晚于 replaceState 到达，不能拿清空后的锚点再切回云端。
+      if (event && event.newURL !== window.location.href) return;
+      if (preferLocalFromHash(window.location.hash)) {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      }
+    };
+    if (!appliedMode.current) { appliedMode.current = true; apply(); }
+    window.addEventListener('hashchange', apply);
+    return () => window.removeEventListener('hashchange', apply);
+  }, []);
   const [section, setSection] = useState<AppSection>('chart');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [openedPersonId, setOpenedPersonId] = useState<string | null>(null);

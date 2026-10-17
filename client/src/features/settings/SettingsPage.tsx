@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type ChangeEvent } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ChangeEvent } from 'react';
 import { getServiceStatus, clearServiceCredential, saveServiceCredential, setSelectedService, serviceProvider, serviceOf, PROVIDER_LABEL, type AiProvider, type ServiceId } from '../../data/aiSettings';
+import { isLocalSystemEnabled, isLocalSystemUnlocked, hideLocalSystem, setLocalSystemEnabled, subscribeLocalSystem, unlockLocalSystem, verifyLocalKey } from '../../data/localSystem';
 import { sanitizeAnalysisText } from '../chart/elements';
 import { compactRecords, getStorageStats, runAiSelfTest, type AiSelfTest } from '../../data/storageInfo';
 import { reloadLocalForSession } from '../../data/clientRepository';
@@ -47,6 +48,66 @@ export function SettingsPage() {
   const [srvBusy, setSrvBusy] = useState(false);
   const [srvMsg, setSrvMsg] = useState<string>();
   const [session, setSession] = useState<ServerSession | null>(() => getServerSession());
+
+  /* 「本地系统」＝第四条生成方式，界面上**只有这一处入口**（用户 2026-09-28：「输入密钥就是第四服务，
+     qwen 就不要亮绿色了，不要覆盖 qwen 的密钥，随时可以使用 qwen」；同一条消息里又否掉了地址栏那条
+     备用路 ——「不要展现第四入口了…给我两套链接」，于是 `?local=` 已经删掉，别再给它加第二处入口）。
+     这一节自己带一个密钥框，且：
+       · 这个框**只调 unlockLocalSystem**：不写 mingli.cred.*、不改所选通道，云端三格的绿点
+         依旧只由各自的云端凭据决定（statuses 只有 saveOne/clearOne/useChannel 会动）；
+       · 云端凭据粘进这个框只会得到「密钥不正确」，不会存成凭据、也不会被清掉；
+       · 解锁码粘进上面任一格只按云端凭据存，**不开通**本路（分流版早被否掉，
+         local-system-entry.test.tsx 至今钉着这条）。
+     可见性判据与详情页同源（isLocalSystemUnlocked），别在这儿另加第二套条件。 */
+  const readUnlocked = () => isLocalSystemUnlocked();
+  const localUnlocked = useSyncExternalStore(subscribeLocalSystem, readUnlocked, readUnlocked);
+  const localOn = useSyncExternalStore(subscribeLocalSystem, isLocalSystemEnabled, isLocalSystemEnabled);
+  const [localNote, setLocalNote] = useState<string>();
+  const [localKey, setLocalKey] = useState('');
+  const flashLocalNote = (text: string) => { setLocalNote(text); setTimeout(() => setLocalNote(undefined), 4000); };
+  /** 解锁：只写本机的开通标记。**刻意不调任何凭据接口** —— 这条路上没有任何东西该碰云端凭据；
+   *  码不对就原样待着，三条云通道的凭据与所选通道一个字都不受影响。 */
+  function doUnlockLocal() {
+    if (!localKey.trim()) { flashLocalNote('请先粘贴密钥'); return; }
+    const granted = unlockLocalSystem(localKey);
+    // 无论成败都清空输入：密钥不该留在受控 state 里，更不该渲染进 DOM。
+    setLocalKey('');
+    flashLocalNote(granted
+      ? '已开通本地系统：勾选「使用本地系统」后，点「AI 分析」才改由本机规则引擎批断（三条云端通道照常可用）'
+      : '密钥不正确：未做任何改动，三条云端通道的凭据与所选通道都没被动过');
+  }
+  /** 「关起来」＝收回这一节，并且**一定**先把生成方式交还给云端（「只要关闭了就默认走 qwen」）。
+   *  hideLocalSystem() 内部先关灯再清两个标记；这里不重算判据，靠订阅自己回读实现。 */
+  function doHideLocal() {
+    hideLocalSystem();
+    flashLocalNote('已关起来：本地系统不再接管，「AI 分析」回到云端通道');
+  }
+  function toggleLocal(on: boolean) {
+    const applied = setLocalSystemEnabled(on);
+    flashLocalNote(applied ? '已启用本地系统：点「AI 分析」改由本机规则引擎批断（仅本机）' : '已关闭本地系统：切回云端通道');
+  }
+
+  /* 「两套链接」（用户 2026-09-28）：一条裸链＝原本三条云端通道，一条 `#local`＝进来直接走本机引擎。
+     两条都只是**选生成路**，不是开通方式：接管与否由 localSystem.preferLocalFromHash 判，
+     未开通的设备打开 #local 也什么也不会写。链接里绝不含解锁码。 */
+  const [localCopyNote, setLocalCopyNote] = useState<string>();
+  /** 只取锚点前的那一段（pathname + search）：把本来就在的 hash 剔掉，两条链接才互不污染。 */
+  function baseUrlForLinks(): string {
+    try { const u = new URL(location.href); return u.origin + u.pathname + u.search; } catch { return ''; }
+  }
+  async function copyLocalLink() {
+    const base = baseUrlForLinks();
+    if (!base) { setLocalCopyNote('当前环境拿不到页面地址，复制不了'); return; }
+    const text = '云端三通道：' + base + '\n本机引擎：' + base + '#local';
+    try {
+      await navigator.clipboard.writeText(text);
+      setLocalCopyNote('两套链接已复制：第一条走云端三通道，第二条进来就用本机引擎，只在已开通的本机生效');
+    } catch {
+      // 手机 http/非安全上下文里 clipboard API 会直接 reject：不能静默失败，把两条链接摆出来让人长按复制。
+      setLocalCopyNote('这个浏览器不让程序写剪贴板，请使用浏览器地址栏保存当前链接');
+    }
+    setTimeout(() => setLocalCopyNote(undefined), 10000);
+  }
 
   useEffect(() => {
     let active = true;
@@ -103,6 +164,11 @@ export function SettingsPage() {
   /** 每个通道独立保存：同一屏可把三条通道都配好，无需先选再存。 */
   async function saveOne(service: ServiceId) {
     const value = secrets[service];
+    if (verifyLocalKey(value)) {
+      setSecrets((c) => ({ ...c, [service]: '' }));
+      setNotice((c) => ({ ...c, [service]: '请在本地系统密钥框中输入，云端凭据未改动' }));
+      return;
+    }
     if (!value) { setStatuses((c) => ({ ...c, [service]: '保存失败' })); return; }
     const hadCredential = statuses[service] === '已配置';
     setBusyService(service);
@@ -227,6 +293,27 @@ export function SettingsPage() {
           </div>
         </div>;
       })}
+    </section>
+    {/* 「本地系统」＝第四条生成方式：不走云端、不用凭据。**未开通时这一节摆出一个待解锁的密钥框**
+        （用户 2026-09-28：「输入密钥就是第四服务」）；它自己一个框，与上面三格的云端凭据毫无关系，
+        三条云通道任何时候都能直接用。 */}
+    <section className="local-system" aria-label="本地系统"><h2>本地系统，本机规则引擎{localUnlocked ? <span className="channel-status ok">已开通</span> : <span className="channel-status">未开通</span>}{localNote && <span className="channel-notice" role="status">{sanitizeAnalysisText(localNote)}</span>}</h2>
+      <p className="page-description">不联网、不消耗用度：由本机规则引擎就排盘事实直接批断，含本命、未来十年与后天调整。只影响本机，随时可取消勾选切回云端；三条云端通道任何时候都能直接用。</p>
+      {!localUnlocked && <div className="channel-row">
+        {/* type=password + autoComplete=off 与三格凭据框同款：解锁码不该进密码管理器或表单自动填充。
+            占位文案刻意不提「凭据」也不提形状，免得被当成第四格密钥一起粘过来。 */}
+        <input aria-label="本地系统密钥" type="password" autoComplete="off" placeholder="粘贴密钥" value={localKey}
+          onChange={(event) => setLocalKey(event.target.value)} />
+        <button className="primary-button" type="button" onClick={doUnlockLocal}>解锁</button>
+      </div>}
+      {localUnlocked && <div className="local-unlock-row">
+        <label className="checkbox-inline"><input type="checkbox" checked={localOn} onChange={(event) => toggleLocal(event.target.checked)} />使用本地系统，不联网批断</label>
+        <button className="text-button" type="button" onClick={() => copyLocalLink()}>复制两套链接</button>
+        <button className="text-button" type="button" onClick={doHideLocal}>关起来，改用云端通道</button>
+      </div>}
+      {/* 「两套链接」是机主自己收藏用的，所以只在已开通后才给（未开通时这条 #local 链接也接管不了，
+          给他反而误导）。文案刻意不提密钥：链接里永远不会有解锁码，开通仍然只有上面那一格。 */}
+      {localUnlocked && localCopyNote && <p className="page-description" role="status" style={{ whiteSpace: 'pre-wrap' }}>{localCopyNote}</p>}
     </section>
     <p className="ai-status" role="status">数据库：{storage ? `${cnCount(storage.records)}条记录，缓存${storage.cacheEntries === null ? '未知，网页版不统计服务器缓存' : cnCount(storage.cacheEntries) + '条'}${storage.bytes ? `，占用约${cnCount(Math.round(storage.bytes / 1024))}千字节` : ''}` : '读取中'}</p>
     <div className="button-group"><button className="text-button" type="button" disabled={compacting || storage === null || storage.cacheEntries === null} onClick={() => void compress()}>{compacting ? '压缩中' : '压缩旧记录，缩小数据库'}</button><button className="text-button" type="button" disabled={testing} onClick={() => void selfTest()}>{testing ? '自检中' : '连通自检，微小消耗'}</button></div>

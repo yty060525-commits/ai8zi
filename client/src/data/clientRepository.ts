@@ -3,8 +3,9 @@ import { invoke } from '@tauri-apps/api/core';
 import { apiAdmin, apiRecords, getServerSession, isServerMode } from './serverClient';
 import { sqlMirror } from './offlineSql';
 import { ELEMENT_RULE_VERSION, countElements } from '../features/chart/elements';
-import { analysisHorizon, buildBaziTasks } from './baziOrchestrator';
+import { analysisHorizon, buildBaziTasks, OVERVIEW_TASK_ID } from './baziOrchestrator';
 import type { BaziTaskResult } from '../types/domain';
+import { deleteScopeNotesForRecord } from './scopeNotes';
 
 let sessionPeople: Person[] = [];
 let sessionDetails: PersonDetailData[] = [];
@@ -408,7 +409,7 @@ export async function hydrateRecord(record: BaziRecord): Promise<BaziRecord> {
 
 /** 批量还原：历法库只要动态导入一次。 */
 async function hydrateRecords(records: BaziRecord[]): Promise<BaziRecord[]> {
-  const fixed = records.map(repairElementCounts);
+  const fixed = await Promise.all(records.map(async (record) => stripStaleLocalAnalysis(repairElementCounts(record))));
   const needs = fixed.filter((record) => isPruned(record.nonAiResult) && canRecompute(record));
   if (!needs.length) return fixed;
   let calculateNonAi: typeof import('../features/chart/nonAiCalculator').calculateNonAi;
@@ -441,6 +442,32 @@ async function hydrateRecords(records: BaziRecord[]): Promise<BaziRecord[]> {
     const full = charts[i];
     return full ? pruneOnRead({ ...record, nonAiResult: full }) : record;
   });
+}
+
+/** 只清除旧版本本地正文；云端正文与本机开关互不影响。沿用读取清洗的持久化/同步出口。 */
+async function stripStaleLocalAnalysis(record: BaziRecord): Promise<BaziRecord> {
+  if (!Object.values(record.aiTasks ?? {}).some((item) => item.source === 'local')) return record;
+  const { localEngineVersion, markLocalEngineStamped } = await import('./localSystem');
+  const version = await localEngineVersion();
+  const tasks = { ...record.aiTasks };
+  let changed = false;
+  let removedBaseline = false;
+  let removedOverview = false;
+  for (const [id, item] of Object.entries(tasks)) {
+    if (item.source === 'local' && item.analysis && item.analysis.engineVersion !== version) {
+      if (id === 'task-01' && record.aiAnalysis) removedBaseline = JSON.stringify(record.aiAnalysis) === JSON.stringify(item.analysis);
+      if (id === OVERVIEW_TASK_ID && record.aiOverview) removedOverview = JSON.stringify(record.aiOverview) === JSON.stringify(item.analysis);
+      delete tasks[id]; changed = true;
+    }
+  }
+  if (!changed) return record;
+  const cleaned: BaziRecord = {
+    ...record, aiTasks: tasks, aiAnalysis: removedBaseline ? undefined : record.aiAnalysis,
+    aiOverview: removedOverview ? undefined : record.aiOverview, aiStatus: 'not_started', aiError: undefined,
+  };
+  pendingPruneWrites.add(queuePruneWrite(cleaned));
+  markLocalEngineStamped(record.id, version);
+  return cleaned;
 }
 
 function canRecompute(record: BaziRecord): boolean {
@@ -873,6 +900,7 @@ export const getBaziRecord = async (id: string): Promise<BaziRecord | undefined>
 };
 export const deleteBaziRecord = async (id: string): Promise<void> => {
   await baziRepository.deleteBaziRecord(id);
+  if (!deleteScopeNotesForRecord(id)) console.warn('本机点评清理失败：', id);
   if (serverActive() || (isTauri && isServerMode())) { try { await apiRecords.remove(id); } catch { /* 离线删除只影响本机 */ } }
 };
 

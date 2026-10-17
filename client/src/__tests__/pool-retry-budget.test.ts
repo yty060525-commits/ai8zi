@@ -109,15 +109,13 @@ describe('固定并发池的重发账(#108 / #110 / #110b)', () => {
     expect(pool, 'checkDone 没把 pending 算进空队判据').toContain('running === 0 && queue.length === 0 && pending.length === 0');
   });
 
-  /** #108 的**批次层**账：恒失败(可重试、非限流 ⇒ 不触发池子冷却)下，一整轮每条任务最多两口子 ——
-   *  step() 首发 1 + 即时重试 1；补跑轮从**同一本账**取额度，余额已被主跑扣光 ⇒ 不该再发第三口。
+  /** #108 的**批次层**账：retries:1 的有效主跑额度为一口，补跑另有一口；retries:2 主跑两口，补跑另有一口。
    *  【实测 · jsdom 2026-10-07】补跑轮对**每条任务**都保证一次额外尝试(own.repairBudget，与主跑的
-   *  own.budget 分账)，所以恒失败的一整轮每条是 **3 口**(首发 + 即时再试 + 补跑一口)、整轮 69 口。
+   *  own.budget 分账)，所以 retries:1 恒失败每条是 **2 口**、整轮 46 口；retries:2 是 3 口、整轮 69 口。
    *  #108 的病灶不是「补跑不许发」，而是「补跑那份额度没和池子的退队重发对账」⇒ 批次逐轮变大
    *  (实测旧写法 92 → 20 → 46)。这一格钉的是**封顶**：多打的那一口必须记在补跑自己的账上、
-   *  被退队重发共同扣减，而不是每条无限再试。retries:2 时同样恰 3 口(实测 69 口)——
-   *  主跑额度更宽但补跑仍只有一口，这是 HEAD 两阶段各自的语义。 */
-  it('整轮恒失败：每条两口子封顶(首发 + 补跑一口)，第三口正是 #121 的超发(#108 / #117)', async () => {
+   *  被退队重发共同扣减，而不是每条无限再试。 */
+  it('整轮恒失败：retries:1 主跑加补跑共两口(#108 / #117)', async () => {
     const record = {
       id: 'budget-r1', name: '账本盘', gender: 'male', birthYear: 1984, birthMonth: 2,
       createdAt: '2025-01-01T00:00:00.000Z', yearPillar: '甲子', monthPillar: '丙寅', dayPillar: '庚午', hourPillar: '壬午',
@@ -132,9 +130,6 @@ describe('固定并发池的重发账(#108 / #110 / #110b)', () => {
     const ids = [...counts.keys()];
     expect(result.aiStatus, '整轮恒失败却报完成').toBe('failed');
     expect(ids.length, '本轮被发起的任务条数(桩即时失败 ⇒ 无要点，总结不发)').toBe(23);
-    // 【实测订正 · jsdom 2026-10-07】HEAD 读 3(首发 + 补跑首发 + 补跑再试，整轮 69)；#121 修好后
-    //   step 的再试也查同一本账 ⇒ 主跑扣光就没有第三口 ⇒ 每条 2、整轮 46。这一格因此是 #121 的
-    //   **行为**判据：把 `if (own.budget.retriesLeft <= 0) break;` 换回 `attempt < retries` 会红在这里。
     for (const id of ids) expect(counts.get(id), `${id} 本轮花掉的请求数不等于「首发 + 补跑一口」`).toBe(2);
     expect([...counts.values()].reduce((a, b) => a + b, 0), '整轮总口数不是 23×2 ⇒ 有任务被多打/少打').toBe(46);
   }, 60000);
@@ -157,7 +152,7 @@ describe('固定并发池的重发账(#108 / #110 / #110b)', () => {
     expect(enqueue[0], '池子的退队重发没接进补跑那本账 ⇒ 补跑烧两口(#108)').toMatch(/roundOf\(t\.taskId\)\.repairBudget/);
   });
 
-  /** #108 / #117 的**结构**判据：三处扣账必须都在，而且**两本账各归各的阶段**。
+  /** #108 / #117 的**结构**判据：四处扣账必须都在，而且**两本账各归各的阶段**。
    *  删掉任何一句 `spend(...)`，行为层的读数都不变(实测订正见上面夹具钉子那句)，只有直接比对源码才看得见。 */
   it('扣账分两本：主跑与补跑各自 spend 同一条任务的账(#108 / #117)', () => {
     const src = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '..', 'data', 'baziOrchestrator.ts'), 'utf8');
@@ -167,7 +162,7 @@ describe('固定并发池的重发账(#108 / #110 / #110b)', () => {
     //   所有按 `$` 锚定的比对都静默失效 —— 剥注释那条如此，将来任何「以分号结尾」之类的形状判据也如此。
     //   所以匹配就只用 `^[ \t]*spend\(` 定位行首，行尾一律先剥掉再比对。
     const spends = (src.match(/^[ \t]*spend\(.*$/gm) ?? []).map((l) => l.replace(/\r$/, ''));
-    expect(spends.length, '扣账点应恰好三处(池子退队 / step 即时重试 / 补跑即时重试)').toBe(3);
+    expect(spends.length, '扣账点应恰好四处(池子退队 / step 首发与即时重试 / 补跑即时重试)').toBe(4);
     // ⚠ 第二次踩同一个坑：`/own\.repairBudget\b/` 在 :491 那句的**行尾注释**里也命中
     //   (`spend(own.budget); // …补跑另有 own.repairBudget`) ⇒ 数到 2、把正确代码判成缺账。
     //   源码类判据一律先剥行尾注释再比对(与上面「只在代码行里查 REPAIR_RETRIES」同一条纪律)。
@@ -182,7 +177,7 @@ describe('固定并发池的重发账(#108 / #110 / #110b)', () => {
     expect(withComment, '夹具变了：没有一句扣账带行尾注释 ⇒ 下面这条钉子测不到东西').toBeTruthy();
     expect(codeOf(withComment!), '剥行尾注释没生效(多半是 CRLF 的孤立 \\r 让无 m 的 $ 锚不住)')
       .not.toMatch(/\/\//);
-    expect(spends.filter((l) => /own\.budget\b/.test(codeOf(l))).length, '主跑那本账没被 step 扣到').toBe(1);
+    expect(spends.filter((l) => /own\.budget\b/.test(codeOf(l))).length, '主跑那本账没被 step 首发与重试扣到').toBe(2);
     expect(spends.filter((l) => /own\.repairBudget\b/.test(codeOf(l))).length, '补跑那本账没被补跑循环扣到 ⇒ 退队重发看不见它(#108)').toBe(1);
     expect(spends.some((l) => /budgetOf\?\.\(item\)/.test(l)), '池子的退队重发没接进账本').toBe(true);
     // 反向钉子：不许出现「给整批共用一份补跑次数」的旧形态 —— 那是 #108「每条固定烧三次、批次不收敛」的成因。

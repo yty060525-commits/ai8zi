@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { deleteBaziRecord, getBaziRecord, refreshRecord, saveBaziRecord } from '../../data/clientRepository';
 import { ABORTED_MESSAGE, analysisHorizon, buildBaziTasks, expectedTaskIds, isRetryableFailure, orchestrateBaziAnalysis, DEFAULT_TONE } from '../../data/baziOrchestrator';
 import { readableChannelError, readableName } from '../../data/chatEngine';
@@ -7,6 +7,8 @@ import { clearChartCache } from '../../data/storageInfo';
 import { sanitizeAnalysisText } from '../chart/elements';
 import { BirthInputModal } from '../chart/BirthInputModal';
 import { isServerMode } from '../../data/serverClient';
+import { canBuildLocalAnalysis, ensureLocalChartComplete, isLocalSystemEnabled, localSystemUnlocked, subscribeLocalSystem } from '../../data/localSystem';
+import { ScopeNoteBox } from './ScopeNoteBox';
 import type { BaziRecord, BaziTaskResult, Gender, NonAiChart } from '../../types/domain';
 import { interpersonalZodiac, zodiacOfBranch } from '../../utils/interpersonal';
 import { chinaDateParts, chinaYmd, chinaYear } from '../../utils/date';
@@ -418,7 +420,8 @@ const keyMissingHint = isServerMode()
   ? '批断尚未可用：现在连着服务器，分析默认由服务器完成，而服务器那边还没配访问凭据，需要在服务器上配置，本客户端的设置页管不到它。想马上能用：点页面右上角设置，在任一服务里填写访问凭据并保存，分析就会改走本机通道。'
   : '批断尚未可用：请先点页面右上角设置，在任一服务里填写访问凭据并保存，再回来点批断分析。';
 
-function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (next: BaziRecord) => void }) {
+function AIAnalysis({ record, showLocalSection, onUpdated }: { record: BaziRecord; showLocalSection: boolean; onUpdated: (next: BaziRecord) => void }) {
+  const localSystemLive = useSyncExternalStore(subscribeLocalSystem, isLocalSystemEnabled, isLocalSystemEnabled);
   const [progress, setProgress] = useState<{ done: number; total: number; label: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [hint, setHint] = useState<string>();
@@ -450,6 +453,11 @@ function AIAnalysis({ record, onUpdated }: { record: BaziRecord; onUpdated: (nex
      判据交给下面那条快用例(M4 侧：新一轮手动批断必须作废上一回的停止意愿)。 */
   const signalAbortedRef = useRef(false);
   const busyRef = useRef(false);
+  const localSystemRef = useRef<{ id: string; on: boolean }>({ id: '', on: false });
+  if (localSystemRef.current.id !== record.id || (localSystemRef.current.on !== localSystemLive && !busyRef.current)) {
+    localSystemRef.current = { id: record.id, on: localSystemLive };
+  }
+  const localSystemOn = localSystemRef.current.on;
   const markBusy = (v: boolean) => { busyRef.current = v; setBusy(v); };
   const cancelAutoRetry = () => { if (autoTimerRef.current) { clearTimeout(autoTimerRef.current); autoTimerRef.current = undefined; } setAutoWaiting(false); };
   // 与聊天面板同一个入口：不钻 prop，App 里监听窗口事件打开设置页。
@@ -619,13 +627,23 @@ const sanitizeCopyLine = (line: string): string => {
     // 每一次开跑都重新取窗口起点(一轮之内仍固定，见 horizonRef 上方注释)：自动重试排在十几秒后、
     // 而这一屏可能已经开着跨了月，继续沿用挂载时刻会把出窗的流月整批重发。
     horizonRef.current = new Date();
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    const isCurrentRequest = () => controllerRef.current === controller && !controller.signal.aborted;
     let enteredBusy = false;
     try {
       const currentTone = toneRef.current;
+      const offline = isLocalSystemEnabled();
+      localSystemRef.current = { id: record.id, on: offline };
+      markBusy(true); enteredBusy = true;
+      const activeEngineVersion = offline ? await (await import('../../data/localSystem')).localEngineVersion() : undefined;
+      if (!isCurrentRequest()) return;
       const expectedIds = expectedTaskIds(base, horizonRef.current);
       const completeTasks = expectedIds.filter((id) => {
         const item = base.aiTasks?.[id];
-        return item?.status === 'completed' && !!item.analysis && (!!item.analysis.explanation || !!item.analysis.pattern);
+        return item?.status === 'completed' && !!item.analysis && (!!item.analysis.explanation || !!item.analysis.pattern)
+          && ((item.source ?? 'cloud') === 'local') === offline
+          && (!offline || item.analysis.engineVersion === activeEngineVersion);
       });
       if (expectedIds.length > 0 && completeTasks.length === expectedIds.length) {
         const ran = usedTone(base.id);   // 本机这条盘上次生成用的语气；undefined = 本机还没跑过(可能是同步/换设备来的)
@@ -634,21 +652,22 @@ const sanitizeCopyLine = (line: string): string => {
           markUsedTone(base.id, currentTone);
           setProgress(null);
           setHint('已存在该语气下的完整分析结果，命中了缓存或已保存的记录。要改语气后重出，请拖动下方语气条再点批断分析。');
+          controllerRef.current = null;
+          markBusy(false); enteredBusy = false;
           return;
         }
         setHint('语气已从' + cnCount(ran) + '调到' + cnCount(currentTone) + '：先清旧结果，按新语气重新生成，请稍候');
         const cleared = await saveBaziRecord({ ...base, aiTasks: undefined, aiAnalysis: undefined, aiOverview: undefined, aiError: undefined, aiStatus: 'not_started' });
+        if (!isCurrentRequest()) return;
         onUpdated(cleared);
         base = cleared;
       }
-      const controller = new AbortController();
-      controllerRef.current = controller;
-      signalAbortedRef.current = false;   // 新一轮开跑：上一回的「立即停止」不再约束这一轮的自动重试
       beginAiSession();
       markBusy(true); enteredBusy = true;
       setHint(undefined); setCopyNote(undefined);
       setProgress({ done: 0, total: expectedIds.length + 2, label: '正在准备任务' });
       const pending = await saveBaziRecord({ ...base, aiStatus: 'pending', aiError: undefined });   // 不再写 toneUsed：语气是本机的事，不进会同步的 record
+      if (!isCurrentRequest()) return;
       onUpdated(pending);
       let lastSnapshot: BaziRecord = pending;
       try {
@@ -659,8 +678,10 @@ const sanitizeCopyLine = (line: string): string => {
             lastSnapshot = persisted;
             onUpdated(persisted);
           } catch { /* 单次进度落库失败不中断整体，最终结果会整体保存 */ }
-        }, { signal: controller.signal, tone: currentTone, now: horizonRef.current });
+        }, { signal: controller.signal, tone: currentTone, now: horizonRef.current, local: offline });
+        if (!isCurrentRequest()) return;
         const saved = await saveBaziRecord({ ...finished });   // 同上：不把语气写进同步记录
+        if (!isCurrentRequest()) return;
         markUsedTone(record.id, currentTone);   // 本机记住：这条盘这次是用 currentTone 生成的
         lastSnapshot = saved;
         setProgress(null);
@@ -682,6 +703,7 @@ const sanitizeCopyLine = (line: string): string => {
         // 必须和下次点「AI 分析」时算出的预期清单同源，否则「结果完整」永远判不出来。
         onUpdated(await refreshRecord(saved));
       } catch (error) {
+        if (controllerRef.current !== controller) return;
         setProgress(null);
         markBusy(false); enteredBusy = false;
         if (controllerRef.current === controller) controllerRef.current = null;   // 同上：异常收尾也要解锁
@@ -694,6 +716,8 @@ const sanitizeCopyLine = (line: string): string => {
         setHint(aborted ? '已停止：已完成的任务已保存，可随时再点批断分析继续。' : '分析失败：' + safeAiError(reason));
       }
     } catch (error) {
+      if (controllerRef.current !== controller) return;
+      controllerRef.current = null;
       if (enteredBusy) markBusy(false);
       setProgress(null);
       setHint('操作失败：' + safeAiError(error instanceof Error ? error.message : String(error)));
@@ -759,6 +783,8 @@ const sanitizeCopyLine = (line: string): string => {
       <span className="tone-scale"><em>犀利</em><em>中立</em><em>温柔夸夸</em></span>
     </div>
     <p className="ai-status" role="status">状态：{statusText[record.aiStatus]}</p>
+    {localSystemOn && <p className="ai-mode-note" role="status">当前为本地系统：点批断分析由本机规则引擎按排盘事实生成，不联网、不消耗额度；可在设置页取消勾选切回云端。</p>}
+    {!localSystemOn && showLocalSection && aiResults.some((item) => item.source === 'local') && <p className="ai-mode-note" role="status">下方带本地标记的段落来自上次本地批断；当前为云端模式，点击批断分析会用云端结果重新计算。</p>}
     {hint && <p role="status">{hint}</p>}
     {autoWaiting && <div className="button-group"><button className="text-button" type="button" onClick={cancelAutoRetryFromHint}>取消自动重试</button></div>}
     {(progress || busy || (record.aiStatus === 'pending' && !progress)) && <div className="progress-block" aria-label="批断分析进度">
@@ -807,8 +833,8 @@ const sanitizeCopyLine = (line: string): string => {
             const analysis = item.analysis;
             const lead = analysis && (analysis.pattern || analysis.strength) ? <p className="scope-lead">格局：{sanitizeAnalysisText(analysis.pattern || '') || '暂无'}，强弱：{sanitizeAnalysisText(analysis.strength || '') || '暂无'}，喜：{(analysis.usefulElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '暂无'}，忌：{(analysis.avoidElements ?? []).map((item) => sanitizeAnalysisText(item)).join('、') || '暂无'}</p> : null;
             return <details key={group.key + '-' + idx} className="scope-item" open={group.key === 'baseline' && item.status === 'completed'}>
-              <summary>{describeScope(item, record)}<span className="scope-status">，{statusText[item.status === 'completed' ? 'completed' : item.status === 'failed' ? 'failed' : 'not_configured']}</span></summary>
-              {item.status === 'completed' && analysis ? <div className="scope-body">{analysis.title ? <p className="scope-title"><strong>{sanitizeAnalysisText(analysis.title)}</strong></p> : null}{lead}<PointsView text={analysis.explanation} /></div> : item.status === 'failed' ? (busy ? <p className="retry-hint">该任务失败，正在自动重新批断，请稍候</p> : <p className="form-error">自动重试多轮后仍失败：{safeAiError(item.error ?? '未知错误')}</p>) : item.status === 'not_configured' ? <p>未配置密钥，本项未生成。<button type="button" className="text-button chat-settings-link" onClick={openSettings}>去设置</button></p> : null}
+              <summary>{describeScope(item, record)}{item.source === 'local' && <span className="local-dot" aria-label="本机批断" title="本机批断" />}<span className="scope-status">，{statusText[item.status === 'completed' ? 'completed' : item.status === 'failed' ? 'failed' : 'not_configured']}</span></summary>
+              {item.status === 'completed' && analysis ? <><div className="scope-body">{analysis.title ? <p className="scope-title"><strong>{sanitizeAnalysisText(analysis.title)}</strong></p> : null}{lead}<PointsView text={analysis.explanation} /></div><ScopeNoteBox recordId={record.id ?? ''} taskId={item.task.taskId} scopeLabel={describeScope(item, record)} /></> : item.status === 'failed' ? (busy ? <p className="retry-hint">该任务失败，正在自动重新批断，请稍候</p> : <p className="form-error">自动重试多轮后仍失败：{safeAiError(item.error ?? '未知错误')}</p>) : item.status === 'not_configured' ? <p>未配置密钥，本项未生成。<button type="button" className="text-button chat-settings-link" onClick={openSettings}>去设置</button></p> : null}
             </details>;
           })}
         </section>;
@@ -816,9 +842,57 @@ const sanitizeCopyLine = (line: string): string => {
     </div>}
   </section>;
 }
+function LocalAnalysisSection({ record }: { record: BaziRecord }) {
+  const [data, setData] = useState<{ lead: string; blocks: Array<{ title: string; text: string }> } | null>(null);
+  const [note, setNote] = useState<string>();
+  const [loading, setLoading] = useState(false);
+  const disabled = !canBuildLocalAnalysis(record);
+  const run = async () => {
+    setLoading(true);
+    let engine: typeof import('../../data/localAnalysis');
+    try {
+      // 点一次才加载一次规则引擎；module 自带缓存，第二次点击不会再走网络。
+      engine = await import('../../data/localAnalysis');
+    } catch (error) {
+      setLoading(false);
+      setData(null); setNote('本地引擎加载失败：' + (error instanceof Error ? error.message : String(error)));
+      return;
+    }
+    const { buildLocalAnalysis, buildLocalTaskAnalysis } = engine;
+    try {
+      /* 详情页这份记录是读取时 hydrate 过的（时段数组已补回），但仍可能来自别的写入路径而带着
+         瘦身数据 —— 统一过一次补算入口，判据与「AI 分析」那条路同源，不在这里各写一份。 */
+      const now = new Date();
+      const chart = await ensureLocalChartComplete(record, now);
+      const base = buildLocalAnalysis(chart, now);
+      if (!base) { setData(null); setNote('缺少基础排盘数据：请先重新计算非批断数据再来本地批断。'); return; }
+      const blocks: Array<{ title: string; text: string }> = [{ title: '本命命局', text: base.explanation }];
+      const overview = buildLocalTaskAnalysis(chart, { taskId: 'local-overview', type: 'overview' }, now);
+      if (overview?.explanation) blocks.push({ title: '未来十年全盘总结', text: overview.explanation });
+      const adjust = buildLocalTaskAnalysis(chart, { taskId: 'local-adjust', type: 'adjustment' }, now);
+      if (adjust?.explanation) blocks.push({ title: '后天调整与职业适配', text: adjust.explanation });
+      setData({ lead: sanitizeAnalysisText(`格局：${base.pattern}，强弱：${base.strength}，喜：${base.usefulElements.join('、') || '无'}，忌：${base.avoidElements.join('、') || '无'}`), blocks: blocks.map((block) => ({ title: sanitizeAnalysisText(block.title), text: sanitizeAnalysisText(block.text) })) });
+      setNote(undefined);
+    } catch (error) {
+      setData(null); setNote('本地批断失败：' + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      setLoading(false);
+    }
+  };
+  const copyAll = async () => { if (data) { await copy([data.lead, ...data.blocks.map((b) => b.title + '\n' + b.text)].join('\n\n')); setNote('已复制本地批断'); } };
+  return <section className="detail-section" aria-label="本地系统">
+    <div className="section-heading"><div><p className="eyebrow">本机规则批断</p><h2>本地系统，本机规则引擎</h2></div>
+      <div className="button-group"><button className="primary-button" type="button" onClick={() => void run()} disabled={disabled || loading}>{disabled ? '先算排盘数据' : loading ? '加载引擎中' : '生成本地批断'}</button>{data && <button className="text-button" type="button" onClick={() => void copyAll()}>复制本地批断</button>}</div></div>
+    <p className="local-note">不联网、不调用云端服务、不消耗额度：由本机规则引擎就上方排盘事实直接批断，含本命、全盘总结与后天调整，供参考与兜底；多因素权衡的综合细断请以批断分析为准。</p>
+    {note && <p role="status">{sanitizeAnalysisText(note)}</p>}
+    {data && <div className="long-text"><p className="scope-lead">{data.lead}</p>{data.blocks.map((block) => <div className="local-block" key={block.title}><p className="scope-lead">{block.title}</p><PointsView text={block.text} /></div>)}</div>}
+  </section>;
+}
 export function PersonDetail({ personId, onBack, refreshKey = 0 }: PersonDetailProps) {
   const [record, setRecord] = useState<BaziRecord>();
   const [notice, setNotice] = useState<string>();
+  const readLocalVisible = () => localSystemUnlocked();
+  const showLocalSection = useSyncExternalStore(subscribeLocalSystem, readLocalVisible, readLocalVisible);
   // 【#151 可修改功能】「修正四柱」弹窗：把当前命盘的四柱预填进排盘那张表，改完直接重算。
   const [editOpen, setEditOpen] = useState(false);
   // 删除要二次确认：手机误触一下就把整条命盘连同已生成的 AI 结果全清掉，且无法撤销。
@@ -884,6 +958,7 @@ export function PersonDetail({ personId, onBack, refreshKey = 0 }: PersonDetailP
     <BasicInfo record={record} /><NonAiAnalysis result={record.nonAiResult} record={record} /><div className="section-actions"><button className="text-button" type="button" onClick={() => void recalculateNonAi()}>重新排盘</button><button className="text-button" type="button" onClick={() => { setNotice(undefined); setEditOpen(true); }}>修正四柱</button></div>
     {/* 弹窗必须挂在 PersonDetail 这一层：它显示的是**引擎拒绝那句**，而拒绝发生在提交之后。 */}
     <BirthInputModal open={editOpen} onClose={() => { setNotice(undefined); setEditOpen(false); }} onSubmit={(pillars) => { void applyPillarEdit(pillars); }} error={notice && editOpen ? notice : undefined} initial={{ yearPillar: loadedRecord.yearPillar, monthPillar: loadedRecord.monthPillar, dayPillar: loadedRecord.dayPillar, hourPillar: loadedRecord.hourPillar }} submitLabel="保存修正" />
-    <AIAnalysis record={record} onUpdated={setRecord} />
+    {showLocalSection && <LocalAnalysisSection record={record} />}
+    <AIAnalysis record={record} showLocalSection={showLocalSection} onUpdated={setRecord} />
   </main>;
 }

@@ -49,6 +49,9 @@ const DELIVERED: Array<{ label: string; file: string }> = [
   { label: '服务器地址与会话', file: 'client/src/data/serverClient.ts' },
   { label: '三通道 AI 适配', file: 'client/src/data/deepseekAdapter.ts' },
   { label: '批断编排', file: 'client/src/data/baziOrchestrator.ts' },
+  { label: '逐条点评存储', file: 'client/src/data/scopeNotes.ts' },
+  { label: '本地批断引擎', file: 'client/src/data/localAnalysis.ts' },
+  { label: '本地系统开关', file: 'client/src/data/localSystem.ts' },
 ];
 
 /** 当前 HEAD 的树里有哪些路径(不读工作副本：未提交的临时文件不算数)。 */
@@ -105,6 +108,22 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
     const gapsOnHead = inTree.slice(gapsStart, gapsEnd);
     expect(gapsOnHead.split('\n').filter((l) => /^\s*\{ task:/.test(l)).length,
       '树上的缺口登记表条数变了(整块摘掉就是 #64 当初静默丢失的形态)').toBe(3);
+    const tableBody = (name: string) => {
+      const lines = inTree.split('\n');
+      const starts = lines.map((line, index) => /^\s*const (DELIVERED|CRITERIA): Array/.test(line) && line.includes(name) ? index : -1).filter((index) => index >= 0);
+      expect(starts.length, `HEAD 中 ${name} 表声明不唯一`).toBe(1);
+      const end = lines.findIndex((line, index) => index > starts[0] && /^\s*\];\s*$/.test(line));
+      expect(end, `HEAD 中 ${name} 表无收尾`).toBeGreaterThan(starts[0]);
+      return lines.slice(starts[0], end + 1).join('\n');
+    };
+    const deliveredOnHead = tableBody('DELIVERED');
+    const criteriaOnHead = tableBody('CRITERIA');
+    for (const gap of GAPS) {
+      expect(deliveredOnHead, `HEAD 的 DELIVERED 未登记 ${gap.file}`).toContain(gap.file);
+      for (const testFile of gap.criteria) {
+        expect(criteriaOnHead, `HEAD 的 CRITERIA 未登记 ${testFile}`).toContain(`file: '${testFile}'`);
+      }
+    }
     /* 反向钉子(#124 的第二层)：当场证明「字面量子串锚」为什么不可信 —— 子串形态命中多处、
        整行形态只命中一处，两者必须同时成立。
        ⚠ 【判据缺陷 #128 · 实测】这里曾经钉的是「宽松行首锚比顶格锚命中更多」。基线上就红了
@@ -238,6 +257,13 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
        HEAD 树里确实存在 client/src/features/person/PersonDetail.tsx，于是「红转绿」被误读成
        「路径写错了」。改参照 '..' 等于把闸门挪到另一棵子树上比对，自己把它解除。 */
     { guards: '#100 详情页失败后自动排期重试', file: 'auto-retry-schedule.test.tsx' },
+    { guards: '#64 逐条点评存储契约', file: 'scope-notes.test.ts' },
+    { guards: '#64 逐条点评详情 UI 与隐私边界', file: 'scope-notes-ui.test.tsx' },
+    { guards: '本地批断规则引擎', file: 'local-analysis.test.ts' },
+    { guards: '本地系统开关与存储', file: 'local-system.test.ts' },
+    { guards: '本地系统设置入口', file: 'local-system-entry.test.tsx' },
+    { guards: '本地系统设置界面契约', file: 'local-system-design.test.tsx' },
+    { guards: '本地批断编排与结果来源', file: 'local-orchestration.test.ts' },
     { guards: '#129 语气默认档三处同源', file: 'tone-default-single-source.test.ts' },
     { guards: '#131 聊天缓存键跨端版本对齐', file: 'cache-key-cross-end.test.ts' },
     { guards: '#132 natal 键序三端同序', file: 'natal-key-order-cross-end.test.ts' },
@@ -392,23 +418,17 @@ describe('账目闭合：标称已交付的功能，其实现文件必须在当�
   it('判据账本非空(掏空它就等于把所有闸门一次性摘掉)', () => {
     expect(CRITERIA.length, '判据账本被掏空了').toBeGreaterThanOrEqual(10);
   });
-});
 
 /* ============================================================================
-   缺口登记表 —— 下面这个 describe **预期是红的**，它是唯一一处把「账目标了完成、
-   代码却不在树上」写进构建的地方。三条反直觉的设计，动手前请先读完：
+   历史恢复义务 —— 保留三条原始 GAPS 身份，证明已完成账目与核心行为判据同时进入 HEAD。
 
    1) 不许删这一行。删掉等于又一次静默丢失：#64 当初就是这么消失的 —— 界面上少一个按钮，
       测试却全绿，因为被测的文件压根不存在(实测：把整项摘掉后其余 13 条照旧全绿)。
    2) 不许改成 xit / it.skip。跳过不参与构建，等于自己把闸门拆了。
-   3) 不许把断言反写成 not.toContain 让它变绿。那样它会永远绿，而且分不清「代码取回来了」
-      和「判据被人摘掉了」。
-
-   补齐路径：从 tag lost-scope-notes(→ 8fb8d03)或 snap-20260928-2022-pre-rollback 取回文件，
-   确认它出现在 HEAD 树里 ⇒ 这一条自然转绿 ⇒ 再把它移进 DELIVERED 并撤掉这条登记。
+   三条原始任务、claimedDone 与路径必须保留；每条都需在 DELIVERED、HEAD 与 CRITERIA/HEAD 正向闭合。
    ========================================================================== */
-const GAPS: Array<{ task: string; claimedDone: boolean; code: string; file: string }> = [
-  { task: '#64', claimedDone: true, code: 'scopeNotes.ts', file: 'client/src/data/scopeNotes.ts' },
+const GAPS: Array<{ task: string; claimedDone: boolean; code: string; file: string; criteria: string[] }> = [
+  { task: '#64', claimedDone: true, code: 'scopeNotes.ts', file: 'client/src/data/scopeNotes.ts', criteria: ['scope-notes.test.ts', 'scope-notes-ui.test.tsx'] },
   /* 「本地系统 / 第四路离线批断」整块都不在当前分支上：#49-58、#67、#70、#72-74、#77 全标着已完成，
      #77 甚至还挂着 in_progress。实测取证(不是推断)：
        · HEAD 的 client/src/data/aiSettings.ts 里没有 OFFLINE_STORAGE_KEY / isOfflineMode ——
@@ -417,25 +437,33 @@ const GAPS: Array<{ task: string; claimedDone: boolean; code: string; file: stri
          lost-scope-notes 那份有，注释还写着「界面对本地结果打绿点标注」；
        · HEAD 与工作副本都搜不到 localAnalysis.ts / localSystem.ts 这两个文件名。
      所以这不是「某个文件没提交」，而是**一次回退把整条链从指针上摘掉了**，连带它的判据一起。 */
-  { task: '#49-52/#67/#70/#72-74', claimedDone: true, code: 'localAnalysis.ts', file: 'client/src/data/localAnalysis.ts' },
-  { task: '#49/#77', claimedDone: true, code: 'localSystem.ts', file: 'client/src/data/localSystem.ts' },
+  { task: '#49-52/#67/#70/#72-74', claimedDone: true, code: 'localAnalysis.ts', file: 'client/src/data/localAnalysis.ts', criteria: ['local-analysis.test.ts', 'local-orchestration.test.ts'] },
+  { task: '#49/#77', claimedDone: true, code: 'localSystem.ts', file: 'client/src/data/localSystem.ts', criteria: ['local-system.test.ts', 'local-system-entry.test.tsx', 'local-system-design.test.tsx'] },
 ];
 
-describe('【已知缺口，红灯是预期状态】标称已完成但实现不在当前树里', () => {
-  it.each(GAPS)('任务 $task 的实现 $code 必须在 HEAD 树里(现在不在 ⇒ 本条为红)', ({ task, claimedDone, code, file }) => {
+describe('历史功能恢复义务：实现与行为判据均在 HEAD', () => {
+  it.each(GAPS)('任务 $task 的实现 $code 与核心判据在 HEAD 闭合', ({ task, claimedDone, file, criteria }) => {
     /* claimedDone 不是装饰：它把「任务清单上的标记」变成判据的输入。
        若有人为了消掉红灯把 claimedDone 改成 false(谎称任务没做完)，这句会立刻红，
        逼他同时去改任务清单 —— 两处不一致就过不了构建。 */
     expect(claimedDone, `任务 ${task} 已不再标称完成，请把这条缺口登记整项撤掉`).toBe(true);
-    expect([...trackedPaths()], `HEAD 树里没有 ${file}`).toContain(code);
-  });
-
-  it('登记的每一项确实还不在树上(防止换一句改参照就把闸门关掉)', () => {
-    /* 反向钉子，实测有效：把 trackedPaths 的参照从 HEAD 换成 lost-scope-notes，
-       上面那条会被动转绿(那个标签的树里当然有这个文件)，而这一句会红。
-       没有这一句，闸门可以在不换分支、不删代码的情况下被一句改参照解除。 */
-    for (const gap of GAPS) {
-      expect([...trackedPaths()], `${gap.code} 其实已在树上，请把这条登记移进 DELIVERED`).not.toContain(gap.file);
+    expect(DELIVERED.map((entry) => entry.file), `${file} 未登记在 DELIVERED`).toContain(file);
+    expect([...trackedPaths()], `HEAD 树里没有 ${file}`).toContain(file);
+    for (const testFile of criteria) {
+      expect(CRITERIA.map((entry) => entry.file), `${testFile} 未登记在 CRITERIA`).toContain(testFile);
+      expect([...trackedPaths()], `HEAD 树里没有核心判据 ${testFile}`).toContain(`client/src/__tests__/${testFile}`);
     }
   });
+
+  it('历史义务表三条均保持正向闭合', () => {
+    for (const gap of GAPS) {
+      expect(DELIVERED.some((entry) => entry.file === gap.file), `${gap.file} 未登记在 DELIVERED`).toBe(true);
+      expect([...trackedPaths()], `${gap.file} 不在 HEAD`).toContain(gap.file);
+      for (const testFile of gap.criteria) {
+        expect(CRITERIA.some((entry) => entry.file === testFile), `${testFile} 未登记在 CRITERIA`).toBe(true);
+        expect([...trackedPaths()], `${testFile} 不在 HEAD`).toContain(`client/src/__tests__/${testFile}`);
+      }
+    }
+  });
+});
 });

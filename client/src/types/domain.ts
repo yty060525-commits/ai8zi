@@ -113,6 +113,8 @@ export interface BaziAIAnalysis {
   strength: string;
   usefulElements: string[];
   avoidElements: string[];
+  /** 本机规则版本，仅 local source 下用于过期识别和复用。 */
+  engineVersion?: string;
   explanation: string;
   /** 古风标题(批大运/流年时的四字对仗，可选) */
   title?: string;
@@ -135,7 +137,7 @@ export interface AiFindings {
   annuals: Array<{ key: string; heading: string; text: string }>;
   monthlies: Array<{ key: string; heading: string; text: string }>;
 }
-export interface BaziTaskResult { task: BaziAnalysisTask; status: 'completed' | 'failed' | 'not_configured'; analysis?: BaziAIAnalysis; error?: string; }
+export interface BaziTaskResult { task: BaziAnalysisTask; status: 'completed' | 'failed' | 'not_configured'; analysis?: BaziAIAnalysis; error?: string; /** 云端缺省按云端处理；local 为本机规则引擎。 */ source?: 'cloud' | 'local'; }
 
 export interface Person {
   id: string;

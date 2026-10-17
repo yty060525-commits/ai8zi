@@ -11,13 +11,12 @@ export interface AiProgress { done: number; total: number; label: string; record
 export type ProgressFn = (progress: AiProgress) => void | Promise<void>;
 
 export const ABORTED_MESSAGE = '已停止：已完成的任务已保存，可随时再点批断分析继续完成剩余任务';
-/** 「一轮」内的再试额度(可变的记账对象，由 step() 的即时重试与池子的冷却重发共同扣减)。 */
+/** 「一轮」内的主跑发口额度(可变的记账对象，由 step() 的首发/再试与池子的冷却重发共同扣减)。 */
 type RoundBudget = { retriesLeft: number };
 
 /** 「一轮」内的**发口额度**：余额就是「这条任务在这一阶段还允许发几次请求」。
- *  一个模型、两处用法，扣账点必须与进门闸门配对(见 step() 与 repairStep())：
- *   · `retriesLeft > 0` 是**进门判据**(排在每次 `await attemptOnce` 之前)；
- *   · `spend()` 是**发口后扣账**，只有余额为正才扣得动 ⇒ 余额永远不为负。
+ *  一个模型、三类用法(见 fixedMapLimit()、step() 与 repairStep())：step 即时重试先查余额再扣，
+ *  首发和池内冷却重发在发口后扣；spend 只有余额为正才扣得动 ⇒ 余额永远不为负。
  *  ⚠ 两条纪律都是实测换来的(jsdom 2026-10-07)：
  *   · 把扣账写成无条件 `-= 1`(旧形态)会把余额打成负数 ⇒ 「查余额」的闸门(#117 补跑名单)读不出
  *     「这一条已经烧过」。当时恒超时盘读数不变(67/90)，因为 step() 还没接这本账；#121 把首发也
@@ -28,36 +27,25 @@ const spend = (budget?: RoundBudget) => { if (budget && budget.retriesLeft > 0) 
 
 /**
  * 缺陷 #108 / #117 的记账口径：**每条任务一本账，分「主跑」与「补跑」两个阶段各记一份**。
- * · 主跑起始余额 = options.retries(默认 1)，step() 的即时重试与 fixedMapLimit 的限流/超时退队重发
- *   从**同一本**扣。⚠ 「同一本」只保证**池子自己**那条路不超发(退队闸门 + spend 双保险)，
- *   挡不住 step() 的即时重试不看余额就进门(旧形态 `attempt < retries` 恒真)：实测恒失败盘 retries:1 时
- *   一条任务一整轮花 **3** 口(首发 + 补跑首发 + 补跑再试)、整轮 69 口，而不是注释里曾经写的「最多 2 次」。
- *   【#121 已做 · 实测矩阵 jsdom 2026-10-07】step() 的再试现在查的是 `own.budget.retriesLeft > 0`，
- *   首发也随即记账 ⇒ 同一本账封住超发。四格读数(23 条任务全走桩、每条 id 计数)：
- *     · 恒失败(上游五百)  retries:1 ：HEAD 每口 3 / 整轮 69  →  修复后每口 2 / 整轮 **46**
- *     · 恒超时            retries:0 ：HEAD 2 / 67            →  修复后 2 / **67**(这条没变)
- *     · 恒超时            retries:1 ：HEAD 3 / 90            →  修复后 2 / **67**
- *   ⇒ 省钱的两格是「恒失败 retries:1」与「恒超时 retries:1」；恒超时 retries:0 的 67 口里那第二口
- *   是池子的冷却重发(它必须能重发，否则限流的任务以 failed 落库 = #104)，不是超发。
- *   代价如实记下：主跑额度被自己的首发扣光 ⇒ 「completed 但缺【小节】」不再在**主跑**内自动重写
- *   (orchestration 的 task-31 用例从 2 口读成 1 口)；补跑名单只收 failed，所以那种盘的结构缺陷
- *   这一轮不再有人修 —— 这是有意的口径变更(省下的正是重复付费的那一口)，不是遗漏。
+ * · 主跑额度 = max(1, options.retries)(默认 1)。普通失败或缺段在 step() 内最多发该额度；retries:2
+ *   是主跑 2 口、retries:3 是 3 口，历史 retries:0/1 都是 1 口。独立补跑仍有一口额度。
+ *   fixedMapLimit 保留既有的限流/超时冷却重发一次语义：该重发也扣主跑账，但池内不再查余额，
+ *   因而可能额外多一口；不可把普通失败的主跑上限误读成包含此冷却重发。completed 缺段仅在主跑有余额时重试，补跑名单只收 failed。
+ *   恒失败普通错误：retries:1 每条 2 口 / 整轮 46，retries:2 每条 3 口 / 整轮 69，retries:3 每条 4 口 / 整轮 92。
  *   补跑阶段另有 REPAIR_BUDGET
  *   那一口(repairStep 与补跑轮的退队重发共用它) —— **不能**让两阶段共用同一本账，实测订正见 roundOf 上方。
  * · 旧写法给整批队列共用的账户充 `retries` 然后两处同时扣：先跑完的任务把余额扣成负数，
  *   后面的任务一口都拿不到(实测第一轮只发 34 口、界面像卡住)；而补跑轮另开新账，于是
  *   同一条任务被烧三次(主 1 + 即时 1 + 补跑 1)，下一轮自动重试又把同样的失败带回来 ⇒
  *   批次逐轮变大永不收敛(实测 92 → 20 → 46)。
- * · 每条任务原本另存一份 `cap`(即时再试上限，与改动前 `attempt < retries` 同形)，用来给「缺【小节】
- *   自动重写」留一口。#121 让 step 的再试也认这本账之后，那个字段没有任何代码读过(死字段)，删掉 ——
- *   它换来的那一次重写正是上面记下的超发口，二者只能留一个，这里留账本。
+ * · retries 是历史主跑额度字段；为兼容既有默认行为，0/1 均有效为一次主跑，较大值直接限制主跑总请求数。
  */
 type TaskRound = { readonly budget: RoundBudget; readonly repairBudget: RoundBudget };
 
 export interface OrchestrateOptions {
   /** 外部可中止整个分析会话(点“停止”时触发) */
   signal?: AbortSignal;
-  /** 单个任务自动重试次数上限(不含第一次尝试)，失败会自动重新分析 */
+  /** 历史主跑额度：有效主跑次数为 max(1, retries)，失败会自动重新分析 */
   retries?: number;
   /** 重试间隔；测试环境自动为 0 */
   retryDelayMs?: number;
@@ -65,6 +53,8 @@ export interface OrchestrateOptions {
   tone?: number;
   /** 窗口起点时刻(默认今天)；只有测试与预建盘需要固定它。 */
   now?: Date;
+  /** 启动时冻结的本机规则模式；不影响三条云端服务配置。 */
+  local?: boolean;
 }
 
 const isTest = typeof import.meta !== 'undefined' && import.meta.env?.MODE === 'test';
@@ -76,7 +66,12 @@ const REPAIR_WAIT_MS = 2500;          // 整批跑完后的自动补跑等待
  *    被 step/池子退队/补跑三处共同扣减 ⇒ 恒超时下每条一整轮最多「主跑 1+1、补跑 1+1」四口封顶，
  *    批次不会像旧写法那样逐轮变大(缺陷 #108 实测 92 → 20 → 46 的成因是补跑那份额度没和退队重发对账)。 */
 const REPAIR_BUDGET = 1;
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
+  if (signal?.aborted) { const error = new Error(ABORTED_MESSAGE); (error as Error & { aborted?: boolean }).aborted = true; reject(error); return; }
+  const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve(); }, ms);
+  const onAbort = () => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); const error = new Error(ABORTED_MESSAGE); (error as Error & { aborted?: boolean }).aborted = true; reject(error); };
+  signal?.addEventListener('abort', onAbort, { once: true });
+});
 /** 判定某条错误是否值得自动重试(密钥类/权限类重试也是白费)。
  *  ⚠ 429 限流**有意判为不可重试**：并发池(:137 fixedMapLimit，:194 用 isRateLimited)已经冷却
  *  COOLDOWN_MS(:124)之后就地重发过一次，这一条不再进 step 的即时重试与补跑名单，否则同一条限流任务
@@ -101,6 +96,7 @@ export const isRetryableFailure = (error: string | undefined): boolean => {
   // 状态码现在一律读成中文「服务返回四零一」，不再出现「HTTP 401」这种形态；
   // 两种写法都留着认：存量 record.aiError 里还有旧格式，漏掉就会对着余额不足白烧两次钱。
   if (/HTTP 40[0-9]|服务返回四[零一二三四五六七八九]/.test(error)) return false;
+  if (/【本地数据不足】/.test(error)) return false;
   return true;
 };
 
@@ -140,12 +136,14 @@ export async function fixedMapLimit<T>(
   concurrency: number,
   worker: (item: T) => Promise<{ status?: string; error?: string } | void>,
   budgetOf?: (item: T) => RoundBudget | undefined,
+  signal?: AbortSignal,
 ): Promise<void> {  const queue = [...items];
   const c = Math.max(1, concurrency);
   let running = 0;
   let cooledUntil = 0;
   let settled = false;
-  let abortReason: unknown = null;
+  let failed = false;
+  let abortReason: unknown;
   let timer: ReturnType<typeof setTimeout> | null = null;
   /** 已因限流/超时退下来、正在等冷却窗的那几条。**不能**塞回 queue：
    *  · append 到尾部 ⇒ 只要初始队列比并发数长，running 就永远降不到 0，收尾判据
@@ -161,17 +159,26 @@ export async function fixedMapLimit<T>(
   // step() 就地写入 baseline，改对象会污染缓存语义；WeakSet 只记引用、池散即清。
   const requeued = new WeakSet<object>();
   await new Promise<void>((resolve, reject) => {
-    const finish = () => { if (settled) return; settled = true; if (timer) { clearTimeout(timer); timer = null; } if (abortReason) reject(abortReason); else resolve(); };
+    const onAbort = () => { failed = true; abortReason = new Error(ABORTED_MESSAGE); (abortReason as Error & { aborted?: boolean }).aborted = true; finish(); };
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      if (timer) { clearTimeout(timer); timer = null; }
+      signal?.removeEventListener('abort', onAbort);
+      if (failed) reject(abortReason); else resolve();
+    };
+    if (signal?.aborted) { onAbort(); return; }
+    signal?.addEventListener('abort', onAbort, { once: true });
     // 只有「没有任务在跑」且「待办与冷却排队都已清空」才算完成；冷却期仍有排队时绝不能提前收尾(否则会静默丢任务)
     const checkDone = () => { if (!settled && running === 0 && queue.length === 0 && pending.length === 0) finish(); };
     const pump = () => {
-      if (settled || abortReason) return;
+      if (settled) return;
       const now = Date.now();
       if (now < cooledUntil) {
         if (timer === null) timer = setTimeout(() => { timer = null; pump(); }, Math.min(1000, cooledUntil - now));
         return;
       }
-      while (pending.length > 0 && running < c) {
+      while (!settled && pending.length > 0 && running < c) {
         const item = pending.shift()!;
         requeued.add(item as object);
         runOne(item);
@@ -184,9 +191,10 @@ export async function fixedMapLimit<T>(
       void (async () => {
         let outcome: { status?: string; error?: string } | void = undefined;
         try { outcome = await worker(item); }
-        catch (error) { abortReason = abortReason ?? error; outcome = undefined; }
+        catch (error) { failed = true; abortReason = error; outcome = undefined; finish(); }
         finally {
           running -= 1;
+          if (settled) return;
           // 「限流 / 超时」一律冷却后重发(不爬坡、不降并发)；上游 5xx 属对方故障，重试即可不必等。
           // 旧写法只记下冷却时刻、条目却已经算「处理过」，于是整批限流的任务以 failed 落库(实测缺陷 #104)。
           // 每条**最多重发一次**：不设上限时「恒失败 + 每次都算超时」会让每个波次都重开三秒窗口并把整批
@@ -253,12 +261,14 @@ export function sanitizeAnalysis(raw: BaziAIAnalysis | undefined): BaziAIAnalysi
   };
   const asStringArray = (v: unknown) => Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
   const optional = (key: 'overall' | 'health' | 'career' | 'wealth' | 'love' | 'notice' | 'title') => (raw && asString(raw[key])) ? { [key]: asString(raw[key]) } : {};
+  const stamped = typeof raw?.engineVersion === 'string' && raw.engineVersion ? { engineVersion: raw.engineVersion } : {};
   return {
     pattern: asString(raw && raw.pattern),
     strength: asString(raw && raw.strength),
     usefulElements: asStringArray(raw && raw.usefulElements),
     avoidElements: asStringArray(raw && raw.avoidElements),
     explanation: asString(raw && raw.explanation),
+    ...stamped,
     ...optional('overall'), ...optional('health'), ...optional('career'), ...optional('wealth'), ...optional('love'), ...optional('notice'), ...optional('title'),
   };
 }
@@ -373,20 +383,45 @@ export function collectFindings(record: BaziRecord, aiTasks: Record<string, Bazi
 
 const makeDefaultRunner = (record: BaziRecord, signal?: AbortSignal, tone?: number): TaskRunner => async (task) => {
   const result = await adapter.analyzeBazi(record, task, { signal, tone });
-  return { task, status: result.status, analysis: 'analysis' in result ? result.analysis : undefined, error: 'error' in result ? result.error : undefined };
+  return { task, status: result.status, analysis: 'analysis' in result ? result.analysis : undefined, error: 'error' in result ? result.error : undefined, source: 'cloud' };
+};
+
+/** 动态补算边界，避免静态引入排盘器形成初始化环。 */
+export function localChartForTask(record: BaziRecord, now: Date = new Date()): Promise<BaziRecord> {
+  return import('./localSystem').then(({ ensureLocalChartComplete }) => ensureLocalChartComplete(record, now));
+}
+
+const makeLocalRunner = (record: BaziRecord, now: Date): TaskRunner => {
+  return async (task) => {
+  const { buildLocalTaskAnalysis } = await import('./localAnalysis');
+  const analysis = buildLocalTaskAnalysis(record, task, now);
+  return analysis
+    ? { task, status: 'completed', analysis, source: 'local' }
+    : { task, status: 'failed', error: '【本地数据不足】缺少该时段排盘数据，请先重新计算排盘', source: 'local' };
+  };
 };
 
 /** 历史脏结果(completed 但无正文)不能算「已有结果」：既不该复用，也不该让总结误以为跑过。 */
-const reusableResult = (item: BaziTaskResult | undefined): boolean =>
-  item?.status === 'completed' && !!item.analysis && (!!item.analysis.explanation || !!item.analysis.pattern);
+const reusableResult = (item: BaziTaskResult | undefined, local: boolean, engine?: string): boolean =>
+  item?.status === 'completed' && !!item.analysis && (!!item.analysis.explanation || !!item.analysis.pattern)
+  && ((item.source ?? 'cloud') === 'local') === local
+  && (!local || item.analysis.engineVersion === engine);
 
 export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskRunner, onProgress?: ProgressFn, options: OrchestrateOptions = {}): Promise<BaziRecord> {
   const { signal, retries = 1 } = options;
   const retryDelayMs = options.retryDelayMs ?? (isTest ? 0 : DEFAULT_RETRY_DELAY_MS);
-  const actualRunner: TaskRunner = runner ?? makeDefaultRunner(record, signal, options?.tone);
   // 窗口起点在一次分析内固定：跨月长跑时「第 9 项/共 24 项」不会中途变样
   const now = options.now ?? new Date();
-  const tasks = buildBaziTasks(record, now);
+  const localEngine = options.local ? (await import('./localSystem')).localEngineVersion : undefined;
+  const engineVersion = localEngine ? await localEngine() : undefined;
+  let tasks = buildBaziTasks(record, now);
+  if (options.local && !runner && (tasks.some((task) => !reusableResult(record.aiTasks?.[task.taskId], true, engineVersion))
+    || !record.nonAiResult?.greatFortunes.length)) {
+    // 一轮只补算一次，并在建任务前补回大运，避免瘦身记录漏掉大运任务。
+    record = await localChartForTask(record, now);
+    tasks = buildBaziTasks(record, now);
+  }
+  const actualRunner: TaskRunner = runner ?? (options.local ? makeLocalRunner(record, now) : makeDefaultRunner(record, signal, options?.tone));
   const total = tasks.length;
   const aiTasks = { ...(record.aiTasks ?? {}) };
   // 滚动十二个月的 干支月/关系 需要历法引擎：在需要时才加载(不占首屏)
@@ -414,7 +449,13 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
     }
     return true;
   };
-  for (const id of Object.keys(aiTasks)) if (!tasks.some((task) => task.taskId === id) || !inWindowNow(aiTasks[id])) delete aiTasks[id];
+  for (const id of Object.keys(aiTasks)) {
+    const item = aiTasks[id];
+    const deferred = id === 'task-30' || id === OVERVIEW_TASK_ID;
+    if ((!deferred && !tasks.some((task) => task.taskId === id)) || !inWindowNow(item)
+      || (((item.source ?? 'cloud') === 'local') !== !!options.local)
+      || (options.local && item.analysis && item.analysis.engineVersion !== engineVersion)) delete aiTasks[id];
+  }
   // 「全盘总结」的占位**不在此处**摆进分母 —— 见下面 flat.length > 0 那一句：它排在时段任务开跑那一刻。
   // 为什么不在建队列时按「存量有没有要点」判有无(我试过，实测 progress-bar-count 2026-10-07)：
   //   一轮从零开始、正文全靠本轮才产出的盘会读出**非单调**的分母 23 → 24 → 25 —— 界面按先看到的那份
@@ -441,6 +482,7 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
   });
   /** 单次调用（失败会带错误文本返回，而不是抛出）。点“停止”后立即以 abort 拒绝，不等网络请求返回。 */
   const attemptOnce = async (task: BaziAnalysisTask): Promise<BaziTaskResult> => {
+    ensureLive();
     // 月度任务补上“该公历月”的干支/关系数据行(供后端最小上下文使用)
     if (task.type === 'monthly' && task.year !== undefined && task.month !== undefined && !task.monthly) {
       task.monthly = singleCalendarMonth({ birthYear: record.birthYear, birthMonth: record.birthMonth, yearPillar: record.yearPillar, monthPillar: record.monthPillar, dayPillar: record.dayPillar, hourPillar: record.hourPillar }, task.year, task.month);
@@ -465,7 +507,7 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
   // 进度落库串行化：并发完成时按顺序排队保存，避免“后写覆盖早写”导致丢任务(共享 aiTasks 每步只增不减)
   let progressTail: Promise<unknown> = Promise.resolve();
   const emitProgress = (progress: AiProgress): Promise<void> => {
-    const run = progressTail.then(() => onProgress?.(progress));
+    const run = progressTail.then(() => { ensureLive(); return onProgress?.(progress); });
     progressTail = run.then(() => undefined, () => undefined);
     return run;
   };
@@ -489,19 +531,18 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
     return required.filter((name) => !text.includes('【' + name + '】'));
   };
 
-  /** 每条任务的再试账本(taskId → 一本)：`budget` 是**主跑阶段**的额度，`repairBudget` 是**补跑阶段**的额度。
+  /** 每条任务的额度账本(taskId → 一本)：`budget` 是**主跑阶段**的额度，`repairBudget` 是**补跑阶段**的额度。
    *  【实测订正 · jsdom 2026-10-07】我原本让两个阶段共用同一本账(#108 的第一版改法)，读数是错的：
    *   · retries:0(线上默认盘的口径)时余额为 0 ⇒ 补跑名单被闸门全部拦掉，一整轮恒失败**一条都不补跑**
    *     (实测 still=1 repairable=0)，#104/#106 那批「失败不再直接停留」的修复等于被关掉；
    *   · retries:1 时主跑把余额扣光 ⇒ 同样不补跑，orchestration.test.ts 的「自动补跑」用例从 3 口掉到 2 口。
-   *  HEAD 的口径本来就是**每阶段各一份**(step: `attempt < retries` / 补跑: `attempt < REPAIR_RETRIES`)，
-   *  #108 真正的病灶是「补跑那份额度没有和池子的退队重发对账」⇒ 恒超时下每条固定烧三次、批次不收敛。
-   *  所以这里保留两份额度，但两份都记在**同一条任务**的账上、都被 spend 扣减。 */
+   *  主跑额度按 max(1, retries) 初始化，补跑固定一口；两本账分别记在同一任务的不同阶段，
+   *  每次发口均由对应阶段扣减。 */
   const rounds = new Map<string, TaskRound>();
   const roundOf = (taskId: string): TaskRound => {
     const existing = rounds.get(taskId);
     if (existing) return existing;
-    const created: TaskRound = { budget: { retriesLeft: retries }, repairBudget: { retriesLeft: REPAIR_BUDGET } };
+    const created: TaskRound = { budget: { retriesLeft: Math.max(1, retries) }, repairBudget: { retriesLeft: REPAIR_BUDGET } };
     rounds.set(taskId, created);
     return created;
   };
@@ -511,43 +552,27 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
     const prev = aiTasks[task.taskId];
 
     // 历史脏结果(completed 但无正文)必须重跑
-    const reusable = reusableResult(prev);
+    const reusable = reusableResult(prev, !!options.local, engineVersion);
     if (reusable) {
       done += 1;
       const progress: AiProgress = { done, total: totalShown(), label: taskLabel(task), record: snapshot() };
       await emitProgress(progress);
       return prev;
     }
-    /* 【缺陷 #121】HEAD 把第一次 `await attemptOnce` 写在 while **之外**，于是 retries:0(线上默认盘
-       就是这个口径)时主跑一次都不再试 ⇒ flat.slice(1) 那 22 条压根没进过 step()、也没往 aiTasks 写
-       任何东西。补跑轮用的是同一个 step：旧写法照样无条件先发一口、再把「缺【小节】自动重写」那一口
-       也发出去 ⇒ 一条任务整轮烧 **3** 口(首发 + 补跑首发 + 补跑再试)，而注释承诺的是 2 口封顶(#108)。
-       更糟的是那 22 条从没被计数 ⇒ done 停在 1/23，界面像卡住，随后以 failed 落库并排第二次自动重试。
-       ⚠ 三个形态都实测过(jsdom 2026-10-07)，只有下面这个同时做到「每条两口子封顶」和「一条都不漏发」：
-       · 「循环头查余额 → 扣 → 发」(照抄 repairStep 的三步)是**过度修正**：池子的退队重发与 step 花
-         同一本账，恒超时/恒失败盘里退队那一句先把这条任务的额度扣光 ⇒ 22 条一条都发不出
-         (steps 读 0、task-02 读 0 口、总结占位永远摆不上、done 停在 1/23)，等于用「不花钱」换掉「少花钱」。
-       · 只给**再试**查余额、首发完全不记账(HEAD 的无闸门原样保留)则反过来超发：补跑轮用的是同一个 step，
-         那条任务仍烧三口。所以首发的 `spend` 不能省，但再试**不再另加一句扣账** —— retries 的语义是
-         「首发之外还能再试几次」，余额就是那个额度；多扣一句会让 retries:1 的盘一次再试都发不出
-         (实测 task-31 读 1、恒超时盘整轮读数同步下掉)。
-       · 试过「循环头查余额 → 扣 → 发」的完整形态(与 repairStep 逐字同形)⇒ 见上面第一条，整批不发。
-       最终形态 = **无闸门首发 + 首发随即记账 + 再试查余额**。恒失败盘每条两口子封顶(首发 + 补跑一口)。
-       代价如实记下：主跑额度被自己的首发扣光 ⇒ 「completed 但缺【小节】」不再在**主跑**内自动重写
-       (orchestration 的 task-31 用例从 2 口读成 1 口)，而补跑名单只收 failed ⇒ 那种结构缺陷这一轮没人修。
-       这是有意的口径变更(省下的正是重复付费的那一口)，不是遗漏；实测整轮读数见上方 roundOf 那段。 */
+    /* 主跑额度按 max(1, retries) 控制 step() 的普通失败/缺段发口；池内冷却重发保留既有额外一次语义，
+       并从同一本账扣减。completed 缺段不会进入独立 failed 补跑名单。 */
     let result: BaziTaskResult = sanitizeCompleted(await attemptOnce(task));
     spend(own.budget);   // 首发这一口记在**这条任务主跑那本账**上：池子的退队重发也从同一本扣(补跑另有 own.repairBudget)
     for (;;) {
       const missing = result.status === 'completed' ? missingOf(task.type, result) : [];
       const retryable = result.status === 'failed' && isRetryableFailure(result.error);
       if (!retryable && missing.length === 0) break;
-      /* 再试必须查余额：HEAD 这里读的是纯计数器 `attempt < retries`，于是「缺【小节】自动重写」那一口
-         不看账 ⇒ 恒失败盘每条烧三口(#121)。注意闸门排在扣账之前 —— 反过来的话退队重发已把这本账扣光，
-         step 连一次再试都拿不到(实测 task-31 从 2 口被打成 1 口的另一种形态：整批一条都不发)。 */
+      /* 再试也必须查余额；闸门排在扣账之前，确保池子的冷却重发与 step 重试共享同一额度。 */
       if (own.budget.retriesLeft <= 0) break;
       ensureLive();
-      if (retryDelayMs > 0) await sleep(retryDelayMs);
+      if (retryDelayMs > 0) await sleep(retryDelayMs, signal);
+      ensureLive();
+      spend(own.budget);
       result = sanitizeCompleted(await attemptOnce(task));
     }
     ensureLive(); // 若停止发生在最后一次请求收尾阶段，丢弃该结果(不落库)
@@ -602,7 +627,7 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
   if (flat.length > 0) summarySlot = true;                  // 时段任务要跑了：给「全盘总结」留一格
   if (flat.length > 0) await step(flat[0]);                 // 预热：建立全局公共前缀
   // 组间并发、组内也并发：整批交给固定池一次性发满，只有「限流/超时」才冷却重发。
-  if (flat.length > 1) await fixedMapLimit<BaziAnalysisTask>(flat.slice(1), FIXED_CONCURRENCY.scope, (task) => step(task), (t) => roundOf(t.taskId).budget);
+  if (flat.length > 1) await fixedMapLimit<BaziAnalysisTask>(flat.slice(1), FIXED_CONCURRENCY.scope, (task) => step(task), (t) => roundOf(t.taskId).budget, signal);
   // 工作/生活/职业知识：最后才上传(等大运流年流月都分析完，避免上下文污染)
   if (favorite && baselineResult.status === 'completed') {
     const guide: ElementGuide = ELEMENT_GUIDES[favorite];
@@ -615,7 +640,7 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
     tasks.push(adjustmentTask);
     adjustmentRan = true;
     // 注意：这里必须跑「刚创建的那一条」，不能用 tasks.filter(type) —— 恢复旧记录时同一类型可能已有一条历史任务，filter 会把同一条塞进队列两次。
-    await fixedMapLimit<BaziAnalysisTask>([adjustmentTask], 1, (task) => step(task), (t) => roundOf(t.taskId).budget);
+    await fixedMapLimit<BaziAnalysisTask>([adjustmentTask], 1, (task) => step(task), (t) => roundOf(t.taskId).budget, signal);
   }
   // 全盘总结：把已算出的大运/流年/流月要点交给模型，判断「哪些时间节点真正值得关注」。
   // 必须排在时段任务之后 —— 它依赖前序结论；单独一条请求，不参与并发。
@@ -626,7 +651,7 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
   if (hasFindings) {
     const overviewTask: BaziAnalysisTask = { taskId: OVERVIEW_TASK_ID, type: 'overview', baseline: { summary: baselineSummaryText, analysis: baselineResult.analysis } as never, findings };
     tasks.push(overviewTask);
-    await fixedMapLimit<BaziAnalysisTask>([overviewTask], 1, (task) => step(task, roundOf(task.taskId)), (t) => roundOf(t.taskId).budget);   // 上一轮已跑出正文时 step() 原样复用，不再发请求
+    await fixedMapLimit<BaziAnalysisTask>([overviewTask], 1, (task) => step(task, roundOf(task.taskId)), (t) => roundOf(t.taskId).budget, signal);   // 上一轮已跑出正文时 step() 原样复用，不再发请求
   }
   ensureLive();
   // 整批跑完后自动“补跑一轮”：把仍然失败(且属于可重试因素)的任务再调一次 AI，
@@ -644,7 +669,8 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
   const repairable = stillFailed.filter((task) => roundOf(task.taskId).repairBudget.retriesLeft > 0);
   if (repairable.length > 0 && !signal?.aborted) {
     const waitMs = isTest ? 0 : REPAIR_WAIT_MS;
-    if (waitMs > 0) await sleep(waitMs);
+    if (waitMs > 0) await sleep(waitMs, signal);
+    ensureLive();
     // total 必须走 totalShown()：这里若写 tasks.length，会把收尾刚撤回的「全盘总结」占位又摆回来
     // —— 实测缺陷 #119：retries:0、无要点的盘末条读 24/25(界面停在「共二五」而实际只有二四条)。
     if (!signal?.aborted) await onProgress?.({ done, total: totalShown(), label: '自动重试失败任务，共' + cnCount(repairable.length) + '条', record: snapshot() });
@@ -670,7 +696,8 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
         const missing = next.status === 'completed' ? missingOfType(next) : [];
         const retryable = next.status === 'failed' && isRetryableFailure(next.error);
         if (!retryable && missing.length === 0) break;
-        if (retryDelayMs > 0) await sleep(retryDelayMs);
+        if (retryDelayMs > 0) await sleep(retryDelayMs, signal);
+        ensureLive();
       }
       // 一条都没发到(上面的名单已拦住，留作兜底)：保持本轮已有的那份结论原样，不覆盖、不虚报。
       if (!result) return aiTasks[task.taskId] ?? { task, status: 'failed' as const, error: '本轮重试额度已用完' };
@@ -681,7 +708,7 @@ export async function orchestrateBaziAnalysis(record: BaziRecord, runner?: TaskR
     // 补跑轮的冷却重发也在池内走完(见 fixedMapLimit 的退队重发)，调用方不再另起一波 ——
     // 旧写法在函数返回后再发一整批，那一波全落在详情页的自动重试额度之外：界面已进入静默期，
     // 请求却还在滴灌，实测封顶之后仍多出 22 次调用。
-    await fixedMapLimit<BaziAnalysisTask>(repairable, FIXED_CONCURRENCY.repair, repairStep, (t) => roundOf(t.taskId).repairBudget);
+    await fixedMapLimit<BaziAnalysisTask>(repairable, FIXED_CONCURRENCY.repair, repairStep, (t) => roundOf(t.taskId).repairBudget, signal);
     ensureLive();
   }
   const statuses = Object.values(aiTasks).map((item) => item.status);

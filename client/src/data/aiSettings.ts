@@ -10,6 +10,16 @@ export interface AiProviderStatus {
   qwen: CredentialStatus;
 }
 
+/** 本机生成方式开关；不进入云端凭据或 provider 选择。 */
+export const OFFLINE_STORAGE_KEY = 'mingli.offline';
+export function isOfflineMode(): boolean {
+  try { return localStorage.getItem(OFFLINE_STORAGE_KEY) === '1'; } catch { return false; }
+}
+export function setOfflineMode(on: boolean): boolean {
+  try { if (on) localStorage.setItem(OFFLINE_STORAGE_KEY, '1'); else localStorage.removeItem(OFFLINE_STORAGE_KEY); } catch { /* 隐私模式下仍按本次操作返回 */ }
+  return on;
+}
+
 
 const inTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 const credKey = (provider: AiProvider) => 'mingli.cred.' + provider;
@@ -82,6 +92,10 @@ export const PROVIDER_LABEL: Record<AiProvider, string> = { deepseek: '通道一
 export function resetAiSettingsForTests(): void {
   try {
     localStorage.removeItem('mingli.provider');
+    localStorage.removeItem(OFFLINE_STORAGE_KEY);
+    localStorage.removeItem('mingli.local.unlocked');
+    localStorage.removeItem('mingli.local.on');
+    localStorage.removeItem('mingli.local.hidden');
     for (const p of ['deepseek', 'kimi', 'qwen'] as AiProvider[]) localStorage.removeItem('mingli.cred.' + p);
   } catch { /* 非浏览器环境忽略 */ }
 }
