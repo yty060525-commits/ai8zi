@@ -1,0 +1,1 @@
+var e=`子丑寅卯辰巳午未申酉戌亥`,t=[`鼠`,`牛`,`虎`,`兔`,`龙`,`蛇`,`马`,`羊`,`猴`,`鸡`,`狗`,`猪`],n=[[0,4,8],[1,5,9],[2,6,10],[3,7,11]];function r(n){let r=e.indexOf(n);return r>=0?t[r]:n}function i(r){let i=e.indexOf(r),a=e=>t[(e%12+12)%12];return i<0?{sanHe:[],liuHe:[],chong:[],hai:[]}:{sanHe:n[i%4].filter(e=>e!==i).map(e=>a(e)),liuHe:[a(1-i)],chong:[a(i+6)],hai:[a(7-i)]}}export{r as n,i as t};
