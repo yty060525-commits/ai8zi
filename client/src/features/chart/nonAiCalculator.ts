@@ -490,16 +490,28 @@ const SAN_HE_BRANCHES = ['申子辰', '巳酉丑', '寅午戌', '亥卯未'] as 
 interface Node { value: string; layer: RelationshipDetail['sourceLayer']; name: string; }
 
 /** 时段(大运/流年/流月)一行的公共事实。两处口径收紧，都是为了让模型不必自己推算：
- *  1) branchTenGods：该期地支藏干及其十神 —— 提示词要求按藏干论生扶克制，缺了它模型只能自排藏干；
+ *  1) stemElement / branchTenGods：该期天干五行、地支藏干及其十神与五行 —— 提示词要求按藏干论生扶克制，
+ *     缺了它模型只能自排藏干，实测还会把喜用之土(印)说成「财源」；
  *  2) relationshipDetails 只留「时段↔本命」之交 —— pairHits 的参与集含本命四柱，本命自带的冲刑会混进
  *     时段数据，模型据此把本命的子午冲说成「今年新逢六冲」。本命之间的关系在 natal.relationships 里另有。 */
 function periodFacts(dayStem: string, ganZhi: string, pillars: string[], participants: Node[]) {
   return {
     tenGod: tenGodOf(dayStem, ganZhi[0]),
-    branchTenGods: (HIDDEN_STEMS[ganZhi[1]] ?? []).map((stem) => ({ stem, tenGod: tenGodOf(dayStem, stem) })),
+    stemElement: ELEMENTS[stemElementIndex(ganZhi[0])],
+    branchTenGods: (HIDDEN_STEMS[ganZhi[1]] ?? []).map((stem) => ({ stem, tenGod: tenGodOf(dayStem, stem), element: ELEMENTS[stemElementIndex(stem)] })),
     relationships: fortuneFacts(ganZhi, pillars),
-    relationshipDetails: pairHits(participants).filter((d) => d.sourceLayer !== 'natal' || d.targetLayer !== 'natal'),
+    relationshipDetails: pairHits(participants)
+      .filter((d) => d.sourceLayer !== 'natal' || d.targetLayer !== 'natal')
+      .map((d) => (d.type === 'ke' && keWinnerIsSecond(d.sourcePillar, d.targetPillar)
+        ? { ...d, sourceLayer: d.targetLayer, sourcePillar: d.targetPillar, targetLayer: d.sourceLayer, targetPillar: d.sourcePillar }
+        : d)),
   };
+}
+
+/** pairHits 为了把时段放在前面，相克一律写成「时段→本命」，与真实克向无关(壬午克丁未会写成丁未→壬午)。
+ *  模型按 source→target 读克向就会说反，这里把相克改成「克者在前」，与 relationships.ke 的文字同向。 */
+function keWinnerIsSecond(a: string, b: string): boolean {
+  return mod((indexOfStem(b[0]) >> 1) + 2, 5) === indexOfStem(a[0]) >> 1;
 }
 
 /** 把参与集合 items 的所有成对命中展开为关系明细；层序非命局优先为 source。 */

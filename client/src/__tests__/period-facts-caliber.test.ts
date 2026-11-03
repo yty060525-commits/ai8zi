@@ -27,6 +27,9 @@ describe('时段事实口径', () => {
       expect(row.branchTenGods?.length, row.ganZhi).toBeGreaterThan(0);
     }
     const dingWei = nonAiResult.annualFortunes.find((r) => r.ganZhi === '丁未')!;
-    expect(dingWei.branchTenGods).toEqual([{ stem: '己', tenGod: '正印' }, { stem: '丁', tenGod: '正官' }, { stem: '乙', tenGod: '正财' }]);
+    // 相克按真实克向：丁火克庚金(时段在前)，壬水克丁火(本命在前)
+    const ke = (dingWei.relationshipDetails ?? []).filter((d) => d.type === 'ke').map((d) => d.sourcePillar + '克' + d.targetPillar).sort();
+    expect(ke).toEqual([...dingWei.relationships.ke].sort());
+    expect(dingWei.branchTenGods).toEqual([{ stem: "己", tenGod: "正印", element: "土" }, { stem: "丁", tenGod: "正官", element: "火" }, { stem: "乙", tenGod: "正财", element: "木" }]);
   });
 });
