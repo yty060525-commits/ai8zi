@@ -34,9 +34,9 @@ describe('时段事实口径', () => {
     const dec = singleCalendarMonth(natal as never, 2026, 12);
     const notes = (dec.relationshipDetails ?? []).map((d) => d.note);
     expect(dec.ganZhi).toBe('庚子');
-    expect(notes).toContain('丙火克庚金，天干相克');
-    expect(notes).toContain('子午相冲，只在地支，天干不论');
-    expect((dingWei.relationshipDetails ?? []).map((d) => d.note)).toContain('未午相合，只在地支，天干不论');
+    expect(notes).toContain('天干丙火克庚金');
+    expect(notes).toContain('地支子午相冲');
+    expect((dingWei.relationshipDetails ?? []).map((d) => d.note)).toContain('地支未午相合');
     expect(dingWei.branchTenGods).toEqual([{ stem: "己", tenGod: "正印", element: "土" }, { stem: "丁", tenGod: "正官", element: "火" }, { stem: "乙", tenGod: "正财", element: "木" }]);
   });
 });

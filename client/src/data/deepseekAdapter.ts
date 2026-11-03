@@ -278,7 +278,7 @@ export function buildTaskPromptText(record: BaziRecord, kind: PromptTaskKind, ye
 
 /** natal 里跨通道必须同序的键：服务器多带了 gender/birthYear/lunarDate/elementRatio/naYin/
  *  twelveLongevity，两端只比「共有键的相对顺序」；这份清单与 promptSeams.mts 取样器同源。 */
-export const NATAL_SHARED_KEYS = ['pillars', 'dayMaster', 'zodiac', 'solarDate', 'elements', 'tenGods', 'hiddenStems', 'patternFacts', 'strengthScore', 'tiaohouFacts', 'luckStart', 'shenSha', 'relationships', 'tenGodDetails', 'chenggu', 'fortuneDirection', 'zodiacCompatibility'];
+export const NATAL_SHARED_KEYS = ['gender', 'pillars', 'dayMaster', 'zodiac', 'solarDate', 'elements', 'tenGods', 'hiddenStems', 'patternFacts', 'strengthScore', 'tiaohouFacts', 'luckStart', 'shenSha', 'relationships', 'tenGodDetails', 'chenggu', 'fortuneDirection', 'zodiacCompatibility'];
 
 /** 拆成「跨通道应逐字节相同」的几段：natal 标题/共有键顺序 + 任务指令 + 输出硬性要求 + 语气标题。
  *  供 prompt-parity 测试比对两端**真实拼出的正文**，而不是只比常量定义(常量抄对了、但拼装顺序
@@ -386,6 +386,8 @@ function assembleUserContent(record: BaziRecord, task?: BaziAnalysisTask, tone?:
   const elementFacts = effectiveElementFacts(nonAi, countElements([record.yearPillar, record.monthPillar, record.dayPillar, record.hourPillar]));
   const extras = manualNatalFacts(nonAi);
   const natal = {
+    // 性别打头，与服务器/桌面端同序。缺了它模型不知男女，实测会写「男命以财为妻，女命以官为夫」两头说。
+    gender: record.gender,
     pillars: { year: record.yearPillar, month: record.monthPillar, day: record.dayPillar, hour: record.hourPillar },
     dayMaster: nonAi?.dayMaster, zodiac: nonAi?.zodiac, solarDate: nonAi?.solarDate,
     // 五行计数按四柱现算，不取库里的存量数字：存储可能来自旧口径引擎，
