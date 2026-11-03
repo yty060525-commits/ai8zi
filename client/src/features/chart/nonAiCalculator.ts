@@ -489,6 +489,19 @@ const SAN_HE_BRANCHES = ['申子辰', '巳酉丑', '寅午戌', '亥卯未'] as 
 
 interface Node { value: string; layer: RelationshipDetail['sourceLayer']; name: string; }
 
+/** 时段(大运/流年/流月)一行的公共事实。两处口径收紧，都是为了让模型不必自己推算：
+ *  1) branchTenGods：该期地支藏干及其十神 —— 提示词要求按藏干论生扶克制，缺了它模型只能自排藏干；
+ *  2) relationshipDetails 只留「时段↔本命」之交 —— pairHits 的参与集含本命四柱，本命自带的冲刑会混进
+ *     时段数据，模型据此把本命的子午冲说成「今年新逢六冲」。本命之间的关系在 natal.relationships 里另有。 */
+function periodFacts(dayStem: string, ganZhi: string, pillars: string[], participants: Node[]) {
+  return {
+    tenGod: tenGodOf(dayStem, ganZhi[0]),
+    branchTenGods: (HIDDEN_STEMS[ganZhi[1]] ?? []).map((stem) => ({ stem, tenGod: tenGodOf(dayStem, stem) })),
+    relationships: fortuneFacts(ganZhi, pillars),
+    relationshipDetails: pairHits(participants).filter((d) => d.sourceLayer !== 'natal' || d.targetLayer !== 'natal'),
+  };
+}
+
 /** 把参与集合 items 的所有成对命中展开为关系明细；层序非命局优先为 source。 */
 function pairHits(items: Node[]): RelationshipDetail[] {
   const out: RelationshipDetail[] = [];
@@ -796,7 +809,7 @@ export function calculateNonAi(
     const year = currentYear + i;
     const ganZhi = gzAt(baseIndex + i);
     const participants = [...natalItems, { value: ganZhi, layer: 'annual' as const, name: String(year) }];
-    return { year, month: 1, ganZhi, tenGod: tenGodOf(day, ganZhi[0]), relationships: fortuneFacts(ganZhi, pillars), relationshipDetails: pairHits(participants) };
+    return { year, month: 1, ganZhi, ...periodFacts(day, ganZhi, pillars, participants) };
   });
 
   // 流月：每年 12 个节月(立春起=寅月…)，五虎遁定月干 → 纯算术。
@@ -805,7 +818,7 @@ export function calculateNonAi(
     return Array.from({ length: 12 }, (_, m) => {
       const ganZhi = STEMS[mod(firstStem + m, 10)] + BRANCHES[mod(2 + m, 12)];
       const participants = [...natalItems, { value: ganZhi, layer: 'monthly' as const, name: year + '-' + (m + 1) }];
-      return { year, month: m + 1, ganZhi, tenGod: tenGodOf(day, ganZhi[0]), relationships: fortuneFacts(ganZhi, pillars), relationshipDetails: pairHits(participants) };
+      return { year, month: m + 1, ganZhi, ...periodFacts(day, ganZhi, pillars, participants) };
     });
   });
 
@@ -835,7 +848,7 @@ export function calculateNonAi(
        无起运(兜底锚点)时留空，调用方退回整数年区间。 */
     const onsetDate = luckOnset ? luckOnsetAt(luckOnset, k) : '';
     const endDate = luckOnset ? prevDayYmd(luckOnsetAt(luckOnset, k + 1)) : '';
-    return { ganZhi, startYear, endYear: startYear + 9, onsetDate, endDate, tenGod: tenGodOf(day, ganZhi[0]), relationships: fortuneFacts(ganZhi, pillars), relationshipDetails: pairHits(participants) };
+    return { ganZhi, startYear, endYear: startYear + 9, onsetDate, endDate, ...periodFacts(day, ganZhi, pillars, participants) };
   });
 
   // 旺衰评分只算一次，供 patternFacts 与返回对象共用
@@ -901,8 +914,6 @@ export function singleCalendarMonth(
   const participants = [...natalItems, { value: ganZhi, layer: 'monthly' as const, name: year + '-' + month }];
   return {
     year, month, ganZhi,
-    tenGod: tenGodOf(day, ganZhi[0]),
-    relationships: fortuneFacts(ganZhi, pillars),
-    relationshipDetails: pairHits(participants),
+    ...periodFacts(day, ganZhi, pillars, participants),
   };
 }

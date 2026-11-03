@@ -19,6 +19,7 @@ import { isServerMode, serverFetch, ServerError } from './serverClient';
 import { chatDirect, toneInstructionText } from './deepseekAdapter';
 import { getBrowserCredential } from './aiSettings';
 import { countElements, sanitizeChatText } from '../features/chart/elements';
+import { singleCalendarMonth } from '../features/chart/nonAiCalculator';
 import { effectiveNonAiFacts, effectiveElementFacts, manualNatalFacts } from '../shared/manualNonAi';
 /* 「本月/今年」这类相对时间锚点必须按北京口径读，不能用设备本地字段：机器时区不是东八区时，
    UTC 16:00–24:00 那段本地日期比北京早一天，「本月」会答成上个月、「今年」会答成去年。
@@ -276,7 +277,10 @@ export function buildPeriodFacts(record: BaziRecord, plan: ChatPlan): Record<str
   const decade = (n.greatFortunes ?? []).find((row) => Number(row.startYear) <= Number(y) && Number(y) <= Number(row.endYear));
   if (decade) { out.decade = decade; out.decadeHits = summarizeHits(decade, decade.ganZhi); }
   if (plan.month !== undefined) {
-    const monthly = (n.monthlyFortunes ?? []).find((row) => Number(row.year) === Number(y) && Number(row.month) === Number(plan.month));
+    // 流月一律按「公历月 15 日所在节月」取(与流月任务同一口径，见 singleCalendarMonth)。
+    // monthlyFortunes 的 month 是节月序号(1＝寅月≈公历二月)，按公历月去查会整整错一个月，
+    // 模型拿到的干支与已算好的流月批断对不上，只能自己圆。
+    const monthly = record.dayPillar ? singleCalendarMonth(record, Number(y), Number(plan.month)) : undefined;
     if (monthly) { out.monthly = monthly; out.monthlyHits = summarizeHits(monthly, monthly.ganZhi); }
   }
   if (!out.annual && !out.decade && !out.monthly) return undefined;

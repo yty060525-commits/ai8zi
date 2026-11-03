@@ -507,7 +507,7 @@ const SCOPE_PREFIX: &str = concat!(
     "title 只能用干支+四字直书(如：卯戌六合和合之象)或古典口诀风格，不得编造伪古文引文；标题里也不要出现任何符号，只用汉字。",
     "explanation 必须依次各出现一次【健康】【事业】【财运】【爱情】【刑冲克害批注】，顺序一致，不得合并、省略或改名。",
     "\n\n# 时段判断标准(硬性)\n",
-    "1. 先读【事实数据】里「旺衰评分」的档位与其中的喜忌方向：本期干支(含大运)属喜用则论顺、属忌神则论逆，生扶与克制关系以【事实数据】的「藏干」和「本期命中的刑冲合害」为准，禁止自造五行关系。\n",
+    "1. 先读【事实数据】里「旺衰评分」的档位与【本命结论】给出的喜忌：本期干支(含大运)属喜用则论顺、属忌神则论逆。本期天干十神看该期的「十神」，地支所藏之干与其十神看该期的「地支藏干十神」，生扶与克制关系以这两项和「本期命中的刑冲合害」为准，禁止自排藏干、自算十神、自造五行关系。\n",
     "2. 【刑冲克害批注】只依据【事实数据】里本期流年、流月、大运各自命中的刑冲合害逐条编号，每行格式：数字. 关系（干支实例）：一句影响，例如 1. 三合（巳酉丑半合）：…；若没有任何命中则写一条：1. 本期无重大刑冲克害（仅提示）。不得把本命已有的刑冲合害之说成本期新发生的作用。\n",
     "3. 四个主题(健康/事业/财运/爱情)每段至少 1 条编号要点，须点明「本期相对本命是加力还是减力」并给出依据(哪个十神、什么作用)。\n",
     "4. 各主题全文只出现一次，禁止先短句后长文重复两遍。每个主题内部必须分点陈述：每条单独一行、行首用 1. 2. 3. 编号，一句话一条，不要整段连排。\n",
@@ -724,13 +724,12 @@ pub fn build_ai_request_payload(record: &BaziRecord, task: &AiTaskInput) -> Resu
                     if !gz.is_empty() { scope["decadeHits"] = serde_json::to_value(summarize_hits(&decade, gz)).unwrap_or(Value::Null); }
                 }
                 if let Some(m) = task.month {
-                    let mut monthly = pick_by_year_month(&parsed["monthlyFortunes"], y, m);
-                    if monthly == Value::Null {
-                        // 滚动十二个月可能越过引擎预生成的节月序列：使用客户端随任务带来的月度行
-                        if let Some(inline) = task.monthly.as_ref() {
-                            if inline.get("ganZhi").and_then(|v| v.as_str()).is_some() { monthly = inline.clone(); }
-                        }
-                    }
+                    // 客户端随任务带来的月度行优先：它按「公历月 15 日所在节月」取，与流月任务同口径。
+                    // monthlyFortunes 的 month 是节月序号(1＝寅月≈公历二月)，按公历月去查会整整错一个月，只作兜底。
+                    let mut monthly = task.monthly.as_ref()
+                        .filter(|inline| inline.get("ganZhi").and_then(|v| v.as_str()).is_some())
+                        .cloned().unwrap_or(Value::Null);
+                    if monthly == Value::Null { monthly = pick_by_year_month(&parsed["monthlyFortunes"], y, m); }
                     monthly = facts_only(&monthly);
                     if monthly != Value::Null {
                         scope["monthly"] = monthly.clone();

@@ -5,6 +5,7 @@ import { readableChannelError, readableName } from '../../data/chatEngine';
 import { beginAiSession, cancelAiSession } from '../../data/deepseekAdapter';
 import { clearChartCache } from '../../data/storageInfo';
 import { sanitizeAnalysisText } from '../chart/elements';
+import { singleCalendarMonth } from '../chart/nonAiCalculator';
 import { isServerMode } from '../../data/serverClient';
 import { canBuildLocalAnalysis, ensureLocalChartComplete, isLocalSystemEnabled, localSystemUnlocked, subscribeLocalSystem } from '../../data/localSystem';
 import { ScopeNoteBox } from './ScopeNoteBox';
@@ -98,7 +99,8 @@ const fortuneMeta = (result: BaziTaskResult, record: BaziRecord): string => {
   if (task.type === 'annual' && nonAi) {
     ganZhi = task.annual?.ganZhi ?? nonAi.annualFortunes.find((item) => item.year === task.year)?.ganZhi ?? '';
   } else if (task.type === 'monthly') {
-    ganZhi = task.monthly?.ganZhi ?? (nonAi ? nonAi.monthlyFortunes.find((item) => item.year === task.year && item.month === task.month)?.ganZhi ?? '' : '');
+    // 兜底按公历月取节月，与流月任务同口径(monthlyFortunes 按节月序号排，直接查会错一个月)。
+    ganZhi = task.monthly?.ganZhi ?? (record.dayPillar && task.year !== undefined && task.month !== undefined ? singleCalendarMonth(record, task.year, task.month).ganZhi : '');
   }
   return [ganZhi, age].filter(Boolean).join('，');
 };
