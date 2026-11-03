@@ -30,6 +30,13 @@ describe('时段事实口径', () => {
     // 相克按真实克向：丁火克庚金(时段在前)，壬水克丁火(本命在前)
     const ke = (dingWei.relationshipDetails ?? []).filter((d) => d.type === 'ke').map((d) => d.sourcePillar + '克' + d.targetPillar).sort();
     expect(ke).toEqual([...dingWei.relationships.ke].sort());
+    // 每条关系写明落在哪两个字上，模型不必猜：实测曾把丙寅克庚子讲成「木旺克土金」
+    const dec = singleCalendarMonth(natal as never, 2026, 12);
+    const notes = (dec.relationshipDetails ?? []).map((d) => d.note);
+    expect(dec.ganZhi).toBe('庚子');
+    expect(notes).toContain('丙火克庚金，天干相克');
+    expect(notes).toContain('子午相冲，只在地支，天干不论');
+    expect((dingWei.relationshipDetails ?? []).map((d) => d.note)).toContain('未午相合，只在地支，天干不论');
     expect(dingWei.branchTenGods).toEqual([{ stem: "己", tenGod: "正印", element: "土" }, { stem: "丁", tenGod: "正官", element: "火" }, { stem: "乙", tenGod: "正财", element: "木" }]);
   });
 });

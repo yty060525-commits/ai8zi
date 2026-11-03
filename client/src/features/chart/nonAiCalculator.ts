@@ -504,8 +504,21 @@ function periodFacts(dayStem: string, ganZhi: string, pillars: string[], partici
       .filter((d) => d.sourceLayer !== 'natal' || d.targetLayer !== 'natal')
       .map((d) => (d.type === 'ke' && keWinnerIsSecond(d.sourcePillar, d.targetPillar)
         ? { ...d, sourceLayer: d.targetLayer, sourcePillar: d.targetPillar, targetLayer: d.sourceLayer, targetPillar: d.sourcePillar }
-        : d)),
+        : d))
+      .map((d) => ({ ...d, note: relationNote(d) })),
   };
+}
+
+const ACTION_CN: Record<string, string> = { liuHe: '相合', chong: '相冲', xing: '相刑', hai: '相害', po: '相破' };
+/** 每条时段关系落到「哪两个字之间」：相克只发生在天干(丙火克庚金)，合冲刑害破只发生在地支(子午相冲)。
+ *  实测模型拿到「丙寅克庚子」会解释成「木旺克土金」，拿到「庚午与丁未六合」会说成「天干地支相合」——
+ *  柱名两字都在，它分不清作用落在哪个字上，只好自己猜。 */
+function relationNote(d: RelationshipDetail): string {
+  const a = d.sourcePillar, b = d.targetPillar;
+  if (d.type === 'ke') return a[0] + ELEMENTS[stemElementIndex(a[0])] + '克' + b[0] + ELEMENTS[stemElementIndex(b[0])] + '，天干相克';
+  if (d.type === 'sanHe') return b + (d.status === 'complete' ? '三合成局' : '半合') + '，地支之合';
+  const action = ACTION_CN[d.type] ?? '';
+  return (a[1] === b[1] ? a[1] + b[1] + '自刑' : a[1] + b[1] + action) + '，只在地支，天干不论';
 }
 
 /** pairHits 为了把时段放在前面，相克一律写成「时段→本命」，与真实克向无关(壬午克丁未会写成丁未→壬午)。

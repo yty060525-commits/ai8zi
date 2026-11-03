@@ -66,6 +66,8 @@ export interface RelationshipDetail {
   targetLayer: 'natal' | 'great-fortune' | 'annual' | 'monthly';
   targetPillar: string;
   status: 'complete' | 'half-combination' | 'partial-punishment' | 'binding';
+  /** 时段行专有：这条关系落在哪两个字上的中文说明(如「丙火克庚金，天干相克」)。 */
+  note?: string;
 }
 
 export interface ShenShaItem {
