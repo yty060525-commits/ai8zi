@@ -561,8 +561,10 @@ const LATIN_READ: Record<string, string> = {
 export function readableName(name?: string): string {
   const raw = String(name ?? '').trim();
   if (!raw) return '未命名';
-  if (/^[一-鿿]+$/.test(raw)) return raw;
-  const read = [...raw.toLowerCase()].map((ch) => (/[0-9]/.test(ch) ? cnCode(ch) : LATIN_READ[ch] ?? '')).join('');
+  if (/^[\p{Script=Han}〇]+$/u.test(raw)) return raw;
+  // 汉字(含扩展区生僻字与〇)一律原样保留，只把数字、字母逐位读成中文，空格、间隔号、括号等符号略去。
+  // 旧写法只留数字与字母：「张三2」读成「二」、「张 三」「阿卜杜·热合曼」整名读不出，保存后名字面目全非。
+  const read = [...raw.toLowerCase()].map((ch) => (/[\p{Script=Han}〇]/u.test(ch) ? ch : /[0-9]/.test(ch) ? cnCode(ch) : LATIN_READ[ch] ?? '')).join('');
   return sanitizeChatText(read) || '该名称无法用中文念出，详见悬浮说明';
 }
 
